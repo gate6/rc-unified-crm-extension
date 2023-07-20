@@ -287,17 +287,20 @@ window.addEventListener('message', async (e) => {
                 // query on 3rd party API to get the matched contact info and return
                 const { matched: contactMatched, contactInfo } = await getContact({ phoneNumber: contactPhoneNumber });
                 if (contactMatched) {
-                  matchedContacts[contactPhoneNumber] = [{
-                    id: contactInfo.id,
-                    type: platformName,
-                    name: contactInfo.name,
-                    phoneNumbers: [
-                      {
-                        phoneNumber: contactPhoneNumber,
-                        phoneType: 'direct'
-                      }
-                    ]
-                  }];
+                  matchedContacts[contactPhoneNumber] = [];
+                  for (const matchedContact of contactInfo) {
+                    matchedContacts[contactPhoneNumber].push({
+                      id: matchedContact.id,
+                      type: platformName,
+                      name: matchedContact.name,
+                      phoneNumbers: [
+                        {
+                          phoneNumber: contactPhoneNumber,
+                          phoneType: 'direct'
+                        }
+                      ]
+                    })
+                  }
                 }
               }
               // return matched contact object with phone number as key
@@ -325,7 +328,7 @@ window.addEventListener('message', async (e) => {
                 logType: 'Call',
                 sessionIds: data.body.call.sessionId
               });
-              const { matched: callContactMatched, message: callLogContactMatchMessage, contactInfo: callMatchedContact, additionalLogInfo: callLogAdditionalInfo } = await getContact({ phoneNumber: contactPhoneNumber });
+              const { matched: callContactMatched, message: callLogContactMatchMessage, contactInfo: callMatchedContacts } = await getContact({ phoneNumber: contactPhoneNumber });
               if (singleCallLog[data.body.call.sessionId].matched) {
                 showNotification({ level: 'warning', message: 'Call log already exists', ttl: 3000 });
               }
@@ -340,7 +343,7 @@ window.addEventListener('message', async (e) => {
                   logProps: {
                     logType: 'Call',
                     logInfo: data.body.call,
-                    contactName: callMatchedContact.name
+                    contactName: callMatchedContacts.name
                   },
                   additionalLogInfo: callLogAdditionalInfo
                 }, '*')
@@ -543,7 +546,16 @@ function getServiceConfig(serviceName) {
 
     feedbackPath: '/feedback',
     settingsPath: '/settings',
-    settings: [{ name: 'Open contact web page from incoming call', value: !!extensionUserSettings && extensionUserSettings.find(e => e.name === 'Open contact web page from incoming call')?.value }],
+    settings: [
+      {
+        name: 'Open contact web page from incoming call',
+        value: !!extensionUserSettings && extensionUserSettings.find(e => e.name === 'Open contact web page from incoming call')?.value
+      },
+      {
+        name: 'Show all contacts matched by number',
+        value: !!extensionUserSettings && extensionUserSettings.find(e => e.name === 'Show all contacts matched by number')?.value
+      }
+    ],
   }
   return services;
 }

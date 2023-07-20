@@ -1,9 +1,9 @@
-function getContactAdditionalInfo(contactRes){
-    if(contactRes.data.contact && contactRes.data.contact.relatedDeals)
+function getContactAdditionalInfo(contact){
+    if(contact && contact.relatedDeals)
     {
         return {
             label: 'Sync to deal',
-            value: contactRes.data.contact.relatedDeals
+            value: relatedDeals
         }
     }
 

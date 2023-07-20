@@ -166,7 +166,7 @@ async function getContact({ user, authHeader, phoneNumber }) {
         phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
     }
     const personInfo = await axios.get(
-        `https://${user.hostname}/v1/persons/search?term=${phoneNumberWithoutCountryCode}&fields=phone&limit=1`,
+        `https://${user.hostname}/v1/persons/search?term=${phoneNumberWithoutCountryCode}&fields=phone`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -174,16 +174,19 @@ async function getContact({ user, authHeader, phoneNumber }) {
         return null;
     }
     else {
-        let result = personInfo.data.data.items[0].item;
-        const dealsResponse = await axios.get(
-            `https://${user.hostname}/v1/persons/${personInfo.data.data.items[0].item.id}/deals?status=open`,
-            {
-                headers: { 'Authorization': authHeader }
-            });
-        const relatedDeals = dealsResponse.data.data ?
-            dealsResponse.data.data.map(d => { return { id: d.id, title: d.title } })
-            : null;
-        return formatContact(result, relatedDeals);
+        const result = [];
+        for (const contactItem of personInfo.data.data.items) {
+            const dealsResponse = await axios.get(
+                `https://${user.hostname}/v1/persons/${contactItem.item.id}/deals?status=open`,
+                {
+                    headers: { 'Authorization': authHeader }
+                });
+            const relatedDeals = dealsResponse.data.data ?
+                dealsResponse.data.data.map(d => { return { id: d.id, title: d.title } })
+                : null;
+            result.push(formatContact(contactItem.item, relatedDeals));
+        }
+        return result;
     }
 }
 
