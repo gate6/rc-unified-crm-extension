@@ -22,7 +22,8 @@
       ],
       "js": [
         "./c2d/index.js",
-        "./content.js"
+        "./content.js",
+        "./popup.js"
       ]
     }
   ],

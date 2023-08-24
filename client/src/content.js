@@ -4,6 +4,8 @@ import App from './components/embedded';
 import React from 'react';
 import ReactDOM from 'react-dom';
 import { RcThemeProvider } from '@ringcentral/juno';
+import config from './config.json';
+import packageJson from '../package.json';
 
 console.log('import content js to web page');
 
@@ -94,13 +96,23 @@ async function RenderQuickAccessButton() {
     if (window.location.hostname.includes('pipedrive')) {
       await delay(1000); // to prevent react hydration error on Pipedrive
     }
-    const rootElement = window.document.createElement('root');
+    const rootElement = window.document.createElement('div');
     window.document.body.appendChild(rootElement);
     ReactDOM.render(<Root />, rootElement);
   }
 }
 
-RenderQuickAccessButton();
+// RenderQuickAccessButton();
+
+async function RenderExtension() {
+  const queryString = `?multipleTabsSupport=1&disableLoginPopup=1&appServer=${config.rcServer}&redirectUri=${config.redirectUri}&enableAnalytics=1&showSignUpButton=1&clientId=${config.clientId}&appVersion=${packageJson.version}&userAgent=RingCentral CRM Extension`;
+  const rcs = document.createElement('script');
+  rcs.src = chrome.runtime.getURL('embeddable/adapter.js') + queryString;
+  const rcs0 = document.getElementsByTagName('script')[0]
+  rcs0.parentNode.insertBefore(rcs, rcs0)
+}
+
+RenderExtension();
 
 if (window.location.pathname === '/pipedrive-redirect') {
   chrome.runtime.sendMessage({ type: "openPopupWindowOnPipedriveDirectPage", platform: 'pipedrive', hostname: 'temp' });
