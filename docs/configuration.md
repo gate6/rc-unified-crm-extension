@@ -52,14 +52,14 @@ As with phone calls, many end users would like to reliably capture the SMS messa
 
 Sometimes users may not be present at their computer when a call is received, yet they still wish to record the call was received and possibly that the call was never responded to. To ensure all calls are captured whether you are present or not, enable "Auto-log save delay."
 
-When this is enabled, the call will be logged automatically after a set number of seconds, which can be configured under "Advanced configuration options" below. If you have also configured the extention to prompt you to enter notes automatically, then you will observe that when a call ends the call log form appears, and a auto-save timer will start. If you do not interact with the form before the timer runs out, the call be logged automatically. 
+When this is enabled, the call will be logged automatically after a set number of seconds, which can be configured under "Advanced configuration options" below. If you have also configured the extension to prompt you to enter notes automatically, then you will observe that when a call ends the call log form appears, and a auto-save timer will start. If you do not interact with the form before the timer runs out, the call be logged automatically. 
 
 ## Advanced configuration options
 
 Most users will not need to access these advanced configuration options. However, they have been provided to assist in resolving less common, low-level challenges. These options can be accessed both in Chrome and Edge by opening the "Manage Extensions" area from the Window menu, or from the extension menu found adjacent to your browser's location bar. 
 
 * Open [Manage extensions](chrome://extensions/) in Chrome
-* Open [Manage extensions](?) in Microsoft Edge
+* Open [Manage extensions](edge://extensions/) in Microsoft Edge
 
 **Finding advanced settings**
 
@@ -79,13 +79,13 @@ Then scroll down near to the bottom and click "Extension options" to open the di
 
 ### Click-to-dial inject delay
 
+CRMs known to need this parameter set are:
+
+* Pipedrive - if you find click-to-dial dialog not showing
+  
 The embedded phone/dialer from the Unified CRM extension is injected into the CRM via a mechanism that some web servers will reject. This is circumvented by delaying the loading of the CTI by a couple of seconds. This config parameter controls this delay. 
 
 *This should only be used in rare circumstances.*
-
-CRMs known to need this parameter set are:
-
-* 
 
 ### Auto-log countdown timer
 
@@ -99,6 +99,12 @@ The Unified CRM extension injects a small handle in the lower right hand corner 
 
 ### Phone number formats
 
+CRMs known to need this parameter set are:
+
+* Insightly - if you often see error messages regarding cannot find contact for +1##########
+* Clio - if you often see error messages regarding cannot find contact for +1##########
+
+
 In order to match a call to a contact in a CRM, the Unified CRM extension needs to search the CRM for a contact using a phone number. Some CRMs have more rudimentary APIs that require phone numbers to EXACTLY match the string searched for. For these CRMs, reliably finding a contact record for a phone number can be difficult, which in turn impacts your ability to log a call and associate it with the proper entity in your CRM. Let's look at an example to help you understand. The following phone numbers are all functionally equivalent, even though they are not literally identical. 
 
 * `(###) ###-####`
@@ -110,8 +116,3 @@ In order to match a call to a contact in a CRM, the Unified CRM extension needs 
 RingCentral phone numbers are all formatted using the [E.164 standard](https://en.wikipedia.org/wiki/E.164). If you are not storing phone numbers that utilize this format, and if your particular CRM does not support a more rigorous search mechanism, the Unified CRM extension may fail to associate calls with contacts properly. 
 
 This configuration parameter allows you to specify multiple formats used by your team. The Unified CRM extension will then search for contacts using each of the formats provided until a record is found. This may have performance impacts.
-
-CRMs known to exhibit this problem are:
-
-* ??? 
-

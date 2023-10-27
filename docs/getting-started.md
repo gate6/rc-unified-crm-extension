@@ -35,30 +35,42 @@ Each CRM may have a slightly different approach in order to install the extensio
 
 ### Bullhorn
 
+Video guide: https://youtu.be/afbdQD0y4Yo
+
 1. From the Settings screen in the Unified CRM extension's CTI, find the option labeled "bullhorn."
 2. Click the "Connect" button. 
-3. ??
 
 ### Clio
 
+Video guide: https://youtu.be/pQgdsAR1UCI
+
 1. From the Settings screen in the Unified CRM extension's CTI, find the option labeled "clio."
 2. Click the "Connect" button. 
-3. ??
+3. Click "ALLOW ACCESS" on Clio' popup page.
 
 ### Insightly
 
+Video guide: https://www.youtube.com/watch?v=5hWvVI12UAc
+
 1. From the Settings screen in the Unified CRM extension's CTI, find the option labeled "insightly."
 2. Click the "Connect" button. 
-3. ??
+3. In your browser, log in to your Insightly account page and do either one of the following
+   1. On extension connect page, click "Get Key".
+   2. On Insightly page, go to User Settings, and copy over your API Key and API Url.
 
 ### Pipedrive
 
+Video guide: https://www.youtube.com/watch?v=Hu0qC13HDkQ
+
 1. From the Settings screen in the Unified CRM extension's CTI, find the option labeled "pipedrive."
 2. Click the "Connect" button. 
-3. ??
+3. Click "Go to the Pipedrive Marketplace"
+4. Click "Install now" and then "Allow and Install"
 
 ### Redtail
 
+Video guide: https://www.youtube.com/watch?v=1pbpbEvp5uQ
+
 1. From the Settings screen in the Unified CRM extension's CTI, find the option labeled "redtail."
 2. Click the "Connect" button. 
-3. ??
+3. Input your username and password, then submit.
