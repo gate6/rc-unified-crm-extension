@@ -20,7 +20,7 @@ async function addLog({ logType, logInfo, isToday, isMain, note, additionalSubmi
                 }, '*');
                 if (addCallLogRes.data.successful) {
                     showNotification({ level: 'success', message: 'call log added', ttl: 3000 });
-                    trackSyncCallLog({ rcAccountId: rcUserInfo.rcUserInfo.rcAccountId, hasNote: note !== '' });
+                    trackSyncCallLog({ hasNote: note !== '' });
                     // check for remaining recording link
                     const recordingSessionId = `rec-link-${logInfo.sessionId}`;
                     const existingCallRecording = await chrome.storage.local.get(recordingSessionId);
@@ -41,7 +41,7 @@ async function addLog({ logType, logInfo, isToday, isMain, note, additionalSubmi
                     }
                     if (isMain) {
                         showNotification({ level: 'success', message: 'message log added', ttl: 3000 });
-                        trackSyncMessageLog({ rcAccountId: rcUserInfo.rcUserInfo.rcAccountId });
+                        trackSyncMessageLog();
                     }
                 }
                 break;
