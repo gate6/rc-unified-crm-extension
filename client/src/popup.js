@@ -632,7 +632,7 @@ chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
     sendResponse({ result: 'ok' });
   }
   else if (request.type === 'pipedriveCallbackUri' && !(await auth.checkAuth())) {
-    await auth.onAuthCallback(`${request.pipedriveCallbackUri}&state=platform=pipedrive`);
+    await auth.onAuthCallback(`${request.pipedriveCallbackUri}&state=platform=pipedriveTest`);
     console.log('pipedriveAltAuthDone')
     chrome.runtime.sendMessage(
       {

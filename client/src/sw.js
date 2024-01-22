@@ -35,7 +35,7 @@ async function registerPlatform(tabUrl) {
   let platformName = '';
   let hostname = url.hostname;
   if (hostname.includes('pipedrive')) {
-    platformName = 'pipedrive';
+    platformName = 'pipedriveTest';
   }
   else if (hostname.includes('insightly')) {
     platformName = 'insightly';
@@ -50,7 +50,7 @@ async function registerPlatform(tabUrl) {
     platformName = 'redtail';
   }
   else if ((hostname.includes('ngrok') || hostname.includes('labs.ringcentral')) && url.pathname === '/pipedrive-redirect') {
-    platformName = 'pipedrive';
+    platformName = 'pipedriveTest';
     hostname = 'temp';
     chrome.tabs.sendMessage(tab.id, { action: 'needCallbackUri' })
   }
