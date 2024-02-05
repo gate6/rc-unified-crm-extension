@@ -5,12 +5,13 @@ const saveOptions = () => {
     const autoLogCountdown = document.getElementById('autoLogCountdown').value;
     const bullhornDefaultActionCode = document.getElementById('bullhornDefaultActionCode').value;
     const renderQuickAccessButton = document.getElementById('renderQuickAccessButton').checked;
+    const enableInsightlyLegacy = document.getElementById('enableInsightlyLegacy').checked;
     const overridingPhoneNumberFormat = document.getElementById('overridingPhoneNumberFormat').value;
     const overridingPhoneNumberFormat2 = document.getElementById('overridingPhoneNumberFormat2').value;
     const overridingPhoneNumberFormat3 = document.getElementById('overridingPhoneNumberFormat3').value;
 
     chrome.storage.local.set(
-        { selectedRegion: region, c2dDelay, autoLogCountdown, bullhornDefaultActionCode, renderQuickAccessButton, overridingPhoneNumberFormat, overridingPhoneNumberFormat2, overridingPhoneNumberFormat3 },
+        { selectedRegion: region, c2dDelay, autoLogCountdown, bullhornDefaultActionCode, renderQuickAccessButton, enableInsightlyLegacy, overridingPhoneNumberFormat, overridingPhoneNumberFormat2, overridingPhoneNumberFormat3 },
         () => {
             // Update status to let user know options were saved.
             const status = document.getElementById('status');
@@ -33,6 +34,7 @@ const restoreOptions = () => {
             document.getElementById('autoLogCountdown').value = items.autoLogCountdown;
             document.getElementById('bullhornDefaultActionCode').value = items.bullhornDefaultActionCode;
             document.getElementById('renderQuickAccessButton').checked = items.renderQuickAccessButton;
+            document.getElementById('enableInsightlyLegacy').checked = items.enableInsightlyLegacy;
             document.getElementById('overridingPhoneNumberFormat').value = items.overridingPhoneNumberFormat;
             document.getElementById('overridingPhoneNumberFormat2').value = items.overridingPhoneNumberFormat2;
             document.getElementById('overridingPhoneNumberFormat3').value = items.overridingPhoneNumberFormat3;

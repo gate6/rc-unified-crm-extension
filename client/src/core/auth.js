@@ -43,6 +43,9 @@ async function apiKeyLogin({ apiKey, apiUrl, username, password }) {
         await chrome.storage.local.set({ crmUserInfo });
         setAuth(true, crmUserInfo.name);
         trackCrmLogin({ rcAccountId: rcUserInfo.rcAccountId });
+        if (platformName === 'insightly') {
+            await chrome.storage.local.set({ insightlyApiKey: { apiKey, apiUrl } });
+        }
         return res.data.jwtToken;
     }
     catch (e) {

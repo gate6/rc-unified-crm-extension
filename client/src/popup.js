@@ -5,7 +5,7 @@ const config = require('./config.json');
 const { responseMessage, isObjectEmpty, showNotification } = require('./lib/util');
 const { getUserInfo } = require('./lib/rcAPI');
 const { apiKeyLogin } = require('./core/auth');
-const moment = require('moment');
+const insightlyLegacy = require('./lib/insightlyLegacy');
 const { openDB } = require('idb');
 const {
   identify,
@@ -349,6 +349,33 @@ window.addEventListener('message', async (e) => {
                 }
               );
               break;
+            case '/contacts':
+              if (platformName === 'insightly' && data.body.type === 'manual') {
+                const insightlyContacts = await insightlyLegacy.fetchAllContacts();
+                // pass nextPage number when there are more than one page data, widget will repeat same request with nextPage increased
+                document.querySelector("#rc-widget-adapter-frame").contentWindow.postMessage({
+                  type: 'rc-post-message-response',
+                  responseId: data.requestId,
+                  response: {
+                    data: insightlyContacts,
+                    nextPage: null,
+                    syncTimestamp: Date.now()
+                  },
+                }, '*');
+              }
+              else {
+                // pass nextPage number when there are more than one page data, widget will repeat same request with nextPage increased
+                document.querySelector("#rc-widget-adapter-frame").contentWindow.postMessage({
+                  type: 'rc-post-message-response',
+                  responseId: data.requestId,
+                  response: {
+                    data: [],
+                    nextPage: null,
+                    syncTimestamp: Date.now()
+                  },
+                }, '*');
+              }
+              break;
             case '/contacts/match':
               noShowNotification = true;
               let matchedContacts = {};
@@ -499,8 +526,7 @@ window.addEventListener('message', async (e) => {
               break;
             case '/messageLogger':
               const { rc_messageLogger_auto_log_notify: messageAutoLogOn } = await chrome.storage.local.get({ rc_messageLogger_auto_log_notify: false });
-              if(!messageAutoLogOn && data.body.triggerType === 'auto')
-              {
+              if (!messageAutoLogOn && data.body.triggerType === 'auto') {
                 break;
               }
               const isTrailing = !data.body.redirect && data.body.triggerType !== 'auto';
@@ -710,6 +736,7 @@ function handleThirdPartyOAuthWindow(oAuthUri) {
 function getServiceConfig(serviceName) {
   const services = {
     name: serviceName,
+    contactsPath: '/contacts',
     contactMatchPath: '/contacts/match',
 
     // show auth/unauth button in ringcentral widgets
