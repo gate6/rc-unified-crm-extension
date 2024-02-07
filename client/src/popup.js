@@ -6,7 +6,6 @@ const { responseMessage, isObjectEmpty, showNotification } = require('./lib/util
 const { getUserInfo } = require('./lib/rcAPI');
 const { apiKeyLogin } = require('./core/auth');
 const insightlyLegacy = require('./lib/insightlyLegacy');
-const { openDB } = require('idb');
 const {
   identify,
   group,
@@ -34,6 +33,7 @@ let extensionUserSettings = null;
 // trailing SMS logs need to know if leading SMS log is ready and page is open. The waiting is for getContact call
 let leadingSMSCallReady = false;
 let trailingSMSLogInfo = [];
+let enableInsightlyLegacy = false;
 
 const errorLogWebhookUrl = "https://hooks.ringcentral.com/webhook/v2/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvdCI6ImMiLCJvaSI6IjQ0NDY2MTc3IiwiaWQiOiIyMDc4MDgxMDUxIn0.NnAUGG4stGsPz8mhNsy6Qo2yosX0ydk58Dv70fmbugc";
 import axios from 'axios';
@@ -350,7 +350,8 @@ window.addEventListener('message', async (e) => {
               );
               break;
             case '/contacts':
-              if (platformName === 'insightly' && data.body.type === 'manual') {
+              enableInsightlyLegacy = (await chrome.storage.local.get({ enableInsightlyLegacy: false })).enableInsightlyLegacy;
+              if (platformName === 'insightly' && enableInsightlyLegacy) {
                 const insightlyContacts = await insightlyLegacy.fetchAllContacts();
                 // pass nextPage number when there are more than one page data, widget will repeat same request with nextPage increased
                 document.querySelector("#rc-widget-adapter-frame").contentWindow.postMessage({
@@ -379,6 +380,7 @@ window.addEventListener('message', async (e) => {
             case '/contacts/match':
               noShowNotification = true;
               let matchedContacts = {};
+              enableInsightlyLegacy = (await chrome.storage.local.get({ enableInsightlyLegacy: false })).enableInsightlyLegacy;
               const { tempContactMatchTask } = await chrome.storage.local.get({ tempContactMatchTask: null });
               if (data.body.phoneNumbers.length === 1 && !!tempContactMatchTask) {
                 matchedContacts[tempContactMatchTask.phoneNumber] = [
@@ -402,22 +404,37 @@ window.addEventListener('message', async (e) => {
                   if (!contactPhoneNumber.startsWith('+')) {
                     continue;
                   }
-                  // query on 3rd party API to get the matched contact info and return
-                  const { matched: contactMatched, contactInfo } = await getContact({ phoneNumber: contactPhoneNumber });
-                  if (contactMatched) {
-                    matchedContacts[contactPhoneNumber] = [];
-                    for (var contactInfoItem of contactInfo) {
+
+                  if (enableInsightlyLegacy) {
+                    const insightlyContact = await insightlyLegacy.getContactByNumber({ phoneNumber: contactPhoneNumber });
+                    if (!!insightlyContact) {
+                      matchedContacts[contactPhoneNumber] = [];
                       matchedContacts[contactPhoneNumber].push({
-                        id: contactInfoItem.id,
-                        type: platformName,
-                        name: contactInfoItem.name,
-                        phoneNumbers: [
-                          {
-                            phoneNumber: contactPhoneNumber,
-                            phoneType: 'direct'
-                          }
-                        ]
+                        id: insightlyContact.id,
+                        type: insightlyContact.type,
+                        name: insightlyContact.name,
+                        phoneNumbers: insightlyContact.phoneNumbers
                       });
+                    }
+                  }
+                  else {
+                    // query on 3rd party API to get the matched contact info and return
+                    const { matched: contactMatched, contactInfo } = await getContact({ phoneNumber: contactPhoneNumber });
+                    if (contactMatched) {
+                      matchedContacts[contactPhoneNumber] = [];
+                      for (var contactInfoItem of contactInfo) {
+                        matchedContacts[contactPhoneNumber].push({
+                          id: contactInfoItem.id,
+                          type: platformName,
+                          name: contactInfoItem.name,
+                          phoneNumbers: [
+                            {
+                              phoneNumber: contactPhoneNumber,
+                              phoneType: 'direct'
+                            }
+                          ]
+                        });
+                      }
                     }
                   }
                 }
