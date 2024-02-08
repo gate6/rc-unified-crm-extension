@@ -28,7 +28,6 @@ async function fetchAllContacts() {
             allFetched = leadResponse.headers['x-total-count'] == leadList.length;
         }
         console.log(`synced ${leadList.length} leads from Insightly.`);
-        // TODO: contact match
         // TODO: sync with time interval
         // TODO: add Lead
         // TODO: save log
