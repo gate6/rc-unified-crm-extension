@@ -5,6 +5,7 @@ const config = require('./config.json');
 const { responseMessage, isObjectEmpty, showNotification } = require('./lib/util');
 const { getUserInfo } = require('./lib/rcAPI');
 const { apiKeyLogin } = require('./core/auth');
+const { openDB } = require('idb');
 const insightlyLegacy = require('./lib/insightlyLegacy');
 const {
   identify,
