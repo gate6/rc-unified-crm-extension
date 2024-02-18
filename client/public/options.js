@@ -27,7 +27,7 @@ const saveOptions = () => {
 // stored in chrome.storage.
 const restoreOptions = () => {
     chrome.storage.local.get(
-        { selectedRegion: 'US', c2dDelay: '0', autoLogCountdown: '20', bullhornDefaultActionCode: '', renderQuickAccessButton: true, overridingPhoneNumberFormat: '', overridingPhoneNumberFormat2: '', overridingPhoneNumberFormat3: '' },
+        { selectedRegion: 'US', c2dDelay: '0', autoLogCountdown: '20', bullhornDefaultActionCode: '', renderQuickAccessButton: true, enableInsightlyLegacy: false, overridingPhoneNumberFormat: '', overridingPhoneNumberFormat2: '', overridingPhoneNumberFormat3: '' },
         (items) => {
             document.getElementById('region').value = items.selectedRegion;
             document.getElementById('c2dDelay').value = items.c2dDelay;
