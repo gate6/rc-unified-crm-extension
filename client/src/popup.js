@@ -1,5 +1,5 @@
 const auth = require('./core/auth');
-const { checkLog, openLog, updateLog } = require('./core/log');
+const { addLog, checkLog, openLog, updateLog, getCachedNote } = require('./core/log');
 const { getContact, openContactPage } = require('./core/contact');
 const config = require('./config.json');
 const { responseMessage, isObjectEmpty, showNotification } = require('./lib/util');
@@ -352,7 +352,8 @@ window.addEventListener('message', async (e) => {
               break;
             case '/contacts':
               enableInsightlyLegacy = (await chrome.storage.local.get({ enableInsightlyLegacy: false })).enableInsightlyLegacy;
-              if (platformName === 'insightly' && enableInsightlyLegacy) {
+              if ((data.body.type === 'manual' || data.body.syncTimestamp == null) && platformName === 'insightly' && enableInsightlyLegacy) {
+                console.log('Insightly contacts local syncing...');
                 const insightlyContacts = await insightlyLegacy.fetchAllContacts();
                 // pass nextPage number when there are more than one page data, widget will repeat same request with nextPage increased
                 document.querySelector("#rc-widget-adapter-frame").contentWindow.postMessage({
@@ -407,15 +408,17 @@ window.addEventListener('message', async (e) => {
                   }
 
                   if (enableInsightlyLegacy) {
-                    const insightlyContact = await insightlyLegacy.getContactByNumber({ phoneNumber: contactPhoneNumber });
-                    if (!!insightlyContact) {
+                    const insightlyContacts = await insightlyLegacy.getContactsByNumber({ phoneNumber: contactPhoneNumber });
+                    if (!!insightlyContacts) {
                       matchedContacts[contactPhoneNumber] = [];
-                      matchedContacts[contactPhoneNumber].push({
-                        id: insightlyContact.id,
-                        type: insightlyContact.type,
-                        name: insightlyContact.name,
-                        phoneNumbers: insightlyContact.phoneNumbers
-                      });
+                      for (const insightlyContact of insightlyContacts) {
+                        matchedContacts[contactPhoneNumber].push({
+                          id: insightlyContact.id,
+                          type: insightlyContact.type,
+                          name: insightlyContact.name,
+                          phoneNumbers: insightlyContact.phoneNumbers
+                        });
+                      }
                     }
                   }
                   else {
@@ -469,6 +472,29 @@ window.addEventListener('message', async (e) => {
                 if (data.body.triggerType === 'presenceUpdate' && data.body.call.result !== 'Disconnected') {
                   break;
                 }
+              }
+
+              if (enableInsightlyLegacy) {
+                const cachedNote = await getCachedNote({ sessionId: data.body.call.sessionId });
+                await addLog({
+                  logType: 'Call',
+                  logInfo: data.body.call,
+                  isMain: true,
+                  additionalSubmission: null,
+                  note: cachedNote,
+                  overridingContactId: data.body.call.toMatches[0].id,
+                  contactType: data.body.call.toMatches[0].name.split(']')[0].split('[')[1] === 'C' ? 'Contact' : 'Lead',
+                  contactName: data.body.call.toMatches[0].name.split(']')[1]
+                });
+                console.log('Insightly auto log done')
+                // response to widget
+                responseMessage(
+                  data.requestId,
+                  {
+                    data: 'ok'
+                  }
+                );
+                break;
               }
               window.postMessage({ type: 'rc-log-modal-loading-on' }, '*');
               const contactPhoneNumber = data.body.call.direction === 'Inbound' ?
