@@ -474,19 +474,30 @@ window.addEventListener('message', async (e) => {
                 }
               }
 
+              const { callLogs: singleCallLog } = await checkLog({
+                logType: 'Call',
+                sessionIds: data.body.call.sessionId
+              });
+
               if (enableInsightlyLegacy) {
-                const cachedNote = await getCachedNote({ sessionId: data.body.call.sessionId });
-                await addLog({
-                  logType: 'Call',
-                  logInfo: data.body.call,
-                  isMain: true,
-                  additionalSubmission: null,
-                  note: cachedNote,
-                  overridingContactId: data.body.call.toMatches[0].id,
-                  contactType: data.body.call.toMatches[0].name.split(']')[0].split('[')[1] === 'C' ? 'Contact' : 'Lead',
-                  contactName: data.body.call.toMatches[0].name.split(']')[1]
-                });
-                console.log('Insightly auto log done')
+                const localMatchedContacts = data.body.call.direction === 'Outbound' ? data.body.call.toMatches : data.body.call.fromMatches;
+                if (singleCallLog[data.body.call.sessionId].matched) {
+                    openLog({ platform: platformName, hostname: platformHostname, logId: singleCallLog[data.body.call.sessionId].logId, contactType: localMatchedContacts[0].name.startsWith('[C]') ? 'Contact' : 'Lead' });
+                }
+                else {
+                  const cachedNote = await getCachedNote({ sessionId: data.body.call.sessionId });
+                  await addLog({
+                    logType: 'Call',
+                    logInfo: data.body.call,
+                    isMain: true,
+                    additionalSubmission: null,
+                    note: cachedNote,
+                    overridingContactId: localMatchedContacts[0].id,
+                    contactType: localMatchedContacts[0].name.split(']')[0].split('[')[1] === 'C' ? 'Contact' : 'Lead',
+                    contactName: localMatchedContacts[0].name.split(']')[1]
+                  });
+                  console.log('Insightly auto log done')
+                }
                 // response to widget
                 responseMessage(
                   data.requestId,
@@ -500,10 +511,6 @@ window.addEventListener('message', async (e) => {
               const contactPhoneNumber = data.body.call.direction === 'Inbound' ?
                 data.body.call.from.phoneNumber :
                 data.body.call.to.phoneNumber;
-              const { callLogs: singleCallLog } = await checkLog({
-                logType: 'Call',
-                sessionIds: data.body.call.sessionId
-              });
               const { matched: callContactMatched, message: callLogContactMatchMessage, contactInfo: callMatchedContact } = await getContact({ phoneNumber: contactPhoneNumber });
               if (singleCallLog[data.body.call.sessionId].matched) {
                 if (config.platforms[platformName].canOpenLogPage) {
