@@ -493,8 +493,8 @@ window.addEventListener('message', async (e) => {
                     additionalSubmission: null,
                     note: cachedNote,
                     overridingContactId: localMatchedContacts[0].id,
-                    contactType: localMatchedContacts[0].name.split(']')[0].split('[')[1] === 'C' ? 'Contact' : 'Lead',
-                    contactName: localMatchedContacts[0].name.split(']')[1]
+                    contactType: localMatchedContacts[0].name.split(' (')[1].split(')')[0],
+                    contactName: localMatchedContacts[0].name.split(' (')[0]
                   });
                   console.log('Insightly auto log done')
                 }

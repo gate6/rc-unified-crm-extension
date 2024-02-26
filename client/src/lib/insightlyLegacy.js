@@ -34,7 +34,7 @@ async function fetchAllContacts() {
         const formattedContactList = contactList.map(c => {
             let contact = {
                 id: c.CONTACT_ID.toString(),
-                name: `[C]${c.FIRST_NAME} ${c.LAST_NAME}`,
+                name: `${c.FIRST_NAME} ${c.LAST_NAME} (Contact)`,
                 type: 'insightly',
                 phoneNumbers: []
             }
@@ -48,7 +48,7 @@ async function fetchAllContacts() {
         const formattedLeadList = leadList.map(l => {
             let lead = {
                 id: l.LEAD_ID.toString(),
-                name: `[L]${l.FIRST_NAME} ${l.LAST_NAME}`,
+                name: `${l.FIRST_NAME} ${l.LAST_NAME} (Lead)`,
                 type: 'insightly',
                 phoneNumbers: []
             }
