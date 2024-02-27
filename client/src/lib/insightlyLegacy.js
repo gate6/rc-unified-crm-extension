@@ -61,8 +61,7 @@ async function fetchAllContacts() {
         await chrome.storage.local.set({ insightlyContacts });
         // Sync with time interval - 30 minutes
         if (setTimeoutId != null) clearTimeout(setTimeoutId);
-        setTimeoutId = setTimeout(fetchAllContacts, 60000);
-        // setTimeoutId = setTimeout(fetchAllContacts, 18000000);
+        setTimeoutId = setTimeout(fetchAllContacts, 18000000);
         return insightlyContacts;
     }
     return [];
