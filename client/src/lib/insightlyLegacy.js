@@ -1,8 +1,6 @@
 import axios from 'axios';
 import { parsePhoneNumber } from 'awesome-phonenumber';
 
-let setTimeoutId = null;
-
 async function fetchAllContacts() {
     const { insightlyApiKey } = await chrome.storage.local.get({ insightlyApiKey: null });
     if (insightlyApiKey != null) {
@@ -58,10 +56,6 @@ async function fetchAllContacts() {
             return lead;
         });
         const insightlyContacts = formattedContactList.concat(formattedLeadList);
-        await chrome.storage.local.set({ insightlyContacts });
-        // Sync with time interval - 30 minutes
-        if (setTimeoutId != null) clearTimeout(setTimeoutId);
-        setTimeoutId = setTimeout(fetchAllContacts, 18000000);
         return insightlyContacts;
     }
     return [];
