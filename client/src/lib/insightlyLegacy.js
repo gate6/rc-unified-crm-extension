@@ -56,6 +56,7 @@ async function fetchAllContacts() {
             return lead;
         });
         const insightlyContacts = formattedContactList.concat(formattedLeadList);
+        await chrome.storage.local.set({ insightlyContacts });
         return insightlyContacts;
     }
     return [];

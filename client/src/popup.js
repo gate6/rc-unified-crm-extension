@@ -353,8 +353,11 @@ window.addEventListener('message', async (e) => {
             case '/contacts':
               enableInsightlyLegacy = (await chrome.storage.local.get({ enableInsightlyLegacy: false })).enableInsightlyLegacy;
               if ((data.body.type === 'manual' || data.body.syncTimestamp == null) && platformName === 'insightly' && enableInsightlyLegacy) {
+                const { insightlySyncDayStamp } = await chrome.storage.local.get({ insightlySyncDayStamp: null });
                 console.log('Insightly contacts local syncing...');
+                showNotification({ level: 'success', message: 'start syncing contacts...', ttl: 30000 });
                 const insightlyContacts = await insightlyLegacy.fetchAllContacts();
+                showNotification({ level: 'success', message: 'contacts synced', ttl: 3000 });
                 // pass nextPage number when there are more than one page data, widget will repeat same request with nextPage increased
                 document.querySelector("#rc-widget-adapter-frame").contentWindow.postMessage({
                   type: 'rc-post-message-response',
@@ -482,7 +485,7 @@ window.addEventListener('message', async (e) => {
               if (enableInsightlyLegacy) {
                 const localMatchedContacts = data.body.call.direction === 'Outbound' ? data.body.call.toMatches : data.body.call.fromMatches;
                 if (singleCallLog[data.body.call.sessionId].matched) {
-                    openLog({ platform: platformName, hostname: platformHostname, logId: singleCallLog[data.body.call.sessionId].logId, contactType: localMatchedContacts[0].name.startsWith('[C]') ? 'Contact' : 'Lead' });
+                  openLog({ platform: platformName, hostname: platformHostname, logId: singleCallLog[data.body.call.sessionId].logId, contactType: localMatchedContacts[0].name.startsWith('[C]') ? 'Contact' : 'Lead' });
                 }
                 else {
                   const cachedNote = await getCachedNote({ sessionId: data.body.call.sessionId });
