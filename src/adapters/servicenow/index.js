@@ -1,10 +1,10 @@
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
-// const { saveUserInfo} = require('../core/auth');
+const { saveUserInfo} = require('../core/auth');
 // const { UserModel } = require('../../models/userModel');
-// const { UserModel1 } = require('../models/userModel');
-// const { ConfigModel1 } = require('../models/configModel');
+const { UserModel1 } = require('../models/userModel');
+const { ConfigModel1 } = require('../models/configModel');
 // const { CallLogModel1 } = require('../models/callLogModel');
 // const { MessageLogModel1 } = require('../models/messageLogModel');
 
@@ -15,14 +15,14 @@ let mockContact = null;
 let mockCallLog = null;
 let mockMessageLog = null;
 
-// async function initDB()
-// {
-//     await UserModel1.sync({ force: true,alter:true });
-//     await CallLogModel1.sync({ force: true,alter:true });
-//     await MessageLogModel1.sync({ force: true,alter:true });
-//     await ConfigModel1.sync({ force: true,alter:true });
-// }
-// initDB();
+async function initDB()
+{
+    await UserModel1.sync({ force: false,alter:true });
+    // await CallLogModel1.sync({ force: true,alter:true });
+    // await MessageLogModel1.sync({ force: true,alter:true });
+    await ConfigModel1.sync({ force: false,alter:true });
+}
+initDB();
 
 function getAuthType() {
     return 'oauth'; // Return either 'oauth' OR 'apiKey'
@@ -67,42 +67,97 @@ async function getUserInfo({ authHeader, additionalInfo }) {
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
 
-    // const checkActiveUsers = await UserModel1.findAndCountAll({
-    //     where:{
-    //         license_key_id:process.env.license_key_id
-    //     },
-    //     // include:[{
-    //     //     model:ConfigModel1,
-    //     //     required:true,
-    //     //     attributes:["max_allowed_users"]
-    //     // }]
-    // })
-    // // const getMaxUsersCount = await ConfigModel1.findOne({
-    // //     where:{
-    // //         license_key_id
-    // //     }
-    // // })
-    // console.log("checkActiveUsers",checkActiveUsers);
-    
-
-    const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
-        headers: {
-            'Authorization': authHeader
-        }
+    let userInfoResponse;
+    const checkActiveUsers = await UserModel1.findAndCountAll({
+        where:{
+            license_key_id:process.env.license_key_id
+        },
+        // include:[{
+        //     model:ConfigModel1,
+        //     required:true,
+        //     attributes:["max_allowed_users"]
+        // }]
+    })
+    const getMaxUsersCount = await ConfigModel1.findOne({
+        where:{
+            license_key_id:process.env.license_key_id
+        },
+        attributes:['max_allowed_users']
     });
+
+    // console.log(getMaxUsersCount);
+    let activeSession = 3
+    let maxUsers = getMaxUsersCount.dataValues.max_allowed_users
+    console.log(maxUsers);
+    if(activeSession < maxUsers)
+        {
+             userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+                headers: {
+                    'Authorization': authHeader
+                }
+            });
+            const id = userInfoResponse.data.result.id;
+            const name = userInfoResponse.data.result.user_name;
+            const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
+            const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
+            // await saveUserInfo(userInfoResponse.data.result);
+            return {
+                platformUserInfo:{ id,
+                name,
+                timezoneName,
+                timezoneOffset,
+                platformAdditionalInfo: {}
+                },
+                returnMessage: {
+                    messageType: 'success',
+                    message: 'Successfully connected to TestCRM.',
+                    ttl: 3000
+                }
+            };
+        }
+    else
+        {
+            console.log('limited exausted');
+            return {
+                platformUserInfo:{
+                id:"",
+                name:"",
+                timezoneName:"",
+                timezoneOffset:"",
+                platformAdditionalInfo: {}
+                },
+                returnMessage: {
+                    messageType: 'danger',
+                    message: 'Limit exausted ',
+                    ttl: 3000
+                }
+            };
+            // return "limit-exausted"
+        }
+    // const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+    //     headers: {
+    //         'Authorization': authHeader
+    //     }
+    // });
     
-    const id = userInfoResponse.data.result.id;
-    const name = userInfoResponse.data.result.user_name;
-    const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
-    const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
-    // await saveUserInfo(userInfoResponse.data.result);
-    return {
-        id,
-        name,
-        timezoneName,
-        timezoneOffset,
-        platformAdditionalInfo: {}
-    };
+    // const id = userInfoResponse.data.result.id;
+    // const name = userInfoResponse.data.result.user_name;
+    // const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
+    // const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
+    // // await saveUserInfo(userInfoResponse.data.result);
+    // return {
+    //     platformUserInfo:{ id,
+    //     name,
+    //     timezoneName,
+    //     timezoneOffset,
+    //     platformAdditionalInfo: {}
+    //     },
+    //     returnMessage: {
+    //         messageType: 'success',
+    //         message: 'Successfully connected to TestCRM.',
+    //         ttl: 3000
+    //     }
+    // };
 
     //---------------------------------------------------------------------------------------------------
     //---CHECK.1: Open db.sqlite (might need to install certain viewer) to check if user info is saved---
