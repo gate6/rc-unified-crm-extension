@@ -180,6 +180,13 @@ async function unAuthorize({ user }) {
     //         headers: { 'Authorization': `Basic ${getBasicAuth({ apiKey: user.accessToken })}` }
     //     });
     await user.destroy();
+    return {
+        returnMessage: {
+            messageType: 'success',
+            message: 'Successfully logged out from TestCRM account.',
+            ttl: 3000
+        }
+    }
 
     //--------------------------------------------------------------
     //---CHECK.2: Open db.sqlite to check if user info is removed---
@@ -248,7 +255,14 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     //-----------------------------------------------------
     //---CHECK.3: In console, if contact info is printed---
     //-----------------------------------------------------
-    return foundContacts;  //[{id, name, phone, additionalInfo}]
+    return {
+        foundContacts,
+        returnMessage: {
+            messageType: 'success',
+            message: 'Successfully found contact.',
+            ttl: 3000
+        }
+    };  //[{id, name, phone, additionalInfo}]
 }
 
 async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, timezoneOffset, contactNumber }) {
@@ -306,7 +320,14 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     //----------------------------------------------------------------------------
     //---CHECK.4: Open db.sqlite and CRM website to check if call log is saved ---
     //----------------------------------------------------------------------------
-    return addLogRes.data.result.sys_id;
+    return {
+        logId: addLogRes.data.result.sys_id,
+        returnMessage: {
+            message: 'Call log added.',
+            messageType: 'success',
+            ttl: 3000
+        }
+    };
 }
 
 async function getCallLog({ user, callLogId, authHeader }) {
@@ -323,10 +344,17 @@ async function getCallLog({ user, callLogId, authHeader }) {
     //-------------------------------------------------------------------------------------
     //---CHECK.5: In extension, for a logged call, click edit to see if info is fetched ---
     //-------------------------------------------------------------------------------------
+
     return {
-        subject: getLogRes.data.result.short_description,
-        note: getLogRes.data.result.description,
-        additionalSubmission: {}
+        callLogInfo: {
+            subject: getLogRes.data.result.short_description,
+            note: getLogRes.data.result.description,
+        },
+        returnMessage: {
+            message: 'Call log fetched.',
+            messageType: 'success',
+            ttl: 3000
+        }
     }
 }
 
@@ -360,6 +388,14 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     //-----------------------------------------------------------------------------------------
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
     //-----------------------------------------------------------------------------------------
+    return {
+        updatedNote: note,
+        returnMessage: {
+            message: 'Call log updated.',
+            messageType: 'success',
+            ttl: 3000
+        }
+    };
     return patchLogRes.data.result.sys_id;
 }
 
@@ -392,7 +428,14 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     //-------------------------------------------------------------------------------------------------------------
     //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
     //-------------------------------------------------------------------------------------------------------------
-    return addLogRes.data.result.sys_id;
+    return {
+        logId: addLogRes.data.result.sys_id,
+        returnMessage: {
+            message: 'Message log added.',
+            messageType: 'success',
+            ttl: 3000
+        }
+    };
 }
 
 // Used to update existing message log so to group message in the same day together
@@ -457,8 +500,15 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     //---CHECK.9: In extension, try create a new contact against an unknown number ---
     //--------------------------------------------------------------------------------
     return {
-        id: contactInfoRes.id,
-        name: contactInfoRes.name
+        contactInfo: {
+            id: contactInfoRes.id,
+            name: contactInfoRes.name
+        },
+        returnMessage: {
+            message: `New contact created.`,
+            messageType: 'success',
+            ttl: 3000
+        }
     }
 }
 
