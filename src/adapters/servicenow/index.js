@@ -78,6 +78,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         //     attributes:["max_allowed_users"]
         // }]
     })
+    console.log(checkActiveUsers);
     const getMaxUsersCount = await ConfigModel1.findOne({
         where:{
             license_key_id:process.env.license_key_id
@@ -89,7 +90,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
     let activeSession = 3
     let maxUsers = getMaxUsersCount.dataValues.max_allowed_users
     console.log(maxUsers);
-    if(activeSession < maxUsers)
+    if(checkActiveUsers.count < maxUsers)
         {
              userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
                 headers: {
@@ -100,7 +101,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             const name = userInfoResponse.data.result.user_name;
             const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
             const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
-            // await saveUserInfo(userInfoResponse.data.result);
+            await saveUserInfo(userInfoResponse.data.result);
             return {
                 platformUserInfo:{ id,
                 name,
@@ -128,7 +129,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
                 },
                 returnMessage: {
                     messageType: 'danger',
-                    message: 'Limit exausted ',
+                    message: `You are not having an active license.Please contact us.`,
                     ttl: 3000
                 }
             };
