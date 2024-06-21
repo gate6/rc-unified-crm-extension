@@ -397,7 +397,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             ttl: 3000
         }
     };
-    return patchLogRes.data.result.sys_id;
+
 }
 
 async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) { // contactNumber is now ContactInfo.phoneNumber
