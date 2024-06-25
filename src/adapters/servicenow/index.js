@@ -1,12 +1,6 @@
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
-// const { saveUserInfo} = require('../core/auth');
-// const { UserModel } = require('../../models/userModel');
-// const { UserModel1 } = require('../models/userModel');
-// const { ConfigModel1 } = require('../models/configModel');
-// const { CallLogModel1 } = require('../models/callLogModel');
-// const { MessageLogModel1 } = require('../models/messageLogModel');
 
 // -----------------------------------------------------------------------------------------------
 // ---TODO: Delete below mock entities and other relevant code, they are just for test purposes---
@@ -14,15 +8,6 @@ const { parsePhoneNumber } = require('awesome-phonenumber');
 let mockContact = null;
 let mockCallLog = null;
 let mockMessageLog = null;
-
-// async function initDB()
-// {
-//     await UserModel1.sync({ force: true,alter:true });
-//     await CallLogModel1.sync({ force: true,alter:true });
-//     await MessageLogModel1.sync({ force: true,alter:true });
-//     await ConfigModel1.sync({ force: true,alter:true });
-// }
-// initDB();
 
 function getAuthType() {
     return 'oauth'; // Return either 'oauth' OR 'apiKey'
@@ -67,24 +52,6 @@ async function getUserInfo({ authHeader, additionalInfo }) {
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
 
-    // const checkActiveUsers = await UserModel1.findAndCountAll({
-    //     where:{
-    //         license_key_id:process.env.license_key_id
-    //     },
-    //     // include:[{
-    //     //     model:ConfigModel1,
-    //     //     required:true,
-    //     //     attributes:["max_allowed_users"]
-    //     // }]
-    // })
-    // // const getMaxUsersCount = await ConfigModel1.findOne({
-    // //     where:{
-    // //         license_key_id
-    // //     }
-    // // })
-    // console.log("checkActiveUsers",checkActiveUsers);
-    
-
     const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
         headers: {
             'Authorization': authHeader
@@ -95,7 +62,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
     const name = userInfoResponse.data.result.user_name;
     const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
     const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
-    // await saveUserInfo(userInfoResponse.data.result);
+
     return {
         platformUserInfo: {
             id,
@@ -207,7 +174,14 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     //-----------------------------------------------------
     //---CHECK.3: In console, if contact info is printed---
     //-----------------------------------------------------
-    return foundContacts;  //[{id, name, phone, additionalInfo}]
+    return {
+        foundContacts,
+        returnMessage: {
+            messageType: 'success',
+            message: 'Successfully found contact.',
+            ttl: 3000
+        }
+    };  //[{id, name, phone, additionalInfo}]
 }
 
 async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, timezoneOffset, contactNumber }) {
@@ -265,7 +239,14 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     //----------------------------------------------------------------------------
     //---CHECK.4: Open db.sqlite and CRM website to check if call log is saved ---
     //----------------------------------------------------------------------------
-    return addLogRes.data.result.sys_id;
+    return {
+        logId: addLogRes.data.result.sys_id,
+        returnMessage: {
+            message: 'Call log added.',
+            messageType: 'success',
+            ttl: 3000
+        }
+    };
 }
 
 async function getCallLog({ user, callLogId, authHeader }) {
@@ -283,9 +264,15 @@ async function getCallLog({ user, callLogId, authHeader }) {
     //---CHECK.5: In extension, for a logged call, click edit to see if info is fetched ---
     //-------------------------------------------------------------------------------------
     return {
-        subject: getLogRes.data.result.short_description,
-        note: getLogRes.data.result.description,
-        additionalSubmission: {}
+        callLogInfo: {
+            subject: getLogRes.data.result.short_description,
+            note: getLogRes.data.result.description,
+        },
+        returnMessage: {
+            message: 'Call log fetched.',
+            messageType: 'success',
+            ttl: 3000
+        }
     }
 }
 
@@ -319,7 +306,15 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     //-----------------------------------------------------------------------------------------
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
     //-----------------------------------------------------------------------------------------
-    return patchLogRes.data.result.sys_id;
+    // return patchLogRes.data.result.sys_id;
+    return {
+        updatedNote: note,
+        returnMessage: {
+            message: 'Call log updated.',
+            messageType: 'success',
+            ttl: 3000
+        }
+    };
 }
 
 async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) { // contactNumber is now ContactInfo.phoneNumber
@@ -351,7 +346,14 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     //-------------------------------------------------------------------------------------------------------------
     //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
     //-------------------------------------------------------------------------------------------------------------
-    return addLogRes.data.result.sys_id;
+    return {
+        logId: addLogRes.data.result.sys_id,
+        returnMessage: {
+            message: 'Message log added.',
+            messageType: 'success',
+            ttl: 3000
+        }
+    };
 }
 
 // Used to update existing message log so to group message in the same day together
@@ -416,8 +418,15 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     //---CHECK.9: In extension, try create a new contact against an unknown number ---
     //--------------------------------------------------------------------------------
     return {
-        id: contactInfoRes.id,
-        name: contactInfoRes.name
+        contactInfo: {
+            id: contactInfoRes.id,
+            name: contactInfoRes.name
+        },
+        returnMessage: {
+            message: `New contact created.`,
+            messageType: 'success',
+            ttl: 3000
+        }
     }
 }
 
