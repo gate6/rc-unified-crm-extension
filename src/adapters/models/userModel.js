@@ -14,7 +14,7 @@ const UserModel1 = sequelize2.define('users', {
   lastname: {
     type: Sequelize.STRING,
   },
-  firstname: {
+  hostname: {
     type: Sequelize.STRING,
   },
   timezoneName: {

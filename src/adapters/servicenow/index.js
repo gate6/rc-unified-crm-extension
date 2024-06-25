@@ -50,14 +50,19 @@ function getCredentials(hostname){
 }
 
 // CASE: If using OAuth
-  function getOauthInfo(hostname) {
+async function getOauthInfo({tokenUrl,hostname}) {
+    console.log(hostname);
     let configData={};
     // configData = await getCredentials(hostname);
 
-    console.log('hostname',hostname.hostname);
-    console.log(getCredentials(hostname));
-
-    // console.log(configCreds);
+    // console.log('hostname',hostname.hostname);
+    // console.log(getCredentials(hostname));
+    const getCredentials = await CompanyModel.findOne({
+        where:{
+            hostname : hostname
+        }
+    })
+    console.log("configCreds.dataValues",getCredentials.dataValues);
     // console.log(configData);
     return {
         clientId: process.env.SERVICE_NOW_CLIENT_ID,
@@ -95,7 +100,7 @@ async function getUserInfo({ authHeader, additionalInfo,hostname }) {
     let userInfoResponse;
     const checkActiveUsers = await UserModel1.findAndCountAll({
         where:{
-            license_key_id:process.env.license_key_id
+            hostname:hostname
         },
         // include:[{
         //     model:ConfigModel1,
@@ -106,7 +111,7 @@ async function getUserInfo({ authHeader, additionalInfo,hostname }) {
 
     const getMaxUsersCount = await CompanyModel.findOne({
         where:{
-            license_key_id:process.env.license_key_id
+            hostname:hostname
         },
         attributes:['max_allowed_users']
     });

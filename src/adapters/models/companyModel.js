@@ -30,6 +30,15 @@ const CompanyModel = sequelize2.define('company', {
   },
   password:{
     type: Sequelize.STRING,
+  },
+  tokenUrl:{
+    type: Sequelize.STRING
+  },
+  crmRedirectUrl:{
+    type: Sequelize.STRING
+  },
+  user_details_path:{
+    type: Sequelize.STRING
   }
 });
 // ConfigModel1.associate = function(models) {

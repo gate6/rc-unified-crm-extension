@@ -1,7 +1,7 @@
 const { Sequelize } = require('sequelize');
 
-const sequelize2 = new Sequelize('ringcentraldev', 'root', 'root@1234', {
-  host: 'localhost',
+const sequelize2 = new Sequelize('ringcentraldev', 'ringcentraldev', 'RnG#4WE4^CeTRaL74QP', {
+  host: '52.12.152.111',
   dialect: 'mysql',
   dialectOptions:  {
     ssl: {
