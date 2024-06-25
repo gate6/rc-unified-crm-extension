@@ -10,7 +10,7 @@
                 "type": "oauth",
                 "oauth": {
                     "authUrl": "https://dev195938.service-now.com/oauth_auth.do",
-                    "clientId": "28f5e591b712021007de332ca7b91efb",
+                    "clientId": "a81408c51bc302107bd030b17b21835f",
                     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html"
                 }
             },
