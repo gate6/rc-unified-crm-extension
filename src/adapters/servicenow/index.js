@@ -4,7 +4,8 @@ const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo} = require('../core/auth');
 // const { UserModel } = require('../../models/userModel');
 const { UserModel1 } = require('../models/userModel');
-const { ConfigModel1 } = require('../models/configModel');
+const { CompanyModel } = require('../models/companyModel');
+const Op = require('sequelize').Op;
 // const { CallLogModel1 } = require('../models/callLogModel');
 // const { MessageLogModel1 } = require('../models/messageLogModel');
 
@@ -20,7 +21,7 @@ async function initDB()
     await UserModel1.sync({ force: false,alter:true });
     // await CallLogModel1.sync({ force: true,alter:true });
     // await MessageLogModel1.sync({ force: true,alter:true });
-    await ConfigModel1.sync({ force: false,alter:true });
+    await CompanyModel.sync({ force: false,alter:true });
 }
 initDB();
 
@@ -32,8 +33,32 @@ function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}:`).toString('base64');
 }
 
+function getCredentials(hostname){
+     new Promise((resolve,reject)=>{
+        CompanyModel.findOne({
+            where:{
+                hostname:hostname
+            },        
+        }).then((data)=>{
+            // console.log('data',data);
+            configData = data.dataValues;
+            return resolve(configData);
+        }).catch((err)=>{
+            console.log(err)
+        })
+    })
+}
+
 // CASE: If using OAuth
-function getOauthInfo() {
+  function getOauthInfo(hostname) {
+    let configData={};
+    // configData = await getCredentials(hostname);
+
+    console.log('hostname',hostname.hostname);
+    console.log(getCredentials(hostname));
+
+    // console.log(configCreds);
+    // console.log(configData);
     return {
         clientId: process.env.SERVICE_NOW_CLIENT_ID,
         clientSecret: process.env.SERVICE_NOW_CLIENT_SECRET,
@@ -62,11 +87,11 @@ function getOauthInfo() {
 
 
 // For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
-async function getUserInfo({ authHeader, additionalInfo }) {
+async function getUserInfo({ authHeader, additionalInfo,hostname }) {
     // ------------------------------------------------------
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
-
+    console.log("hostname",hostname);
     let userInfoResponse;
     const checkActiveUsers = await UserModel1.findAndCountAll({
         where:{
@@ -78,29 +103,27 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         //     attributes:["max_allowed_users"]
         // }]
     })
-    console.log(checkActiveUsers);
-    const getMaxUsersCount = await ConfigModel1.findOne({
+
+    const getMaxUsersCount = await CompanyModel.findOne({
         where:{
             license_key_id:process.env.license_key_id
         },
         attributes:['max_allowed_users']
     });
 
-    // console.log(getMaxUsersCount);
-    let activeSession = 3
     let maxUsers = getMaxUsersCount.dataValues.max_allowed_users
-    console.log(maxUsers);
+    userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+        headers: {
+            'Authorization': authHeader
+        }
+    });
+    const id = userInfoResponse.data.result.id;
+    const name = userInfoResponse.data.result.user_name;
+    const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
+    const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
     if(checkActiveUsers.count < maxUsers)
         {
-             userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
-                headers: {
-                    'Authorization': authHeader
-                }
-            });
-            const id = userInfoResponse.data.result.id;
-            const name = userInfoResponse.data.result.user_name;
-            const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
-            const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
+
             await saveUserInfo(userInfoResponse.data.result);
             return {
                 platformUserInfo:{ id,
@@ -118,21 +141,50 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         }
     else
         {
-            console.log('limited exausted');
-            return {
-                platformUserInfo:{
-                id:"",
-                name:"",
-                timezoneName:"",
-                timezoneOffset:"",
-                platformAdditionalInfo: {}
-                },
-                returnMessage: {
-                    messageType: 'danger',
-                    message: `You are not having an active license.Please contact us.`,
-                    ttl: 3000
+            const isExistingUsers =await UserModel1.findOne({
+                where: {
+                    [Op.and]: [
+                        {
+                            id,
+                            // platform
+                        }
+                    ]
                 }
-            };
+            });
+            if(isExistingUsers)
+                {
+                    return {
+                        platformUserInfo:{ id,
+                        name,
+                        timezoneName,
+                        timezoneOffset,
+                        platformAdditionalInfo: {}
+                        },
+                        returnMessage: {
+                            messageType: 'success',
+                            message: 'Successfully connected to TestCRM.',
+                            ttl: 3000
+                        }
+                    };          
+                }
+            else{
+                console.log('limited exausted');
+                return {
+                    platformUserInfo:{
+                    id:"",
+                    name:"",
+                    timezoneName:"",
+                    timezoneOffset:"",
+                    platformAdditionalInfo: {}
+                    },
+                    returnMessage: {
+                        messageType: 'danger',
+                        message: `You are not having an active license.Please contact us.`,
+                        ttl: 3000
+                    }
+                };
+            }    
+
             // return "limit-exausted"
         }
     // const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {

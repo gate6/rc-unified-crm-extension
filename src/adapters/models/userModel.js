@@ -1,6 +1,6 @@
 const Sequelize = require('sequelize');
 const { sequelize2 } = require('./sequelize');
-const {ConfigModel1 } = require('./configModel')
+const {ConfigModel1 } = require('./companyModel')
 
 // Model for User data
 const UserModel1 = sequelize2.define('users', {
