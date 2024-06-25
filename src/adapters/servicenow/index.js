@@ -97,11 +97,18 @@ async function getUserInfo({ authHeader, additionalInfo }) {
     const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
     // await saveUserInfo(userInfoResponse.data.result);
     return {
-        id,
-        name,
-        timezoneName,
-        timezoneOffset,
-        platformAdditionalInfo: {}
+        platformUserInfo: {
+            id,
+            name,
+            timezoneName,
+            timezoneOffset,
+            platformAdditionalInfo: {}  // this should save whatever extra info you want to save against the user
+        },
+        returnMessage: {
+            messageType: 'success',
+            message: 'Successfully connected to ServiceNow.',
+            ttl: 3000
+        }
     };
 
     //---------------------------------------------------------------------------------------------------
@@ -125,6 +132,13 @@ async function unAuthorize({ user }) {
     //         headers: { 'Authorization': `Basic ${getBasicAuth({ apiKey: user.accessToken })}` }
     //     });
     await user.destroy();
+    return {
+        returnMessage: {
+            messageType: 'success',
+            message: 'Successfully logged out from ServiceNow account.',
+            ttl: 3000
+        }
+    }
 
     //--------------------------------------------------------------
     //---CHECK.2: Open db.sqlite to check if user info is removed---
