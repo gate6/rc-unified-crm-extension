@@ -142,7 +142,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     
 
     // You can use parsePhoneNumber functions to further parse the phone number
-    const foundContacts = [];
+    const matchedContactInfo = [];
 
 
     for (var numberToQuery of numberToQueryArray) {
@@ -154,7 +154,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 
         if (personInfo.data.result.length > 0) {
             for (var result of personInfo.data.result) {
-                foundContacts.push({
+                matchedContactInfo.push({
                     id: result.sys_id,
                     name: result.name,
                     phone: numberToQuery,
@@ -164,7 +164,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
         }
     }
 
-    foundContacts.push({
+    matchedContactInfo.push({
         id: 'createNewContact',
         name: 'Create new contact...',
         additionalInfo: null,
@@ -175,7 +175,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     //---CHECK.3: In console, if contact info is printed---
     //-----------------------------------------------------
     return {
-        foundContacts,
+        matchedContactInfo,
         returnMessage: {
             messageType: 'success',
             message: 'Successfully found contact.',

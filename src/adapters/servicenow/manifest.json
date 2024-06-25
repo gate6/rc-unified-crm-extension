@@ -19,10 +19,6 @@
             "canOpenLogPage": true,
             "contactPageUrl":"https://dev194338.service-now.com/customer_contact.do?sys_id={contactId}",
             "logPageUrl":"https://dev194338.service-now.com/incident.do?sys_id={logId}",
-            "contactTypes": [
-                "TestContactType",
-                "Contact"
-            ],
             "embeddedOnCrmPage": {
                 "welcomePage": {
                     "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
