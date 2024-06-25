@@ -98,7 +98,7 @@ async function unAuthorize({ user }) {
     //     {
     //         headers: { 'Authorization': `Basic ${getBasicAuth({ apiKey: user.accessToken })}` }
     //     });
-    // await user.destroy();
+    await user.destroy();
     return {
         returnMessage: {
             messageType: 'success',
