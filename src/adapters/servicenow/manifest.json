@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://ac04-116-75-198-48.ngrok-free.app",
+    "serverUrl": "https://rc-crmapi.test.gate6.com",
     "author": "RingCentral Labs",
     "platforms": {
         "servicenow": {
