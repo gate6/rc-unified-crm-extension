@@ -1,6 +1,13 @@
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
+const { saveUserInfo} = require('../core/auth');
+// const { UserModel } = require('../../models/userModel');
+const { UserModel1 } = require('../models/userModel');
+const { CompanyModel } = require('../models/companyModel');
+const Op = require('sequelize').Op;
+// const { CallLogModel1 } = require('../models/callLogModel');
+// const { MessageLogModel1 } = require('../models/messageLogModel');
 
 // -----------------------------------------------------------------------------------------------
 // ---TODO: Delete below mock entities and other relevant code, they are just for test purposes---
@@ -8,6 +15,15 @@ const { parsePhoneNumber } = require('awesome-phonenumber');
 let mockContact = null;
 let mockCallLog = null;
 let mockMessageLog = null;
+
+async function initDB()
+{
+    await UserModel1.sync({ force: false,alter:true });
+    // await CallLogModel1.sync({ force: true,alter:true });
+    // await MessageLogModel1.sync({ force: true,alter:true });
+    await CompanyModel.sync({ force: false,alter:true });
+}
+initDB();
 
 function getAuthType() {
     return 'oauth'; // Return either 'oauth' OR 'apiKey'
@@ -17,13 +33,42 @@ function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}:`).toString('base64');
 }
 
+function getCredentials(hostname){
+     new Promise((resolve,reject)=>{
+        CompanyModel.findOne({
+            where:{
+                hostname:hostname
+            },        
+        }).then((data)=>{
+            // console.log('data',data);
+            configData = data.dataValues;
+            return resolve(configData);
+        }).catch((err)=>{
+            console.log(err)
+        })
+    })
+}
+
 // CASE: If using OAuth
-function getOauthInfo() {
+async function getOauthInfo({tokenUrl,hostname}) {
+    console.log(hostname);
+    let configData={};
+    // configData = await getCredentials(hostname);
+
+    // console.log('hostname',hostname.hostname);
+    // console.log(getCredentials(hostname));
+    const getCredentials = await CompanyModel.findOne({
+        where:{
+            hostname : hostname
+        }
+    })
+    console.log("configCreds.dataValues",getCredentials.dataValues);
+    // console.log(configData);
     return {
-        clientId: process.env.SERVICE_NOW_CLIENT_ID,
-        clientSecret: process.env.SERVICE_NOW_CLIENT_SECRET,
-        accessTokenUri: process.env.SERVICE_NOW_TOKEN_URL,
-        redirectUri: process.env.SERVICE_NOW_CRM_REDIRECT_URI
+        clientId: getCredentials.dataValues.clientId,
+        clientSecret: getCredentials.dataValues.clientSecret,
+        accessTokenUri: getCredentials.dataValues.tokenUrl,
+        redirectUri: getCredentials.dataValues.crmRedirectUrl
     }
 }
 
@@ -47,36 +92,129 @@ function getOauthInfo() {
 
 
 // For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
-async function getUserInfo({ authHeader, additionalInfo }) {
+async function getUserInfo({ authHeader, additionalInfo,hostname }) {
     // ------------------------------------------------------
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
+    console.log("hostname",hostname);
+    let userInfoResponse;
+    const checkActiveUsers = await UserModel1.findAndCountAll({
+        where:{
+            hostname:hostname
+        },
+        // include:[{
+        //     model:ConfigModel1,
+        //     required:true,
+        //     attributes:["max_allowed_users"]
+        // }]
+    })
 
-    const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+    const getMaxUsersCount = await CompanyModel.findOne({
+        where:{
+            hostname:hostname
+        }
+    });
+    console.log(getMaxUsersCount,getMaxUsersCount.dataValues.instanceUrl)
+    let maxUsers = getMaxUsersCount.dataValues.max_allowed_users
+    userInfoResponse = await axios.get(`${getMaxUsersCount.dataValues.instanceUrl}/api/${getMaxUsersCount.dataValues.user_details_path}`, {
         headers: {
             'Authorization': authHeader
         }
     });
-    
     const id = userInfoResponse.data.result.id;
     const name = userInfoResponse.data.result.user_name;
     const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
     const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
+    if(checkActiveUsers.count < maxUsers)
+        {
 
-    return {
-        platformUserInfo: {
-            id,
-            name,
-            timezoneName,
-            timezoneOffset,
-            platformAdditionalInfo: {}  // this should save whatever extra info you want to save against the user
-        },
-        returnMessage: {
-            messageType: 'success',
-            message: 'Successfully connected to ServiceNow.',
-            ttl: 3000
+            await saveUserInfo(userInfoResponse.data.result);
+            return {
+                platformUserInfo:{ id,
+                name,
+                timezoneName,
+                timezoneOffset,
+                platformAdditionalInfo: {}
+                },
+                returnMessage: {
+                    messageType: 'success',
+                    message: 'Successfully connected to TestCRM.',
+                    ttl: 3000
+                }
+            };
         }
-    };
+    else
+        {
+            const isExistingUsers =await UserModel1.findOne({
+                where: {
+                    [Op.and]: [
+                        {
+                            id,
+                            // platform
+                        }
+                    ]
+                }
+            });
+            if(isExistingUsers)
+                {
+                    return {
+                        platformUserInfo:{ id,
+                        name,
+                        timezoneName,
+                        timezoneOffset,
+                        platformAdditionalInfo: {}
+                        },
+                        returnMessage: {
+                            messageType: 'success',
+                            message: 'Successfully connected to TestCRM.',
+                            ttl: 3000
+                        }
+                    };          
+                }
+            else{
+                console.log('limited exausted');
+                return {
+                    platformUserInfo:{
+                    id:"",
+                    name:"",
+                    timezoneName:"",
+                    timezoneOffset:"",
+                    platformAdditionalInfo: {}
+                    },
+                    returnMessage: {
+                        messageType: 'danger',
+                        message: `You are not having an active license.Please contact us.`,
+                        ttl: 3000
+                    }
+                };
+            }    
+
+            // return "limit-exausted"
+        }
+    // const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+    //     headers: {
+    //         'Authorization': authHeader
+    //     }
+    // });
+    
+    // const id = userInfoResponse.data.result.id;
+    // const name = userInfoResponse.data.result.user_name;
+    // const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
+    // const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
+    // // await saveUserInfo(userInfoResponse.data.result);
+    // return {
+    //     platformUserInfo:{ id,
+    //     name,
+    //     timezoneName,
+    //     timezoneOffset,
+    //     platformAdditionalInfo: {}
+    //     },
+    //     returnMessage: {
+    //         messageType: 'success',
+    //         message: 'Successfully connected to TestCRM.',
+    //         ttl: 3000
+    //     }
+    // };
 
     //---------------------------------------------------------------------------------------------------
     //---CHECK.1: Open db.sqlite (might need to install certain viewer) to check if user info is saved---
@@ -263,6 +401,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     //-------------------------------------------------------------------------------------
     //---CHECK.5: In extension, for a logged call, click edit to see if info is fetched ---
     //-------------------------------------------------------------------------------------
+
     return {
         callLogInfo: {
             subject: getLogRes.data.result.short_description,
