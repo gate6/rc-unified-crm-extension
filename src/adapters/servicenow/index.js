@@ -65,10 +65,10 @@ async function getOauthInfo({tokenUrl,hostname}) {
     console.log("configCreds.dataValues",getCredentials.dataValues);
     // console.log(configData);
     return {
-        clientId: process.env.SERVICE_NOW_CLIENT_ID,
-        clientSecret: process.env.SERVICE_NOW_CLIENT_SECRET,
-        accessTokenUri: process.env.SERVICE_NOW_TOKEN_URL,
-        redirectUri: process.env.SERVICE_NOW_CRM_REDIRECT_URI
+        clientId: getCredentials.dataValues.clientId,
+        clientSecret: getCredentials.dataValues.clientSecret,
+        accessTokenUri: getCredentials.dataValues.tokenUrl,
+        redirectUri: getCredentials.dataValues.crmRedirectUrl
     }
 }
 
@@ -112,12 +112,11 @@ async function getUserInfo({ authHeader, additionalInfo,hostname }) {
     const getMaxUsersCount = await CompanyModel.findOne({
         where:{
             hostname:hostname
-        },
-        attributes:['max_allowed_users']
+        }
     });
-
+    console.log(getMaxUsersCount,getMaxUsersCount.dataValues.instanceUrl)
     let maxUsers = getMaxUsersCount.dataValues.max_allowed_users
-    userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+    userInfoResponse = await axios.get(`${getMaxUsersCount.dataValues.instanceUrl}/api/${getMaxUsersCount.dataValues.user_details_path}`, {
         headers: {
             'Authorization': authHeader
         }

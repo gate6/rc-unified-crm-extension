@@ -39,7 +39,10 @@ const CompanyModel = sequelize2.define('company', {
   },
   user_details_path:{
     type: Sequelize.STRING
-  }
+  },
+  instanceUrl:{
+    type: Sequelize.STRING
+  },
 });
 // ConfigModel1.associate = function(models) {
 //   ConfigModel1.hasMany(models.UserModel1, { foreignKey: 'license_key_id' });
