@@ -61,11 +61,11 @@ app.get('/crmManifest', (req, res) => {
 app.get('/crmManifest_dev2', (req, res) => {
     try {
         if (!!!req.query.platformName) {
-            const defaultCrmManifest = require('./adapters/manifest_dev2.json');
+            const defaultCrmManifest = require('./adapters/manifest.json');
             res.json(defaultCrmManifest);
             return;
         }
-        const crmManifest = require(`./adapters/${req.query.platformName}/manifest.json`);
+        const crmManifest = require(`./adapters/${req.query.platformName}/manifest_dev2.json`);
         if (!!crmManifest) {
             res.json(crmManifest);
         }
