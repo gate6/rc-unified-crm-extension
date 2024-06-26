@@ -236,11 +236,11 @@ async function unAuthorize({ user }) {
     //     {
     //         headers: { 'Authorization': `Basic ${getBasicAuth({ apiKey: user.accessToken })}` }
     //     });
-    await user.destroy();
+    // await user.destroy();
     return {
         returnMessage: {
             messageType: 'success',
-            message: 'Successfully logged out from TestCRM account.',
+            message: 'Successfully logged out from ServiceNow account.',
             ttl: 3000
         }
     }
@@ -280,7 +280,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     
 
     // You can use parsePhoneNumber functions to further parse the phone number
-    const foundContacts = [];
+    const matchedContactInfo = [];
 
 
     for (var numberToQuery of numberToQueryArray) {
@@ -292,7 +292,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 
         if (personInfo.data.result.length > 0) {
             for (var result of personInfo.data.result) {
-                foundContacts.push({
+                matchedContactInfo.push({
                     id: result.sys_id,
                     name: result.name,
                     phone: numberToQuery,
@@ -302,7 +302,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
         }
     }
 
-    foundContacts.push({
+    matchedContactInfo.push({
         id: 'createNewContact',
         name: 'Create new contact...',
         additionalInfo: null,
@@ -313,7 +313,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     //---CHECK.3: In console, if contact info is printed---
     //-----------------------------------------------------
     return {
-        foundContacts,
+        matchedContactInfo,
         returnMessage: {
             messageType: 'success',
             message: 'Successfully found contact.',
@@ -445,6 +445,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     //-----------------------------------------------------------------------------------------
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
     //-----------------------------------------------------------------------------------------
+    // return patchLogRes.data.result.sys_id;
     return {
         updatedNote: note,
         returnMessage: {
@@ -453,7 +454,6 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             ttl: 3000
         }
     };
-
 }
 
 async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) { // contactNumber is now ContactInfo.phoneNumber
