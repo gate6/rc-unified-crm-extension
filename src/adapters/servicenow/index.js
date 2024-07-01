@@ -1,6 +1,10 @@
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
+const { UserModel1 } = require('../models/userModel');
+const { CompanyModel } = require('../models/companyModel');
+const { saveUserInfo } = require('../core/auth');
+const Op = require('sequelize').Op;
 
 // -----------------------------------------------------------------------------------------------
 // ---TODO: Delete below mock entities and other relevant code, they are just for test purposes---
@@ -8,6 +12,16 @@ const { parsePhoneNumber } = require('awesome-phonenumber');
 let mockContact = null;
 let mockCallLog = null;
 let mockMessageLog = null;
+
+async function initDB()
+{
+    await UserModel1.sync({ force: false,alter:true });
+    // await CallLogModel1.sync({ force: true,alter:true });
+    // await MessageLogModel1.sync({ force: true,alter:true });
+    await CompanyModel.sync({ force: false,alter:true });
+}
+initDB();
+
 
 function getAuthType() {
     return 'oauth'; // Return either 'oauth' OR 'apiKey'
@@ -18,12 +32,19 @@ function getBasicAuth({ apiKey }) {
 }
 
 // CASE: If using OAuth
-function getOauthInfo() {
+async function getOauthInfo() {
+    const getEnvInfo = await CompanyModel.findOne({
+        where:{
+            hostname:process.env.hostname
+        }
+    })
+
+
     return {
-        clientId: process.env.SERVICE_NOW_CLIENT_ID,
-        clientSecret: process.env.SERVICE_NOW_CLIENT_SECRET,
-        accessTokenUri: process.env.SERVICE_NOW_TOKEN_URL,
-        redirectUri: process.env.SERVICE_NOW_CRM_REDIRECT_URI
+        clientId: getEnvInfo.dataValues.clientId,
+        clientSecret:getEnvInfo.dataValues.clientSecret ,
+        accessTokenUri: getEnvInfo.tokenUrl,
+        redirectUri: getEnvInfo.dataValues.crmRedirectUrl
     }
 }
 
@@ -62,6 +83,88 @@ async function getUserInfo({ authHeader, additionalInfo }) {
     const name = userInfoResponse.data.result.user_name;
     const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
     const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
+    
+
+
+    const checkActiveUsers = await UserModel1.findAll({
+        where:{
+            hostname:process.env.hostname
+        },
+        logging:true
+    })
+ 
+    const getMaxUsersCount = await CompanyModel.findOne({
+        where:{
+            hostname:process.env.hostname
+        }
+    });
+    let maxUsers = getMaxUsersCount.dataValues.max_allowed_users
+    
+    if(checkActiveUsers.count < maxUsers)
+        {
+
+            await saveUserInfo(userInfoResponse.data.result);
+            return {
+                platformUserInfo:{ id,
+                name,
+                timezoneName,
+                timezoneOffset,
+                platformAdditionalInfo: {}
+                },
+                returnMessage: {
+                    messageType: 'success',
+                    message: 'Successfully connected to TestCRM.',
+                    ttl: 3000
+                }
+            };
+        }
+    else
+        {
+            const isExistingUsers =await UserModel1.findOne({
+                where: {
+                    [Op.and]: [
+                        {
+                            id,
+                            // platform
+                        }
+                    ]
+                }
+            });
+            if(isExistingUsers)
+                {
+                    return {
+                        platformUserInfo:{ id,
+                        name,
+                        timezoneName,
+                        timezoneOffset,
+                        platformAdditionalInfo: {}
+                        },
+                        returnMessage: {
+                            messageType: 'success',
+                            message: 'Successfully connected to TestCRM.',
+                            ttl: 3000
+                        }
+                    };          
+                }
+            else{
+                return {
+                    platformUserInfo:{
+                    id:"",
+                    name:"",
+                    timezoneName:"",
+                    timezoneOffset:"",
+                    platformAdditionalInfo: {}
+                    },
+                    returnMessage: {
+                        messageType: 'danger',
+                        message: `You are not having an active license.Please contact us.`,
+                        ttl: 3000
+                    }
+                };
+            }    
+
+            // return "limit-exausted"
+        }
 
     return {
         platformUserInfo: {
