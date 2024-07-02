@@ -1,4 +1,8 @@
-const {UserModel1} = require('../models/userModel');
+// const {UserModel1} = require('../models/userModel');
+const Sequelize = require('sequelize');
+const { sequelize } = require('../servicenow-models/sequelize');
+const initModels = require('../servicenow-models/init-models');
+const models = initModels(sequelize);
 const Op = require('sequelize').Op;
 
 
@@ -6,7 +10,7 @@ async function saveUserInfo(userObj){
     try {
         // console.log(userObj);
         let id = userObj.id;
-        const existingUser = await UserModel1.findOne({
+        const existingUser = await models.customer.findOne({
             where: {
                 [Op.and]: [
                     {
@@ -24,10 +28,12 @@ async function saveUserInfo(userObj){
         }
         else {
             console.log('This is userobj',userObj);
-            const createUser = await UserModel1.create({
-                id: userObj.id, firstname: userObj.first_name, lastname: userObj.last_name,
+            const createUser = await models.customer.create({
+                sys_id: userObj.id, 
+                firstname: userObj.first_name, 
+                lastname: userObj.last_name,
                 email: userObj.email,
-                license_key_id: process.env.license_key_id,
+                company_id: 1,
                 hostname:process.env.hostname
             })
             console.log(createUser);

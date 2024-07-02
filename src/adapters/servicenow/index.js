@@ -1,10 +1,12 @@
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
-const { UserModel1 } = require('../models/userModel');
-const { CompanyModel } = require('../models/companyModel');
-const { saveUserInfo } = require('../core/auth');
+const { saveUserInfo } = require('../servicenow-core/auth');
 const Op = require('sequelize').Op;
+const { initModels } = require('../servicenow-models/init-models');
+const Sequelize = require('sequelize');
+const { sequelize } = require('../servicenow-models/sequelize');
+const models = initModels(sequelize);
 
 // -----------------------------------------------------------------------------------------------
 // ---TODO: Delete below mock entities and other relevant code, they are just for test purposes---
@@ -13,14 +15,6 @@ let mockContact = null;
 let mockCallLog = null;
 let mockMessageLog = null;
 
-async function initDB()
-{
-    await UserModel1.sync({ force: false,alter:true });
-    // await CallLogModel1.sync({ force: true,alter:true });
-    // await MessageLogModel1.sync({ force: true,alter:true });
-    await CompanyModel.sync({ force: false,alter:true });
-}
-initDB();
 
 
 function getAuthType() {
@@ -33,13 +27,11 @@ function getBasicAuth({ apiKey }) {
 
 // CASE: If using OAuth
 async function getOauthInfo() {
-    const getEnvInfo = await CompanyModel.findOne({
+    const getEnvInfo = await models.companies.findOne({
         where:{
             hostname:process.env.hostname
         }
     })
-
-
     return {
         clientId: getEnvInfo.dataValues.clientId,
         clientSecret:getEnvInfo.dataValues.clientSecret ,
@@ -78,38 +70,36 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             'Authorization': authHeader
         }
     });
-    
+
     const id = userInfoResponse.data.result.id;
     const name = userInfoResponse.data.result.user_name;
     const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
     const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
-    
 
 
-    const checkActiveUsers = await UserModel1.findAll({
-        where:{
-            hostname:process.env.hostname
+
+    const checkActiveUsers = await models.companies.findAll({
+        where: {
+            hostname: process.env.hostname
         },
-        logging:true
+        include: [{
+            model: models.customer,
+            as: 'customers',
+            required: false
+        }],
+        logging: true
     })
- 
-    const getMaxUsersCount = await CompanyModel.findOne({
-        where:{
-            hostname:process.env.hostname
-        }
-    });
-    let maxUsers = getMaxUsersCount.dataValues.max_allowed_users
-    
-    if(checkActiveUsers.count < maxUsers)
-        {
 
-            await saveUserInfo(userInfoResponse.data.result);
+    if (checkActiveUsers[0].customers.length < checkActiveUsers[0].max_allowed_users) {
+        console.log(checkActiveUsers[0].customers.some(customer => customer.sys_id === id));
+        if (checkActiveUsers[0].customers.some(customer => customer.sys_id === id)) {
             return {
-                platformUserInfo:{ id,
-                name,
-                timezoneName,
-                timezoneOffset,
-                platformAdditionalInfo: {}
+                platformUserInfo: {
+                    id,
+                    name,
+                    timezoneName,
+                    timezoneOffset,
+                    platformAdditionalInfo: {}
                 },
                 returnMessage: {
                     messageType: 'success',
@@ -118,68 +108,40 @@ async function getUserInfo({ authHeader, additionalInfo }) {
                 }
             };
         }
-    else
-        {
-            const isExistingUsers =await UserModel1.findOne({
-                where: {
-                    [Op.and]: [
-                        {
-                            id,
-                            // platform
-                        }
-                    ]
-                }
-            });
-            if(isExistingUsers)
-                {
-                    return {
-                        platformUserInfo:{ id,
-                        name,
-                        timezoneName,
-                        timezoneOffset,
-                        platformAdditionalInfo: {}
-                        },
-                        returnMessage: {
-                            messageType: 'success',
-                            message: 'Successfully connected to TestCRM.',
-                            ttl: 3000
-                        }
-                    };          
-                }
-            else{
-                return {
-                    platformUserInfo:{
-                    id:"",
-                    name:"",
-                    timezoneName:"",
-                    timezoneOffset:"",
+        else {
+            await saveUserInfo(userInfoResponse.data.result);
+            return {
+                platformUserInfo: {
+                    id,
+                    name,
+                    timezoneName,
+                    timezoneOffset,
                     platformAdditionalInfo: {}
-                    },
-                    returnMessage: {
-                        messageType: 'danger',
-                        message: `You are not having an active license.Please contact us.`,
-                        ttl: 3000
-                    }
-                };
-            }    
-
-            // return "limit-exausted"
+                },
+                returnMessage: {
+                    messageType: 'success',
+                    message: 'Successfully connected to TestCRM.',
+                    ttl: 3000
+                }
+            };
         }
-
-    return {
-        platformUserInfo: {
-            id,
-            name,
-            timezoneName,
-            timezoneOffset,
-            platformAdditionalInfo: {}  // this should save whatever extra info you want to save against the user
-        },
-        returnMessage: {
-            messageType: 'success',
-            message: 'Successfully connected to ServiceNow.',
-            ttl: 3000
-        }
-    };
+    }
+    else {
+        return {
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license.Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
 
     //---------------------------------------------------------------------------------------------------
     //---CHECK.1: Open db.sqlite (might need to install certain viewer) to check if user info is saved---

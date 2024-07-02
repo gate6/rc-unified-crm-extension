@@ -38,10 +38,6 @@ app.use(cors({
     methods: ['GET', 'POST', 'PATCH']
 }));
 
-app.all('*', function(req, res, next){
-    console.log(req.get('origin'), req.get('host'));
-    next();
-});
 
 app.get('/crmManifest', (req, res) => {
     try {
