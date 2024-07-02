@@ -120,7 +120,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
                 },
                 returnMessage: {
                     messageType: 'success',
-                    message: 'Successfully connected to TestCRM.',
+                    message: 'Successfully connected to ServiceNow.',
                     ttl: 3000
                 }
             };
