@@ -127,7 +127,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         }
     }
     else {
-        return {
+        throw {
             platformUserInfo: {
                 id: "",
                 name: "",
