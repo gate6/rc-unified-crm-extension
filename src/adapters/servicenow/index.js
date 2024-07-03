@@ -127,14 +127,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         }
     }
     else {
-        throw {
-            platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
-            },
+        return {
             returnMessage: {
                 messageType: 'danger',
                 message: `You are not having an active license. Please contact us.`,
