@@ -128,6 +128,8 @@ async function getUserInfo({ authHeader, additionalInfo }) {
     }
     else {
         return {
+            platformUserInfo: {
+            },
             returnMessage: {
                 messageType: 'danger',
                 message: `You are not having an active license. Please contact us.`,
