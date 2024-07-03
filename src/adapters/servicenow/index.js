@@ -129,6 +129,11 @@ async function getUserInfo({ authHeader, additionalInfo }) {
     else {
         return {
             platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
             },
             returnMessage: {
                 messageType: 'danger',
