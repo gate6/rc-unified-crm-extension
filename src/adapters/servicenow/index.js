@@ -137,7 +137,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             },
             returnMessage: {
                 messageType: 'danger',
-                message: `You are not having an active license.Please contact us.`,
+                message: `You are not having an active license. Please contact us.`,
                 ttl: 3000
             }
         };
@@ -163,7 +163,7 @@ async function unAuthorize({ user }) {
     //     {
     //         headers: { 'Authorization': `Basic ${getBasicAuth({ apiKey: user.accessToken })}` }
     //     });
-    // await user.destroy();
+    await user.destroy();
     return {
         returnMessage: {
             messageType: 'success',
