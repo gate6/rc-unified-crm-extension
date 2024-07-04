@@ -16,6 +16,23 @@ let mockCallLog = null;
 let mockMessageLog = null;
 
 
+async function tokenExist(authHeader){
+    const accessToken = authHeader.split(' ')[1];
+    const isTokenPresent = await models.customer.findOne({
+        where:{
+            accessToken:accessToken
+        },
+        raw:true
+    })
+    console.log(isTokenPresent);
+    if(!isTokenPresent)
+        {
+            return false
+        }
+    else{
+        return true
+    }        
+} 
 
 function getAuthType() {
     return 'oauth'; // Return either 'oauth' OR 'apiKey'
@@ -61,10 +78,27 @@ async function getOauthInfo() {
 
 // For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
 async function getUserInfo({ authHeader, additionalInfo }) {
+    console.log("IS TOKEN PRESENT ",await tokenExist(authHeader));
     // ------------------------------------------------------
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    if (!isTokenPresent) {
+        return {
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
     const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
         headers: {
             'Authorization': authHeader
@@ -182,6 +216,25 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     // ---TODO.3: Implement contact matching---
     // ----------------------------------------
 
+    const isTokenPresent = await tokenExist(authHeader);
+    console.log(isTokenPresent);
+    if (!isTokenPresent) {
+        return {
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
+
     const numberToQueryArray = [];
 
     numberToQueryArray.push(phoneNumber.trim());
@@ -253,6 +306,23 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ------------------------------------
     // ---TODO.4: Implement call logging---
     // ------------------------------------
+    const isTokenPresent = await tokenExist(authHeader);
+    if (!isTokenPresent) {
+        return {
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
 
     const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
         headers: {
@@ -318,7 +388,23 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
     // ---TODO.5: Implement call log fetching---
     // -----------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    if (!isTokenPresent) {
+        return {
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
     const getLogRes = await axios.get(
         `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${callLogId}`,
         {
@@ -345,7 +431,23 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    if (!isTokenPresent) {
+        return {
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
     const existingLogId = existingCallLog.thirdPartyLogId;
     const getLogRes = await axios.get(
         `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
@@ -386,7 +488,23 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---------------------------------------
     // ---TODO.7: Implement message logging---
     // ---------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    if (!isTokenPresent) {
+        return {
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
     const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
         headers: {
             'Authorization': authHeader
@@ -426,7 +544,23 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    if (!isTokenPresent) {
+        return {
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
     const existingLogId = existingMessageLog.thirdPartyLogId;
     const getLogRes = await axios.get(
         `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
@@ -457,7 +591,23 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ----------------------------------------
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    if (!isTokenPresent) {
+        return {
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
     const account = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/account`, {
         headers: {
             'Authorization': authHeader
