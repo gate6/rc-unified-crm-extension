@@ -82,23 +82,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
     // ------------------------------------------------------
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
-    const isTokenPresent = await tokenExist(authHeader);
-    if (!isTokenPresent) {
-        return {
-            platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
-            },
-            returnMessage: {
-                messageType: 'danger',
-                message: `You are not having an active license. Please contact us.`,
-                ttl: 3000
-            }
-        };
-    }
+
     const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
         headers: {
             'Authorization': authHeader
@@ -124,9 +108,9 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         logging: true
     })
 
-    if (checkActiveUsers[0].customers.length < checkActiveUsers[0].max_allowed_users) {
-        console.log(checkActiveUsers[0].customers.some(customer => customer.sys_id === id));
-        if (checkActiveUsers[0].customers.some(customer => customer.sys_id === id)) {
+    if (checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers) {
+        console.log(checkActiveUsers[0].customers.some(customer => customer.sysId === id));
+        if (checkActiveUsers[0].customers.some(customer => customer.sysId === id)) {
             return {
                 platformUserInfo: {
                     id,
@@ -143,7 +127,8 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             };
         }
         else {
-            await saveUserInfo(userInfoResponse.data.result);
+            const accessToken = authHeader.split(' ')[1];
+            await saveUserInfo(userInfoResponse.data.result,accessToken);
             return {
                 platformUserInfo: {
                     id,

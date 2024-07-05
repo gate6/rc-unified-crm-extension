@@ -1,7 +1,7 @@
 const Sequelize = require('sequelize');
 module.exports = function(sequelize, DataTypes) {
   return sequelize.define('customer', {
-    sys_id: {
+    sysId: {
       type: DataTypes.STRING(255),
       allowNull: false
     },
@@ -49,8 +49,8 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
-    company_id: {
-      type: DataTypes.STRING(255),
+    companyId: {
+      type: DataTypes.INTEGER,
       allowNull: true,
       references: {
         model: 'companies',
@@ -80,7 +80,7 @@ module.exports = function(sequelize, DataTypes) {
         name: "customer_FK",
         using: "BTREE",
         fields: [
-          { name: "company_id" },
+          { name: "companyId" },
         ]
       },
     ]
