@@ -38,6 +38,7 @@ app.use(cors({
     methods: ['GET', 'POST', 'PATCH']
 }));
 
+
 app.get('/crmManifest', (req, res) => {
     try {
         if (!!!req.query.platformName) {
