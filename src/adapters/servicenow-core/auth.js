@@ -6,7 +6,7 @@ const models = initModels(sequelize);
 const Op = require('sequelize').Op;
 
 
-async function saveUserInfo(userObj){
+async function saveUserInfo(userObj,accessToken){
     try {
         // console.log(userObj);
         let id = userObj.id;
@@ -29,12 +29,13 @@ async function saveUserInfo(userObj){
         else {
             console.log('This is userobj',userObj);
             const createUser = await models.customer.create({
-                sys_id: userObj.id, 
-                firstname: userObj.first_name, 
-                lastname: userObj.last_name,
+                sysId: userObj.id, 
+                firstName: userObj.first_name, 
+                lastName: userObj.last_name,
                 email: userObj.email,
-                company_id: 1,
-                hostname:process.env.hostname
+                companyId: 1,
+                accessToken:accessToken,
+                hostname:process.env.SERVICE_NOW_HOSTNAME
             })
             console.log(createUser);
         }    

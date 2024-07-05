@@ -2,19 +2,20 @@ const Sequelize = require('sequelize');
 module.exports = function(sequelize, DataTypes) {
   return sequelize.define('companies', {
     id: {
-      type: DataTypes.STRING(255),
+      autoIncrement: true,
+      type: DataTypes.INTEGER,
       allowNull: false,
       primaryKey: true
     },
-    license_key_id: {
+    licenseKeyId: {
       type: DataTypes.STRING(255),
       allowNull: true
     },
-    license_key_type: {
+    companyName: {
       type: DataTypes.STRING(255),
       allowNull: true
     },
-    max_allowed_users: {
+    maxAllowedUsers: {
       type: DataTypes.BIGINT,
       allowNull: true
     },
@@ -46,12 +47,16 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
-    user_details_path: {
+    userDetailsPath: {
       type: DataTypes.STRING(255),
       allowNull: true
     },
     instanceUrl: {
       type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    status: {
+      type: DataTypes.BOOLEAN,
       allowNull: true
     }
   }, {
