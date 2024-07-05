@@ -46,7 +46,7 @@ function getBasicAuth({ apiKey }) {
 async function getOauthInfo() {
     const getEnvInfo = await models.companies.findOne({
         where:{
-            hostname:process.env.hostname
+            hostname:process.env.SERVICE_NOW_HOSTNAME
         }
     })
     return {
@@ -114,7 +114,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
 
     const checkActiveUsers = await models.companies.findAll({
         where: {
-            hostname: process.env.hostname
+            hostname: process.env.SERVICE_NOW_HOSTNAME
         },
         include: [{
             model: models.customer,
