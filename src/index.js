@@ -10,7 +10,6 @@ const jwt = require('./lib/jwt');
 const logCore = require('./core/log');
 const contactCore = require('./core/contact');
 const authCore = require('./core/auth');
-const releaseNotes = require('./releaseNotes.json');
 const axios = require('axios');
 const analytics = require('./lib/analytics');
 
@@ -48,6 +47,9 @@ app.get('/crmManifest', (req, res) => {
         }
         const crmManifest = require(`./adapters/${req.query.platformName}/manifest.json`);
         if (!!crmManifest) {
+            if(!!!crmManifest.author?.name){
+                throw 'author name is required';
+            }
             res.json(crmManifest);
         }
         else {
@@ -492,10 +494,6 @@ app.post('/messageLog', async function (req, res) {
         author
     });
 });
-
-app.get('/releaseNotes', async function (req, res) {
-    res.json(releaseNotes);
-})
 
 function getAnalyticsVariablesInReqHeaders({ headers }) {
     const hashedExtensionId = headers['rc-extension-id'];
