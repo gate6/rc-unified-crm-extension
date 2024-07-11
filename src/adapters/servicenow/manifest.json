@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://3ffd-116-73-52-243.ngrok-free.app",
+    "serverUrl": "https://rc-crmapi.test.gate6.com",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6 Labs",
