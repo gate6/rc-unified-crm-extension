@@ -10,14 +10,21 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat }) 
             }
         });
         if (!user || !user.accessToken) {
-            return { successful: false, message: `Cannot find user with id: ${userId}` };
+            return {
+                successful: false,
+                returnMessage: {
+                    message: `Cannot find user with id: ${userId}`,
+                    messageType: 'warning',
+                    ttl: 3000
+                }
+            };
         }
         const platformModule = require(`../adapters/${platform}`);
         const authType = platformModule.getAuthType();
         let authHeader = '';
         switch (authType) {
             case 'oauth':
-                const oauthApp = oauth.getOAuthApp(await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl }));
+                const oauthApp = oauth.getOAuthApp(platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl }));
                 user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
                 authHeader = `Bearer ${user.accessToken}`;
                 break;
@@ -34,7 +41,10 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat }) 
             return { successful: false, returnMessage };
         }
     } catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        if (e.response?.status === 429) {
+            return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
+        }
         return { successful: false, returnMessage: { message: `Failed to find contact.`, messageType: 'warning' } };
     }
 }
@@ -55,7 +65,7 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
         let authHeader = '';
         switch (authType) {
             case 'oauth':
-                const oauthApp = oauth.getOAuthApp(await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl }));
+                const oauthApp = oauth.getOAuthApp(platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl }));
                 user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
                 authHeader = `Bearer ${user.accessToken}`;
                 break;
@@ -72,7 +82,10 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
             return { successful: false, returnMessage };
         }
     } catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        if (e.response?.status === 429) {
+            return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
+        }
         return { successful: false, returnMessage: { message: `Failed to create contact.`, messageType: 'warning' } };
     }
 }
