@@ -1,5 +1,6 @@
 {
-    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "serverUrl": "https://cb20-116-75-195-121.ngrok-free.app",
+    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6 Labs",
         "websiteUrl": "",
@@ -11,6 +12,9 @@
             "urlIdentifier": "*service-now.com*",
             "name": "servicenow",
             "displayName": "servicenow",
+            "requestConfig": {
+                "timeout": 30
+            },
             "auth": {
                 "type": "apiKey",
                 "apiKey": {
