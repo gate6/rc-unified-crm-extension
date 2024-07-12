@@ -16,7 +16,7 @@
                 "timeout": 30
             },
             "auth": {
-                "type": "apiKey",
+                "type": "oauth",
                 "apiKey": {
                     "page": {
                         "title": "test CRM",
