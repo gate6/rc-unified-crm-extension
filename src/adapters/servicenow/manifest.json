@@ -9,7 +9,7 @@
     },
     "platforms": {
         "servicenow": {
-            "urlIdentifier": "*service-now.com*",
+            "urlIdentifier": "*servicenow.com*",
             "name": "servicenow",
             "displayName": "servicenow",
             "requestConfig": {
