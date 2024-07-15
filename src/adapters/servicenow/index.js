@@ -107,12 +107,10 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             }],
             logging: false, 
         })
-        console.log("SSSDAWQEQWR",checkActiveUsers.length)
-        
         if(checkActiveUsers.length == 0)
         {
             const accessToken = authHeader.split(' ')[1];
-            await saveUserInfo(userInfoResponse.data.result, accessToken);
+            await saveUserInfo(userInfoResponse.data.result, accessToken,checkActiveUsers[0].dataValues.hostname,checkActiveUsers[0].dataValues.id);
             return {
                 successful: true,
                 platformUserInfo: {
@@ -152,7 +150,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             }
             else {
                 const accessToken = authHeader.split(' ')[1];
-                await saveUserInfo(userInfoResponse.data.result, accessToken);
+                await saveUserInfo(userInfoResponse.data.result, accessToken,checkActiveUsers[0].dataValues.hostname,checkActiveUsers[0].dataValues.id);
                 return {
                     successful: true,
                     platformUserInfo: {
