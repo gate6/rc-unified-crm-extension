@@ -10,6 +10,8 @@ async function saveUserInfo(userObj,accessToken){
     try {
         // console.log(userObj);
         let id = userObj.id;
+        console.log("userObj",userObj);
+        console.log("id",id);
         const existingUser = await models.customer.findOne({
             where: {
                 [Op.and]: [
