@@ -32,8 +32,8 @@ async function saveUserInfo(userObj,accessToken,hostname,companyId){
             console.log('This is userobj',userObj);
             const createUser = await models.customer.create({
                 sysId: userObj.id, 
-                firstName: userObj.first_name, 
-                lastName: userObj.last_name,
+                firstname: userObj.first_name, 
+                lastname: userObj.last_name,
                 email: userObj.email,
                 companyId: companyId,
                 accessToken:accessToken,
