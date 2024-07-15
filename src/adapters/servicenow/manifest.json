@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "serverUrl": "https://e187-116-75-192-10.ngrok-free.app",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6 Labs",
@@ -9,7 +9,7 @@
     },
     "platforms": {
         "servicenow": {
-            "urlIdentifier": "*service*.com*",
+            "urlIdentifier": "*servicenow.com*",
             "name": "servicenow",
             "displayName": "servicenow",
             "requestConfig": {
