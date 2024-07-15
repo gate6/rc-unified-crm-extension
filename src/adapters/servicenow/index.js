@@ -88,6 +88,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             }
         });
 
+        console.log('DATA',userInfoResponse.data);
         const id = userInfoResponse.data.result.id;
         const name = userInfoResponse.data.result.user_name;
         const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
@@ -106,8 +107,30 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             }],
             logging: false, 
         })
-        console.log(checkActiveUsers[0])
-        if (checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers) {
+        console.log("SSSDAWQEQWR",checkActiveUsers.length)
+        
+        if(checkActiveUsers.length == 0)
+        {
+            const accessToken = authHeader.split(' ')[1];
+            await saveUserInfo(userInfoResponse.data.result, accessToken);
+            return {
+                successful: true,
+                platformUserInfo: {
+                    id,
+                    name,
+                    timezoneName,
+                    timezoneOffset,
+                    platformAdditionalInfo: {}
+                },
+                returnMessage: {
+                    messageType: 'success',
+                    message: 'Successfully connected to ServiceNow.',
+                    ttl: 3000
+                }
+            };
+        }
+
+        if ((checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)) {
             console.log(checkActiveUsers[0])
             console.log("SSSSSSSSSSS",checkActiveUsers[0].customers.some(customer => customer.sysId === id));
             if (checkActiveUsers[0].customers.some(customer => customer.sysId === id)) {
@@ -165,6 +188,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             };
         }
     } catch (error) {
+        console.log("Error",error);
         return {
             successful: false,
             returnMessage: {
