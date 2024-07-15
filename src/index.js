@@ -179,6 +179,7 @@ app.get('/oauth-callback', async function (req, res) {
         }
     }
     catch (e) {
+        console.log("GIVE FULL ERROR ",e);
         console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
         success = false;
