@@ -18,7 +18,6 @@ let mockMessageLog = null;
 
 
 async function tokenExist(authHeader){
-    console.log('ADDED LOG');
     const accessToken = authHeader.split(' ')[1];
     const isTokenPresent = await models.customer.findOne({
         where:{
@@ -88,14 +87,13 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             }
         });
 
-        console.log('DATA',userInfoResponse.data);
         const id = userInfoResponse.data.result.id;
         const name = userInfoResponse.data.result.user_name;
         const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
         const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
 
 
-
+        //Get information of company along with its customers based on hostname
         const checkActiveUsers = await models.companies.findAll({
             where: {
                 hostname: process.env.SERVICE_NOW_HOSTNAME
@@ -105,14 +103,13 @@ async function getUserInfo({ authHeader, additionalInfo }) {
                 as: 'customers',
                 required: false
             }],
-            logging: false, 
+            logging: false,
         })
-        if(checkActiveUsers.length == 0)
-        {
-            const accessToken = authHeader.split(' ')[1];
-            await saveUserInfo(userInfoResponse.data.result, accessToken,checkActiveUsers[0].dataValues.hostname,checkActiveUsers[0].dataValues.id);
+        console.log("checkActiveUsers", checkActiveUsers);
+        //check if the current company exists in the MYSQL database if not exists thorw error
+        if (checkActiveUsers.length == 0) {
             return {
-                successful: true,
+                successful: false,
                 platformUserInfo: {
                     id,
                     name,
@@ -121,72 +118,83 @@ async function getUserInfo({ authHeader, additionalInfo }) {
                     platformAdditionalInfo: {}
                 },
                 returnMessage: {
-                    messageType: 'success',
-                    message: 'Successfully connected to ServiceNow.',
+                    messageType: 'danger',
+                    message: 'Could not find the company details.',
                     ttl: 3000
                 }
             };
+        }
+        if (checkActiveUsers.length) {
+            //Fetch the all the customers for the company and check the current loggedInUser is new or existing
+            if (checkActiveUsers[0].customers) {
+                //check the number of users allowed for the company and compare them with the current active users 
+                //if the max numbers of users is greater than the active customers we allow to insert new customer
+                if ((checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)) {
+                    console.log(checkActiveUsers[0])
+                    console.log("SSSSSSSSSSS", checkActiveUsers[0].customers.some(customer => customer.sysId === id));
+                    if (checkActiveUsers[0].customers.some(customer => customer.sysId === id)) {
+                        return {
+                            successful: true,
+                            platformUserInfo: {
+                                id,
+                                name,
+                                timezoneName,
+                                timezoneOffset,
+                                platformAdditionalInfo: {}
+                            },
+                            returnMessage: {
+                                messageType: 'success',
+                                message: 'Successfully connected to ServiceNow.',
+                                ttl: 3000
+                            }
+                        };
+                    }
+                    else {
+                        const accessToken = authHeader.split(' ')[1];
+                        //Save the auth token and new user information in the MYSQL customers table
+                        await saveUserInfo(userInfoResponse.data.result, accessToken, checkActiveUsers[0].dataValues.hostname, checkActiveUsers[0].dataValues.id);
+                        return {
+                            successful: true,
+                            platformUserInfo: {
+                                id,
+                                name,
+                                timezoneName,
+                                timezoneOffset,
+                                platformAdditionalInfo: {}
+                            },
+                            returnMessage: {
+                                messageType: 'success',
+                                message: 'Successfully connected to ServiceNow.',
+                                ttl: 3000
+                            }
+                        };
+                    }
+                }
+                else {
+                    //if the limit is completed for number of users we sent successfull false and return with 
+                    // the messageType as danger with shows the message on the extension
+                    return {
+                        successful: false,
+                        platformUserInfo: {
+                            id: "",
+                            name: "",
+                            timezoneName: "",
+                            timezoneOffset: "",
+                            platformAdditionalInfo: {}
+                        },
+                        returnMessage: {
+                            messageType: 'danger',
+                            message: `You are not having an active license. Please contact us.`,
+                            ttl: 3000
+                        }
+                    };
+                }
+            }
+
         }
 
-        if ((checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)) {
-            console.log(checkActiveUsers[0])
-            console.log("SSSSSSSSSSS",checkActiveUsers[0].customers.some(customer => customer.sysId === id));
-            if (checkActiveUsers[0].customers.some(customer => customer.sysId === id)) {
-                return {
-                    successful: true,
-                    platformUserInfo: {
-                        id,
-                        name,
-                        timezoneName,
-                        timezoneOffset,
-                        platformAdditionalInfo: {}
-                    },
-                    returnMessage: {
-                        messageType: 'success',
-                        message: 'Successfully connected to ServiceNow.',
-                        ttl: 3000
-                    }
-                };
-            }
-            else {
-                const accessToken = authHeader.split(' ')[1];
-                await saveUserInfo(userInfoResponse.data.result, accessToken,checkActiveUsers[0].dataValues.hostname,checkActiveUsers[0].dataValues.id);
-                return {
-                    successful: true,
-                    platformUserInfo: {
-                        id,
-                        name,
-                        timezoneName,
-                        timezoneOffset,
-                        platformAdditionalInfo: {}
-                    },
-                    returnMessage: {
-                        messageType: 'success',
-                        message: 'Successfully connected to ServiceNow.',
-                        ttl: 3000
-                    }
-                };
-            }
-        }
-        else {
-            return {
-                successful: false,
-                platformUserInfo: {
-                    id: "",
-                    name: "",
-                    timezoneName: "",
-                    timezoneOffset: "",
-                    platformAdditionalInfo: {}
-                },
-                returnMessage: {
-                    messageType: 'danger',
-                    message: `You are not having an active license. Please contact us.`,
-                    ttl: 3000
-                }
-            };
-        }
     } catch (error) {
-        console.log("Error",error);
+        console.log("Error", error);
         return {
             successful: false,
             returnMessage: {
