@@ -18,6 +18,7 @@ let mockMessageLog = null;
 
 
 async function tokenExist(authHeader){
+ 
     const accessToken = authHeader.split(' ')[1];
     const isTokenPresent = await models.customer.findOne({
         where:{
