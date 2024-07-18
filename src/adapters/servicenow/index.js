@@ -16,6 +16,16 @@ let mockContact = null;
 let mockCallLog = null;
 let mockMessageLog = null;
 
+//function to generate aplhanumeric string for admin login sysid
+function generateAlphanumericString(length) {
+    const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+        const randomIndex = Math.floor(Math.random() * chars.length);
+        result += chars[randomIndex];
+    }
+    return result.toLowerCase();
+}
 
 async function tokenExist(authHeader){
     console.log("ADD log");
@@ -88,12 +98,28 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             }
         });
 
-        const id = userInfoResponse.data.result.id;
+        let id = userInfoResponse.data.result.id;
+        const email = userInfoResponse.data.result.email;
         const name = userInfoResponse.data.result.user_name;
         const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
         const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
+    
 
-
+        if(id == '6816f79cc0a8016401c5a33be04be441')
+        {
+            console.log('Inside if case');
+            let newId = generateAlphanumericString(id.length);
+            console.log(newId,"newId");
+            id = newId;
+        }
+        console.log("idsaaaaaaaaaaaaaaaS",id);
+        let userData = {
+            id:id,
+            email:email,
+            timezoneName:timezoneName,
+            timezoneOffset:timezoneOffset,
+            name:name
+        }
         //Get information of company along with its customers based on hostname
         const checkActiveUsers = await models.companies.findAll({
             where: {
@@ -106,7 +132,6 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             }],
             logging: false,
         })
-        console.log("checkActiveUsers", checkActiveUsers);
         //check if the current company exists in the MYSQL database if not exists thorw error
         if (checkActiveUsers.length == 0) {
             return {
@@ -130,30 +155,29 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             if (checkActiveUsers[0].customers) {
                 //check the number of users allowed for the company and compare them with the current active users 
                 //if the max numbers of users is greater than the active customers we allow to insert new customer
+                console.log("CUSTOMER",checkActiveUsers[0].customers.length,"MAX USERS",checkActiveUsers[0].maxAllowedUsers,checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)
+                if (checkActiveUsers[0].customers.some(customer => customer.email === email)) {
+                    return {
+                        successful: true,
+                        platformUserInfo: {
+                            id,
+                            name,
+                            timezoneName,
+                            timezoneOffset,
+                            platformAdditionalInfo: {}
+                        },
+                        returnMessage: {
+                            messageType: 'success',
+                            message: 'Successfully connected to ServiceNow.',
+                            ttl: 3000
+                        }
+                    };
+                }
+                //allow login of new user
                 if ((checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)) {
-                    console.log(checkActiveUsers[0])
-                    console.log("SSSSSSSSSSS", checkActiveUsers[0].customers.some(customer => customer.sysId === id));
-                    if (checkActiveUsers[0].customers.some(customer => customer.sysId === id)) {
-                        return {
-                            successful: true,
-                            platformUserInfo: {
-                                id,
-                                name,
-                                timezoneName,
-                                timezoneOffset,
-                                platformAdditionalInfo: {}
-                            },
-                            returnMessage: {
-                                messageType: 'success',
-                                message: 'Successfully connected to ServiceNow.',
-                                ttl: 3000
-                            }
-                        };
-                    }
-                    else {
                         const accessToken = authHeader.split(' ')[1];
                         //Save the auth token and new user information in the MYSQL customers table
-                        await saveUserInfo(userInfoResponse.data.result, accessToken, checkActiveUsers[0].dataValues.hostname, checkActiveUsers[0].dataValues.id);
+                        await saveUserInfo(userData, accessToken, checkActiveUsers[0].dataValues.hostname, checkActiveUsers[0].dataValues.id);
                         return {
                             successful: true,
                             platformUserInfo: {
@@ -168,13 +192,10 @@ async function getUserInfo({ authHeader, additionalInfo }) {
                                 message: 'Successfully connected to ServiceNow.',
                                 ttl: 3000
                             }
-                        };
-                    }
+                        };                    
                 }
                 else {
-                    //if the limit is completed for number of users we sent successfull false and return with 
-                    // the messageType as danger with shows the message on the extension
-                    return {
+                        return {
                         successful: false,
                         platformUserInfo: {
                             id: "",

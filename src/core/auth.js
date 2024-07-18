@@ -5,14 +5,12 @@ const Op = require('sequelize').Op;
 async function onOAuthCallback({ platform, hostname, tokenUrl, callbackUri, apiUrl, username, query }) {
     const platformModule = require(`../adapters/${platform}`);
     const oauthInfo = platformModule.getOauthInfo({ tokenUrl });
-    console.log("oauthInfo",oauthInfo);
     // Some platforms require different oauth queries, this won't affect normal OAuth process unless CRM module implements getOverridingOAuthOption() method
     let overridingOAuthOption = null;
     if (platformModule.getOverridingOAuthOption != null) {
         overridingOAuthOption = platformModule.getOverridingOAuthOption({ code: callbackUri.split('code=')[1] });
     }
     const oauthApp = oauth.getOAuthApp(oauthInfo);
-    console.log("oauthApp",oauthApp);
     const { accessToken, refreshToken, expires } = await oauthApp.code.getToken(callbackUri, overridingOAuthOption);
     const authHeader = `Bearer ${accessToken}`;
     const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader, tokenUrl, apiUrl, hostname, username, callbackUri, query });

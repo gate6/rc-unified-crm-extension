@@ -8,10 +8,8 @@ const Op = require('sequelize').Op;
 
 async function saveUserInfo(userObj, accessToken, hostname, companyId) {
     try {
-        // console.log(userObj);
+
         let id = userObj.id;
-        console.log("userObj", userObj);
-        console.log("id", id);
         //Check Current user exist or not
         const existingUser = await models.customer.findOne({
             where: {
@@ -34,7 +32,6 @@ async function saveUserInfo(userObj, accessToken, hostname, companyId) {
                 })
         }
         else {
-            console.log('This is userobj', userObj);
             const createUser = await models.customer.create({
                 sysId: userObj.id,
                 firstname: userObj.first_name,
