@@ -56,13 +56,15 @@
                             "const": "category",
                             "title": "Category",
                             "type": "selection",
-                            "contactDependent": true
-                        },
-                        {
-                            "const": "subcategory",
-                            "title": "Sub-Category",
-                            "type": "selection",
-                            "contactDependent": true
+                            "contactDependent": true,
+                            "subFields": [
+                                {
+                                    "const": "subcategory",
+                                    "title": "Sub-Category",
+                                    "type": "selection",
+                                    "contactDependent": true
+                                }
+                            ]
                         },
                         {
                             "const": "impact",
