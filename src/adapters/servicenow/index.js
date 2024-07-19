@@ -28,7 +28,6 @@ function generateAlphanumericString(length) {
 }
 
 async function tokenExist(authHeader){
-    console.log("ADD log");
     const accessToken = authHeader.split(' ')[1];
     const isTokenPresent = await models.customer.findOne({
         where:{
@@ -36,7 +35,6 @@ async function tokenExist(authHeader){
         },
         raw:true
     })
-    console.log(isTokenPresent);
     if(!isTokenPresent)
         {
             return false
@@ -52,22 +50,6 @@ function getAuthType() {
 
 function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}:`).toString('base64');
-}
-
-function getCredentials(hostname){
-     new Promise((resolve,reject)=>{
-        CompanyModel.findOne({
-            where:{
-                hostname:hostname
-            },        
-        }).then((data)=>{
-            // console.log('data',data);
-            configData = data.dataValues;
-            return resolve(configData);
-        }).catch((err)=>{
-            console.log(err)
-        })
-    })
 }
 
 // CASE: If using OAuth
@@ -191,6 +173,25 @@ async function getUserInfo({ authHeader, additionalInfo }) {
                 }
                 //allow login of new user
                 if ((checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)) {
+
+                    if (checkActiveUsers[0].customers.some(customer => customer.sysId === id)) {
+                        return {
+                            successful: true,
+                            platformUserInfo: {
+                                id,
+                                name,
+                                timezoneName,
+                                timezoneOffset,
+                                platformAdditionalInfo: {}
+                            },
+                            returnMessage: {
+                                messageType: 'success',
+                                message: 'Successfully connected to ServiceNow.',
+                                ttl: 3000
+                            }
+                        };
+                    }
+                    else {
                         const accessToken = authHeader.split(' ')[1];
                         //Save the auth token and new user information in the MYSQL customers table
                         await saveUserInfo(userData, accessToken, checkActiveUsers[0].dataValues.hostname, checkActiveUsers[0].dataValues.id);
@@ -209,8 +210,9 @@ async function getUserInfo({ authHeader, additionalInfo }) {
                                 ttl: 3000
                             }
                         };                    
-                }
-                else {
+                
+                    }    
+                } else {
                         return {
                         successful: false,
                         platformUserInfo: {
@@ -232,7 +234,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         }
 
     } catch (error) {
-        console.log("Error", error);
+        console.log("Error in getUserInfo", error);
         return {
             successful: false,
             returnMessage: {
@@ -283,7 +285,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     // ----------------------------------------
 
     const isTokenPresent = await tokenExist(authHeader);
-    console.log(isTokenPresent);
     // if (!isTokenPresent) {
     //     return {
     //         platformUserInfo: {
@@ -310,8 +311,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
         {
             headers: { 'Authorization':  authHeader }
         });
-
-    const cateogries = categorySelection.data.result.length > 0 ? categorySelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
     
     const subcategorySelection = await axios.get(
         `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=incident^element=subcategory&sysparm_fields=sys_id,label,dependent_value`,
@@ -319,7 +318,20 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
             headers: { 'Authorization':  authHeader }
         });
     
-    const subcateogries = subcategorySelection.data.result.length > 0 ? subcategorySelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
+    const subcategories = subcategorySelection.data.result.length > 0 ? subcategorySelection.data.result.map(m => { return { const: m.sys_id, title: m.label, dependent_value: m.dependent_value } }) : null;
+
+    let categories = categorySelection.data.result.length > 0 ? categorySelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
+
+    categories = categories.map(category => {
+        const titleToMatch = category.title.toLowerCase() === 'inquiry / help' ? 'inquiry' : category.title.toLowerCase();
+        const matchedSubcategories = subcategories.filter(
+          subcategory => subcategory.dependent_value.toLowerCase() === titleToMatch
+        );
+        if (matchedSubcategories.length > 0) {
+          return { ...category, subcategory: matchedSubcategories };
+        }
+        return category;
+      });
 
     const impactSelection = [{ const: 1, title: "High" }, { const: 2, title: "Medium" }, { const: 3, title: "Low" }]
     const urgencySelection = [{ const: 1, title: "High" }, { const: 2, title: "Medium" }, { const: 3, title: "Low" }]
@@ -342,7 +354,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
                     id: result.sys_id,
                     name: result.name,
                     phone: numberToQuery,
-                    additionalInfo: {category: cateogries, subcategory: subcateogries, impact: impactSelection, urgency: urgencySelection}
+                    additionalInfo: {category: categories, impact: impactSelection, urgency: urgencySelection}
                 })
             }
         }
@@ -368,7 +380,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     };  //[{id, name, phone, additionalInfo}]
 }
 
-async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, timezoneOffset, contactNumber }) {
+async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, timezoneOffset }) {
     // ------------------------------------
     // ---TODO.4: Implement call logging---
     // ------------------------------------
@@ -397,8 +409,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     });
 
     const postBody = {
-        short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phone}]`,
-        description: `\nContact Number: ${contactNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`,
+        short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phoneNumber}]`,
+        description: `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`,
         contact_type: "Phone",
         caller_id: caller_id.data.result.id
     }
@@ -480,7 +492,6 @@ async function getCallLog({ user, callLogId, authHeader }) {
     //-------------------------------------------------------------------------------------
     //---CHECK.5: In extension, for a logged call, click edit to see if info is fetched ---
     //-------------------------------------------------------------------------------------
-
     return {
         callLogInfo: {
             subject: getLogRes.data.result.short_description,
