@@ -13,8 +13,15 @@ const authCore = require('./core/auth');
 const releaseNotes = require('./releaseNotes.json');
 const axios = require('axios');
 const analytics = require('./lib/analytics');
+let packageJson = null;
+try {
+    packageJson = require('./package.json');
+}
+catch (e) {
+    packageJson = require('../package.json');
+}
 
-axios.defaults.headers.common['Unified-CRM-Extension-Version'] = process.env.VERSION;
+axios.defaults.headers.common['Unified-CRM-Extension-Version'] = packageJson.version;
 
 async function initDB() {
     console.log('creating db tables if not exist...');
@@ -38,6 +45,10 @@ app.use(cors({
     methods: ['GET', 'POST', 'PATCH']
 }));
 
+app.get('/releaseNotes', async function (req, res) {
+    res.json(releaseNotes);
+})
+
 app.get('/crmManifest', (req, res) => {
     try {
         if (!!!req.query.platformName) {
@@ -47,7 +58,11 @@ app.get('/crmManifest', (req, res) => {
         }
         const crmManifest = require(`./adapters/${req.query.platformName}/manifest.json`);
         if (!!crmManifest) {
+            if (!!!crmManifest.author?.name) {
+                throw 'author name is required';
+            }
             res.json(crmManifest);
+            return ;
         }
         else {
             res.status(400).send('Platform not found');
@@ -91,7 +106,7 @@ app.get('/pipedrive-redirect', function (req, res) {
         res.sendFile(path.join(__dirname, 'adapters/pipedrive/redirect.html'));
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(500).send(e);
     }
 })
@@ -111,7 +126,7 @@ app.delete('/pipedrive-redirect', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(500).send(e);
     }
 })
@@ -136,7 +151,7 @@ app.get('/hostname', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(500).send(e);
     }
 })
@@ -170,16 +185,24 @@ app.get('/oauth-callback', async function (req, res) {
             username: req.query.username,
             query: req.query
         });
-        const jwtToken = jwt.generateJwt({
-            id: userInfo.id.toString(),
-            platform: platform
-        });
-        res.status(200).send({ jwtToken, name: userInfo.name, returnMessage });
-        success = true;
+        if (!!userInfo) {
+            const jwtToken = jwt.generateJwt({
+                id: userInfo.id.toString(),
+                platform: platform
+            });
+            res.status(200).send({ jwtToken, name: userInfo.name, returnMessage });
+            success = true;
+        }
+        else {
+            res.status(200).send({ returnMessage });
+            success = false;
+        }
     }
     catch (e) {
-        console.log(e);
+        console.log("GIVE FULL ERROR ",e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -221,8 +244,9 @@ app.post('/apiKeyLogin', async function (req, res) {
         success = true;
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -265,11 +289,13 @@ app.post('/unAuthorize', async function (req, res) {
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
         }
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -292,7 +318,7 @@ app.get('/userInfoHash', async function (req, res) {
         res.status(200).send({ extensionId, accountId });
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
     }
 })
@@ -312,11 +338,13 @@ app.get('/contact', async function (req, res) {
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
         }
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -348,11 +376,13 @@ app.post('/contact', async function (req, res) {
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
         }
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -384,11 +414,13 @@ app.get('/callLog', async function (req, res) {
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
         }
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -413,17 +445,19 @@ app.post('/callLog', async function (req, res) {
         const jwtToken = req.query.jwtToken;
         if (!!jwtToken) {
             const { id: userId, platform } = jwt.decodeJwt(jwtToken);
-            const { successful, message, logId, returnMessage } = await logCore.createCallLog({ platform, userId, incomingData: req.body });
-            res.status(200).send({ successful, message, logId, returnMessage });
+            const { successful, logId, returnMessage } = await logCore.createCallLog({ platform, userId, incomingData: req.body });
+            res.status(200).send({ successful, logId, returnMessage });
             success = true;
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
         }
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -455,11 +489,13 @@ app.patch('/callLog', async function (req, res) {
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
         }
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -491,11 +527,13 @@ app.post('/messageLog', async function (req, res) {
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
         }
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -512,14 +550,10 @@ app.post('/messageLog', async function (req, res) {
     });
 });
 
-app.get('/releaseNotes', async function (req, res) {
-    res.json(releaseNotes);
-})
-
 function getAnalyticsVariablesInReqHeaders({ headers }) {
     const hashedExtensionId = headers['rc-extension-id'];
     const hashedAccountId = headers['rc-account-id'];
-    const ip = headers['x-forwarded-for'].split(',').find(i => !i.startsWith('10.'));
+    const ip = headers['x-forwarded-for']?.split(',')?.find(i => !i.startsWith('10.'));
     const userAgent = headers['user-agent'];
     const author = headers['developer-author-name'];
     return {
@@ -571,8 +605,9 @@ app.get('/oauth-callbackV2', async function (req, res) {
         success = true;
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -616,8 +651,9 @@ app.post('/apiKeyLoginV2', async function (req, res) {
         success = true;
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({
@@ -651,11 +687,13 @@ app.get('/contactV2', async function (req, res) {
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
         }
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
+        success = false;
     }
     const requestEndTime = new Date().getTime();
     analytics.track({

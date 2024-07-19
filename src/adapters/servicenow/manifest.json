@@ -1,17 +1,41 @@
 {
     "serverUrl": "https://rc-crmapi.test.gate6.com",
-    "author": "RingCentral Labs",
+    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
+    "author": {
+        "name": "Gate6 Labs",
+        "websiteUrl": "",
+        "iconUrl": "",
+        "supportUrl": ""
+    },
     "platforms": {
         "servicenow": {
-            "urlIdentifier": "*service-now.com*",
+            "urlIdentifier": "*servicenow.com*",
             "name": "servicenow",
             "displayName": "servicenow",
+            "requestConfig": {
+                "timeout": 30
+            },
             "auth": {
                 "type": "oauth",
+                "apiKey": {
+                    "page": {
+                        "title": "test CRM",
+                        "content": [
+                            {
+                                "const": "apiKey",
+                                "title": "apiKey",
+                                "type": "string",
+                                "required": true
+                            }
+                        ]
+                    }
+                },
                 "oauth": {
                     "authUrl": "https://dev194338.service-now.com/oauth_auth.do",
                     "clientId": "28f5e591b712021007de332ca7b91efb",
-                    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html"
+                    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
+                    "customState": "",
+                    "scope": ""
                 }
             },
             "customState": "",
@@ -69,5 +93,5 @@
             }
         }
     },
-    "version": "0.8.13"
+    "version": "1.0.1"
 }

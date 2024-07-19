@@ -1,7 +1,8 @@
 {
-    "serverUrl": "https://lite-http-tunnel-s52m.onrender.com",
+    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
-        "name": "RingCentral Labs",
+        "name": "Test Developer",
         "websiteUrl": "",
         "iconUrl": "",
         "supportUrl": ""
@@ -90,5 +91,5 @@
             }
         }
     },
-    "version": "1.0.0"
+    "version": "1.0.1"
 }

@@ -4,9 +4,8 @@ const Op = require('sequelize').Op;
 
 async function onOAuthCallback({ platform, hostname, tokenUrl, callbackUri, apiUrl, username, query }) {
     const platformModule = require(`../adapters/${platform}`);
-    console.log("tokenUrl",tokenUrl)
-    const oauthInfo =  await platformModule.getOauthInfo({ tokenUrl,hostname });
-    
+
+    const oauthInfo = platformModule.getOauthInfo({ tokenUrl });
     // Some platforms require different oauth queries, this won't affect normal OAuth process unless CRM module implements getOverridingOAuthOption() method
     let overridingOAuthOption = null;
     if (platformModule.getOverridingOAuthOption != null) {
@@ -16,22 +15,30 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, callbackUri, apiU
     const oauthApp = oauth.getOAuthApp(oauthInfo);
     const { accessToken, refreshToken, expires } = await oauthApp.code.getToken(callbackUri, overridingOAuthOption);
     const authHeader = `Bearer ${accessToken}`;
-    const { platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader, tokenUrl, apiUrl, hostname, username, callbackUri, query });
-    const userInfo = await saveUserInfo({
-        platformUserInfo,
-        platform,
-        tokenUrl,
-        apiUrl,
-        username,
-        hostname: !!platformUserInfo?.overridingHostname ? platformUserInfo.overridingHostname : hostname,
-        accessToken,
-        refreshToken,
-        tokenExpiry: expires
-    });
-    return {
-        userInfo,
-        returnMessage
-    };
+    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader, tokenUrl, apiUrl, hostname, username, callbackUri, query });
+    if (successful) {
+        const userInfo = await saveUserInfo({
+            platformUserInfo,
+            platform,
+            tokenUrl,
+            apiUrl,
+            username,
+            hostname: !!platformUserInfo?.overridingHostname ? platformUserInfo.overridingHostname : hostname,
+            accessToken,
+            refreshToken,
+            tokenExpiry: expires
+        });
+        return {
+            userInfo,
+            returnMessage
+        };
+    }
+    else {
+        return {
+            userInfo: null,
+            returnMessage
+        }
+    }
 }
 
 async function onApiKeyLogin({ platform, hostname, apiKey, additionalInfo }) {

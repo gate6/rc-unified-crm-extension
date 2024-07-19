@@ -8,7 +8,14 @@ async function createCallLog({ platform, userId, incomingData }) {
     try {
         const existingCallLog = await CallLogModel.findByPk(incomingData.logInfo.id);
         if (existingCallLog) {
-            return { successful: false, message: `Existing log for session ${incomingData.logInfo.sessionId}` }
+            return {
+                successful: false,
+                returnMessage: {
+                    message: `Existing log for session ${incomingData.logInfo.sessionId}`,
+                    messageType: 'warning',
+                    ttl: 3000
+                }
+            }
         }
         let user = await UserModel.findOne({
             where: {
@@ -17,7 +24,14 @@ async function createCallLog({ platform, userId, incomingData }) {
             }
         });
         if (!user || !user.accessToken) {
-            return { successful: false, message: `Cannot find user with id: ${userId}` };
+            return {
+                successful: false,
+                returnMessage: {
+                    message: `Cannot find user with id: ${userId}`,
+                    messageType: 'warning',
+                    ttl: 3000
+                }
+            };
         }
         const platformModule = require(`../adapters/${platform}`);
         const callLog = incomingData.logInfo;
@@ -39,7 +53,14 @@ async function createCallLog({ platform, userId, incomingData }) {
         const contactNumber = callLog.direction === 'Inbound' ? callLog.from.phoneNumber : callLog.to.phoneNumber;
         const contactId = incomingData.contactId;
         if (!!!contactId || contactId === 0) {
-            return { successful: false, message: `Contact not found for number ${contactNumber}` };
+            return {
+                successful: false,
+                returnMessage: {
+                    message: `Contact not found for number ${contactNumber}`,
+                    messageType: 'warning',
+                    ttl: 3000
+                }
+            };
         }
         const contactInfo = {
             id: contactId,
@@ -48,17 +69,21 @@ async function createCallLog({ platform, userId, incomingData }) {
             name: incomingData.contactName ?? ""
         };
         const { logId, returnMessage } = await platformModule.createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission });
-        await CallLogModel.create({
-            id: incomingData.logInfo.id,
-            sessionId: incomingData.logInfo.sessionId,
-            platform,
-            thirdPartyLogId: logId,
-            userId
-        });
-        console.log(`added call log: ${logId}`);
+        if (!!logId) {
+            await CallLogModel.create({
+                id: incomingData.logInfo.id,
+                sessionId: incomingData.logInfo.sessionId,
+                platform,
+                thirdPartyLogId: logId,
+                userId
+            });
+        }
         return { successful: true, logId, returnMessage };
     } catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        if (e.response?.status === 429) {
+            return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
+        }
         return { successful: false };
     }
 }
@@ -155,12 +180,14 @@ async function updateCallLog({ platform, userId, incomingData }) {
                     break;
             }
             const { updatedNote, returnMessage } = await platformModule.updateCallLog({ user, existingCallLog, authHeader, recordingLink: incomingData.recordingLink, subject: incomingData.subject, note: incomingData.note });
-            console.log(`updated call log: ${existingCallLog.id}`);
             return { successful: true, logId: existingCallLog.thirdPartyLogId, updatedNote, returnMessage };
         }
         return { successful: false };
     } catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        if (e.response?.status === 429) {
+            return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
+        }
         return { successful: false };
     }
 }
@@ -169,7 +196,15 @@ async function createMessageLog({ platform, userId, incomingData }) {
     try {
         let returnMessage = null;
         if (incomingData.logInfo.messages.length === 0) {
-            return { successful: false, message: 'No message to log.' }
+            return {
+                successful: false,
+                returnMessage:
+                {
+                    message: 'No message to log.',
+                    messageType: 'warning',
+                    ttl: 3000
+                }
+            }
         }
         const platformModule = require(`../adapters/${platform}`);
         const contactNumber = incomingData.logInfo.correspondents[0].phoneNumber;
@@ -181,7 +216,15 @@ async function createMessageLog({ platform, userId, incomingData }) {
             }
         });
         if (!user || !user.accessToken) {
-            return { successful: false, message: `Cannot find user with id: ${userId}` };
+            return {
+                successful: false,
+                returnMessage:
+                {
+                    message: `Cannot find user with id: ${userId}`,
+                    messageType: 'warning',
+                    ttl: 3000
+                }
+            };
         }
         const authType = platformModule.getAuthType();
         let authHeader = '';
@@ -198,7 +241,15 @@ async function createMessageLog({ platform, userId, incomingData }) {
         }
         const contactId = incomingData.contactId;
         if (!!!contactId) {
-            return { successful: false, message: `Contact not found for number ${contactNumber}` };
+            return {
+                successful: false,
+                returnMessage:
+                {
+                    message: `Contact not found for number ${contactNumber}`,
+                    messageType: 'warning',
+                    ttl: 3000
+                }
+            };
         }
         const contactInfo = {
             id: contactId,
@@ -218,7 +269,6 @@ async function createMessageLog({ platform, userId, incomingData }) {
         incomingData.logInfo.messages = incomingData.logInfo.messages.reverse();
         for (const message of incomingData.logInfo.messages) {
             if (existingIds.includes(message.id.toString())) {
-                console.log(`existing message log: ${message.id}`);
                 continue;
             }
             let recordingLink = null;
@@ -244,23 +294,26 @@ async function createMessageLog({ platform, userId, incomingData }) {
                 crmLogId = createMessageLogResult.logId;
                 returnMessage = createMessageLogResult.returnMessage;
             }
-            const createdMessageLog =
-                await MessageLogModel.create({
-                    id: message.id.toString(),
-                    platform,
-                    conversationId: incomingData.logInfo.conversationId,
-                    thirdPartyLogId: crmLogId,
-                    userId,
-                    conversationLogId: incomingData.logInfo.conversationLogId
-                });
-            console.log(`added message log: ${createdMessageLog.id}`);
-            logIds.push(createdMessageLog.id);
+            if (!!crmLogId) {
+                const createdMessageLog =
+                    await MessageLogModel.create({
+                        id: message.id.toString(),
+                        platform,
+                        conversationId: incomingData.logInfo.conversationId,
+                        thirdPartyLogId: crmLogId,
+                        userId,
+                        conversationLogId: incomingData.logInfo.conversationLogId
+                    });
+                logIds.push(createdMessageLog.id);
+            }
         }
-        console.log(`logged ${logIds.length} messages.`);
         return { successful: true, logIds, returnMessage };
     }
     catch (e) {
-        console.log(e);
+        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        if (e.response?.status === 429) {
+            return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
+        }
         return { successful: false };
     }
 }

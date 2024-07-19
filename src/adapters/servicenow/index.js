@@ -1,13 +1,13 @@
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
-const { saveUserInfo} = require('../core/auth');
-// const { UserModel } = require('../../models/userModel');
-const { UserModel1 } = require('../models/userModel');
-const { CompanyModel } = require('../models/companyModel');
+const { saveUserInfo } = require('../servicenow-core/auth');
 const Op = require('sequelize').Op;
-// const { CallLogModel1 } = require('../models/callLogModel');
-// const { MessageLogModel1 } = require('../models/messageLogModel');
+const { initModels } = require('../servicenow-models/init-models');
+const Sequelize = require('sequelize');
+const { sequelize } = require('../servicenow-models/sequelize');
+const { raw } = require('mysql2');
+const models = initModels(sequelize);
 
 // -----------------------------------------------------------------------------------------------
 // ---TODO: Delete below mock entities and other relevant code, they are just for test purposes---
@@ -16,14 +16,35 @@ let mockContact = null;
 let mockCallLog = null;
 let mockMessageLog = null;
 
-async function initDB()
-{
-    await UserModel1.sync({ force: false,alter:true });
-    // await CallLogModel1.sync({ force: true,alter:true });
-    // await MessageLogModel1.sync({ force: true,alter:true });
-    await CompanyModel.sync({ force: false,alter:true });
+//function to generate aplhanumeric string for admin login sysid
+function generateAlphanumericString(length) {
+    const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+        const randomIndex = Math.floor(Math.random() * chars.length);
+        result += chars[randomIndex];
+    }
+    return result.toLowerCase();
 }
-initDB();
+
+async function tokenExist(authHeader){
+    console.log("ADD log");
+    const accessToken = authHeader.split(' ')[1];
+    const isTokenPresent = await models.customer.findOne({
+        where:{
+            accessToken:accessToken
+        },
+        raw:true
+    })
+    console.log(isTokenPresent);
+    if(!isTokenPresent)
+        {
+            return false
+        }
+    else{
+        return true
+    }        
+} 
 
 function getAuthType() {
     return 'oauth'; // Return either 'oauth' OR 'apiKey'
@@ -50,25 +71,13 @@ function getCredentials(hostname){
 }
 
 // CASE: If using OAuth
-async function getOauthInfo({tokenUrl,hostname}) {
-    console.log(hostname);
-    let configData={};
-    // configData = await getCredentials(hostname);
+ function getOauthInfo() {
 
-    // console.log('hostname',hostname.hostname);
-    // console.log(getCredentials(hostname));
-    const getCredentials = await CompanyModel.findOne({
-        where:{
-            hostname : hostname
-        }
-    })
-    console.log("configCreds.dataValues",getCredentials.dataValues);
-    // console.log(configData);
     return {
-        clientId: getCredentials.dataValues.clientId,
-        clientSecret: getCredentials.dataValues.clientSecret,
-        accessTokenUri: getCredentials.dataValues.tokenUrl,
-        redirectUri: getCredentials.dataValues.crmRedirectUrl
+        clientId: process.env.SERVICE_NOW_CLIENT_ID,
+        clientSecret:process.env.SERVICE_NOW_CLIENT_SECRET,
+        accessTokenUri: process.env.SERVICE_NOW_TOKEN_URL,
+        redirectUri: process.env.SERVICE_NOW_CRM_REDIRECT_URI
     }
 }
 
@@ -92,129 +101,147 @@ async function getOauthInfo({tokenUrl,hostname}) {
 
 
 // For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
-async function getUserInfo({ authHeader, additionalInfo,hostname }) {
+async function getUserInfo({ authHeader, additionalInfo }) {
+    // console.log("IS TOKEN PRESENT ",await tokenExist(authHeader));
     // ------------------------------------------------------
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
-    console.log("hostname",hostname);
-    let userInfoResponse;
-    const checkActiveUsers = await UserModel1.findAndCountAll({
-        where:{
-            hostname:hostname
-        },
-        // include:[{
-        //     model:ConfigModel1,
-        //     required:true,
-        //     attributes:["max_allowed_users"]
-        // }]
-    })
+    try {
 
-    const getMaxUsersCount = await CompanyModel.findOne({
-        where:{
-            hostname:hostname
-        }
-    });
-    console.log(getMaxUsersCount,getMaxUsersCount.dataValues.instanceUrl)
-    let maxUsers = getMaxUsersCount.dataValues.max_allowed_users
-    userInfoResponse = await axios.get(`${getMaxUsersCount.dataValues.instanceUrl}/api/${getMaxUsersCount.dataValues.user_details_path}`, {
-        headers: {
-            'Authorization': authHeader
-        }
-    });
-    const id = userInfoResponse.data.result.id;
-    const name = userInfoResponse.data.result.user_name;
-    const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
-    const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
-    if(checkActiveUsers.count < maxUsers)
+        const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+            headers: {
+                'Authorization': authHeader
+            }
+        });
+
+        let id = userInfoResponse.data.result.id;
+        const email = userInfoResponse.data.result.email;
+        const name = userInfoResponse.data.result.user_name;
+        const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
+        const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
+    
+
+        if(id == '6816f79cc0a8016401c5a33be04be441')
         {
-
-            await saveUserInfo(userInfoResponse.data.result);
+            console.log('Inside if case');
+            let newId = generateAlphanumericString(id.length);
+            console.log(newId,"newId");
+            id = newId;
+        }
+        console.log("idsaaaaaaaaaaaaaaaS",id);
+        let userData = {
+            id:id,
+            email:email,
+            timezoneName:timezoneName,
+            timezoneOffset:timezoneOffset,
+            name:name
+        }
+        //Get information of company along with its customers based on hostname
+        const checkActiveUsers = await models.companies.findAll({
+            where: {
+                hostname: process.env.SERVICE_NOW_HOSTNAME
+            },
+            include: [{
+                model: models.customer,
+                as: 'customers',
+                required: false
+            }],
+            logging: false,
+        })
+        //check if the current company exists in the MYSQL database if not exists thorw error
+        if (checkActiveUsers.length == 0) {
             return {
-                platformUserInfo:{ id,
-                name,
-                timezoneName,
-                timezoneOffset,
-                platformAdditionalInfo: {}
+                successful: false,
+                platformUserInfo: {
+                    id,
+                    name,
+                    timezoneName,
+                    timezoneOffset,
+                    platformAdditionalInfo: {}
                 },
                 returnMessage: {
-                    messageType: 'success',
-                    message: 'Successfully connected to TestCRM.',
+                    messageType: 'danger',
+                    message: 'Could not find the company details.',
                     ttl: 3000
                 }
             };
         }
-    else
-        {
-            const isExistingUsers =await UserModel1.findOne({
-                where: {
-                    [Op.and]: [
-                        {
-                            id,
-                            // platform
-                        }
-                    ]
-                }
-            });
-            if(isExistingUsers)
-                {
+        if (checkActiveUsers.length) {
+            //Fetch the all the customers for the company and check the current loggedInUser is new or existing
+            if (checkActiveUsers[0].customers) {
+                //check the number of users allowed for the company and compare them with the current active users 
+                //if the max numbers of users is greater than the active customers we allow to insert new customer
+                console.log("CUSTOMER",checkActiveUsers[0].customers.length,"MAX USERS",checkActiveUsers[0].maxAllowedUsers,checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)
+                if (checkActiveUsers[0].customers.some(customer => customer.email === email)) {
                     return {
-                        platformUserInfo:{ id,
-                        name,
-                        timezoneName,
-                        timezoneOffset,
-                        platformAdditionalInfo: {}
+                        successful: true,
+                        platformUserInfo: {
+                            id,
+                            name,
+                            timezoneName,
+                            timezoneOffset,
+                            platformAdditionalInfo: {}
                         },
                         returnMessage: {
                             messageType: 'success',
-                            message: 'Successfully connected to TestCRM.',
+                            message: 'Successfully connected to ServiceNow.',
                             ttl: 3000
                         }
-                    };          
+                    };
                 }
-            else{
-                console.log('limited exausted');
-                return {
-                    platformUserInfo:{
-                    id:"",
-                    name:"",
-                    timezoneName:"",
-                    timezoneOffset:"",
-                    platformAdditionalInfo: {}
-                    },
-                    returnMessage: {
-                        messageType: 'danger',
-                        message: `You are not having an active license.Please contact us.`,
-                        ttl: 3000
-                    }
-                };
-            }    
+                //allow login of new user
+                if ((checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)) {
+                        const accessToken = authHeader.split(' ')[1];
+                        //Save the auth token and new user information in the MYSQL customers table
+                        await saveUserInfo(userData, accessToken, checkActiveUsers[0].dataValues.hostname, checkActiveUsers[0].dataValues.id);
+                        return {
+                            successful: true,
+                            platformUserInfo: {
+                                id,
+                                name,
+                                timezoneName,
+                                timezoneOffset,
+                                platformAdditionalInfo: {}
+                            },
+                            returnMessage: {
+                                messageType: 'success',
+                                message: 'Successfully connected to ServiceNow.',
+                                ttl: 3000
+                            }
+                        };                    
+                }
+                else {
+                        return {
+                        successful: false,
+                        platformUserInfo: {
+                            id: "",
+                            name: "",
+                            timezoneName: "",
+                            timezoneOffset: "",
+                            platformAdditionalInfo: {}
+                        },
+                        returnMessage: {
+                            messageType: 'danger',
+                            message: `You are not having an active license. Please contact us.`,
+                            ttl: 3000
+                        }
+                    };
+                }
+            }
 
-            // return "limit-exausted"
         }
-    // const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
-    //     headers: {
-    //         'Authorization': authHeader
-    //     }
-    // });
-    
-    // const id = userInfoResponse.data.result.id;
-    // const name = userInfoResponse.data.result.user_name;
-    // const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
-    // const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
-    // // await saveUserInfo(userInfoResponse.data.result);
-    // return {
-    //     platformUserInfo:{ id,
-    //     name,
-    //     timezoneName,
-    //     timezoneOffset,
-    //     platformAdditionalInfo: {}
-    //     },
-    //     returnMessage: {
-    //         messageType: 'success',
-    //         message: 'Successfully connected to TestCRM.',
-    //         ttl: 3000
-    //     }
-    // };
+
+    } catch (error) {
+        console.log("Error", error);
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: 'Failed to get user info.',
+                ttl: 3000
+            }
+        }
+    }
 
     //---------------------------------------------------------------------------------------------------
     //---CHECK.1: Open db.sqlite (might need to install certain viewer) to check if user info is saved---
@@ -236,7 +263,7 @@ async function unAuthorize({ user }) {
     //     {
     //         headers: { 'Authorization': `Basic ${getBasicAuth({ apiKey: user.accessToken })}` }
     //     });
-    // await user.destroy();
+    await user.destroy();
     return {
         returnMessage: {
             messageType: 'success',
@@ -254,6 +281,25 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     // ----------------------------------------
     // ---TODO.3: Implement contact matching---
     // ----------------------------------------
+
+    const isTokenPresent = await tokenExist(authHeader);
+    console.log(isTokenPresent);
+    // if (!isTokenPresent) {
+    //     return {
+    //         platformUserInfo: {
+    //             id: "",
+    //             name: "",
+    //             timezoneName: "",
+    //             timezoneOffset: "",
+    //             platformAdditionalInfo: {}
+    //         },
+    //         returnMessage: {
+    //             messageType: 'danger',
+    //             message: `You are not having an active license. Please contact us.`,
+    //             ttl: 3000
+    //         }
+    //     };
+    // }
 
     const numberToQueryArray = [];
 
@@ -326,6 +372,23 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ------------------------------------
     // ---TODO.4: Implement call logging---
     // ------------------------------------
+    const isTokenPresent = await tokenExist(authHeader);
+    // if (!isTokenPresent) {
+    //     return {
+    //         platformUserInfo: {
+    //             id: "",
+    //             name: "",
+    //             timezoneName: "",
+    //             timezoneOffset: "",
+    //             platformAdditionalInfo: {}
+    //         },
+    //         returnMessage: {
+    //             messageType: 'danger',
+    //             message: `You are not having an active license. Please contact us.`,
+    //             ttl: 3000
+    //         }
+    //     };
+    // }
 
     const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
         headers: {
@@ -391,7 +454,23 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
     // ---TODO.5: Implement call log fetching---
     // -----------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    // if (!isTokenPresent) {
+    //     return {
+    //         platformUserInfo: {
+    //             id: "",
+    //             name: "",
+    //             timezoneName: "",
+    //             timezoneOffset: "",
+    //             platformAdditionalInfo: {}
+    //         },
+    //         returnMessage: {
+    //             messageType: 'danger',
+    //             message: `You are not having an active license. Please contact us.`,
+    //             ttl: 3000
+    //         }
+    //     };
+    // }
     const getLogRes = await axios.get(
         `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${callLogId}`,
         {
@@ -419,7 +498,23 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    // if (!isTokenPresent) {
+    //     return {
+    //         platformUserInfo: {
+    //             id: "",
+    //             name: "",
+    //             timezoneName: "",
+    //             timezoneOffset: "",
+    //             platformAdditionalInfo: {}
+    //         },
+    //         returnMessage: {
+    //             messageType: 'danger',
+    //             message: `You are not having an active license. Please contact us.`,
+    //             ttl: 3000
+    //         }
+    //     };
+    // }
     const existingLogId = existingCallLog.thirdPartyLogId;
     const getLogRes = await axios.get(
         `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
@@ -460,7 +555,23 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---------------------------------------
     // ---TODO.7: Implement message logging---
     // ---------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    // if (!isTokenPresent) {
+    //     return {
+    //         platformUserInfo: {
+    //             id: "",
+    //             name: "",
+    //             timezoneName: "",
+    //             timezoneOffset: "",
+    //             platformAdditionalInfo: {}
+    //         },
+    //         returnMessage: {
+    //             messageType: 'danger',
+    //             message: `You are not having an active license. Please contact us.`,
+    //             ttl: 3000
+    //         }
+    //     };
+    // }
     const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
         headers: {
             'Authorization': authHeader
@@ -500,7 +611,23 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    // if (!isTokenPresent) {
+    //     return {
+    //         platformUserInfo: {
+    //             id: "",
+    //             name: "",
+    //             timezoneName: "",
+    //             timezoneOffset: "",
+    //             platformAdditionalInfo: {}
+    //         },
+    //         returnMessage: {
+    //             messageType: 'danger',
+    //             message: `You are not having an active license. Please contact us.`,
+    //             ttl: 3000
+    //         }
+    //     };
+    // }
     const existingLogId = existingMessageLog.thirdPartyLogId;
     const getLogRes = await axios.get(
         `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
@@ -531,7 +658,23 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ----------------------------------------
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
-
+    const isTokenPresent = await tokenExist(authHeader);
+    // if (!isTokenPresent) {
+    //     return {
+    //         platformUserInfo: {
+    //             id: "",
+    //             name: "",
+    //             timezoneName: "",
+    //             timezoneOffset: "",
+    //             platformAdditionalInfo: {}
+    //         },
+    //         returnMessage: {
+    //             messageType: 'danger',
+    //             message: `You are not having an active license. Please contact us.`,
+    //             ttl: 3000
+    //         }
+    //     };
+    // }
     const account = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/account`, {
         headers: {
             'Authorization': authHeader
