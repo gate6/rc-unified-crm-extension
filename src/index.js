@@ -73,6 +73,26 @@ app.get('/crmManifest', (req, res) => {
     }
 })
 
+app.get('/crmManifest_dev2', (req, res) => {
+    try {
+        if (!!!req.query.platformName) {
+            const defaultCrmManifest = require('./adapters/manifest.json');
+            res.json(defaultCrmManifest);
+            return;
+        }
+        const crmManifest = require(`./adapters/${req.query.platformName}/manifest_dev2.json`);
+        if (!!crmManifest) {
+            res.json(crmManifest);
+        }
+        else {
+            res.status(400).send('Platform not found');
+        }
+    }
+    catch (e) {
+        res.status(400).send('Platform not found');
+    }
+})
+
 app.get('/is-alive', (req, res) => {
     res.send(`OK`);
 });

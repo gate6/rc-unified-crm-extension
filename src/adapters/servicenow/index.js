@@ -54,6 +54,22 @@ function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}:`).toString('base64');
 }
 
+function getCredentials(hostname){
+     new Promise((resolve,reject)=>{
+        CompanyModel.findOne({
+            where:{
+                hostname:hostname
+            },        
+        }).then((data)=>{
+            // console.log('data',data);
+            configData = data.dataValues;
+            return resolve(configData);
+        }).catch((err)=>{
+            console.log(err)
+        })
+    })
+}
+
 // CASE: If using OAuth
  function getOauthInfo() {
 
@@ -464,6 +480,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     //-------------------------------------------------------------------------------------
     //---CHECK.5: In extension, for a logged call, click edit to see if info is fetched ---
     //-------------------------------------------------------------------------------------
+
     return {
         callLogInfo: {
             subject: getLogRes.data.result.short_description,
