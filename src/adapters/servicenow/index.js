@@ -27,24 +27,6 @@ function generateAlphanumericString(length) {
     return result.toLowerCase();
 }
 
-async function tokenExist(authHeader){
-    console.log("ADD log");
-    const accessToken = authHeader.split(' ')[1];
-    const isTokenPresent = await models.customer.findOne({
-        where:{
-            accessToken:accessToken
-        },
-        raw:true
-    })
-    console.log(isTokenPresent);
-    if(!isTokenPresent)
-        {
-            return false
-        }
-    else{
-        return true
-    }        
-} 
 
 function getAuthType() {
     return 'oauth'; // Return either 'oauth' OR 'apiKey'
@@ -52,22 +34,6 @@ function getAuthType() {
 
 function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}:`).toString('base64');
-}
-
-function getCredentials(hostname){
-     new Promise((resolve,reject)=>{
-        CompanyModel.findOne({
-            where:{
-                hostname:hostname
-            },        
-        }).then((data)=>{
-            // console.log('data',data);
-            configData = data.dataValues;
-            return resolve(configData);
-        }).catch((err)=>{
-            console.log(err)
-        })
-    })
 }
 
 // CASE: If using OAuth
@@ -102,7 +68,7 @@ function getCredentials(hostname){
 
 // For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
 async function getUserInfo({ authHeader, additionalInfo }) {
-    // console.log("IS TOKEN PRESENT ",await tokenExist(authHeader));
+   
     // ------------------------------------------------------
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
@@ -120,15 +86,12 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
         const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
     
-
+        //Generate a random alphanumeric id for case when admin is login in using the extension
         if(id == '6816f79cc0a8016401c5a33be04be441')
         {
-            console.log('Inside if case');
             let newId = generateAlphanumericString(id.length);
-            console.log(newId,"newId");
             id = newId;
         }
-        console.log("idsaaaaaaaaaaaaaaaS",id);
         let userData = {
             id:id,
             email:email,
@@ -171,7 +134,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             if (checkActiveUsers[0].customers) {
                 //check the number of users allowed for the company and compare them with the current active users 
                 //if the max numbers of users is greater than the active customers we allow to insert new customer
-                console.log("CUSTOMER",checkActiveUsers[0].customers.length,"MAX USERS",checkActiveUsers[0].maxAllowedUsers,checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)
+
                 if (checkActiveUsers[0].customers.some(customer => customer.email === email)) {
                     return {
                         successful: true,
@@ -191,6 +154,25 @@ async function getUserInfo({ authHeader, additionalInfo }) {
                 }
                 //allow login of new user
                 if ((checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)) {
+
+                    if (checkActiveUsers[0].customers.some(customer => customer.sysId === id)) {
+                        return {
+                            successful: true,
+                            platformUserInfo: {
+                                id,
+                                name,
+                                timezoneName,
+                                timezoneOffset,
+                                platformAdditionalInfo: {}
+                            },
+                            returnMessage: {
+                                messageType: 'success',
+                                message: 'Successfully connected to ServiceNow.',
+                                ttl: 3000
+                            }
+                        };
+                    }
+                    else {
                         const accessToken = authHeader.split(' ')[1];
                         //Save the auth token and new user information in the MYSQL customers table
                         await saveUserInfo(userData, accessToken, checkActiveUsers[0].dataValues.hostname, checkActiveUsers[0].dataValues.id);
@@ -209,8 +191,9 @@ async function getUserInfo({ authHeader, additionalInfo }) {
                                 ttl: 3000
                             }
                         };                    
-                }
-                else {
+                
+                    }    
+                } else {
                         return {
                         successful: false,
                         platformUserInfo: {
@@ -232,7 +215,6 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         }
 
     } catch (error) {
-        console.log("Error", error);
         return {
             successful: false,
             returnMessage: {
@@ -282,47 +264,25 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     // ---TODO.3: Implement contact matching---
     // ----------------------------------------
 
-    const isTokenPresent = await tokenExist(authHeader);
-    console.log(isTokenPresent);
-    // if (!isTokenPresent) {
-    //     return {
-    //         platformUserInfo: {
-    //             id: "",
-    //             name: "",
-    //             timezoneName: "",
-    //             timezoneOffset: "",
-    //             platformAdditionalInfo: {}
-    //         },
-    //         returnMessage: {
-    //             messageType: 'danger',
-    //             message: `You are not having an active license. Please contact us.`,
-    //             ttl: 3000
-    //         }
-    //     };
-    // }
-
     const numberToQueryArray = [];
 
     numberToQueryArray.push(phoneNumber.trim());
 
-    const categorySelection = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=incident^element=category&sysparm_fields=sys_id,label,value`,
-        {
-            headers: { 'Authorization':  authHeader }
-        });
-
-    const cateogries = categorySelection.data.result.length > 0 ? categorySelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
-    
-    const subcategorySelection = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=incident^element=subcategory&sysparm_fields=sys_id,label,dependent_value`,
+    const stateSelection = await axios.get(
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
     
-    const subcateogries = subcategorySelection.data.result.length > 0 ? subcategorySelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
+    const typeSelection = await axios.get(
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
+        {
+            headers: { 'Authorization':  authHeader }
+        });
 
-    const impactSelection = [{ const: 1, title: "High" }, { const: 2, title: "Medium" }, { const: 3, title: "Low" }]
-    const urgencySelection = [{ const: 1, title: "High" }, { const: 2, title: "Medium" }, { const: 3, title: "Low" }]
+    const states = stateSelection.data.result.length > 0 ? stateSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
+
+    const interactionType = typeSelection.data.result.length > 0 ? typeSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
     
 
     // You can use parsePhoneNumber functions to further parse the phone number
@@ -342,7 +302,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
                     id: result.sys_id,
                     name: result.name,
                     phone: numberToQuery,
-                    additionalInfo: {category: cateogries, subcategory: subcateogries, impact: impactSelection, urgency: urgencySelection}
+                    additionalInfo: {state: states, type: interactionType}
                 })
             }
         }
@@ -368,27 +328,10 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     };  //[{id, name, phone, additionalInfo}]
 }
 
-async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, timezoneOffset, contactNumber }) {
+async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, timezoneOffset }) {
     // ------------------------------------
     // ---TODO.4: Implement call logging---
     // ------------------------------------
-    const isTokenPresent = await tokenExist(authHeader);
-    // if (!isTokenPresent) {
-    //     return {
-    //         platformUserInfo: {
-    //             id: "",
-    //             name: "",
-    //             timezoneName: "",
-    //             timezoneOffset: "",
-    //             platformAdditionalInfo: {}
-    //         },
-    //         returnMessage: {
-    //             messageType: 'danger',
-    //             message: `You are not having an active license. Please contact us.`,
-    //             ttl: 3000
-    //         }
-    //     };
-    // }
 
     const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
         headers: {
@@ -397,32 +340,30 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     });
 
     const postBody = {
-        short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phone}]`,
-        description: `\nContact Number: ${contactNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`,
-        contact_type: "Phone",
-        caller_id: caller_id.data.result.id
+        short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phoneNumber}]`,
+        work_notes: `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`
     }
 
-    if (additionalSubmission && additionalSubmission.category){
-        const categorySelection = await axios.get(
-            `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=incident^element=category^sys_id=${additionalSubmission.category}&sysparm_fields=sys_id,label,value`,
+    if (additionalSubmission && additionalSubmission.state){
+        const stateSelection = await axios.get(
+            `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${additionalSubmission.state}&sysparm_fields=sys_id,label,value`,
             {
                 headers: { 'Authorization':  authHeader }
             });
     
-        const returnedCateogry = categorySelection.data.result.length > 0 ? categorySelection.data.result[0].value : null;
-        postBody.category = returnedCateogry;
+        const returnedCateogry = stateSelection.data.result.length > 0 ? stateSelection.data.result[0].value : null;
+        postBody.state = returnedCateogry;
 
-        if (additionalSubmission.subcategory) {
-            const subcategorySelection = await axios.get(
-                `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=incident^element=subcategory^sys_id=${additionalSubmission.subcategory}&sysparm_fields=sys_id,value,dependent_value`,
+        if (additionalSubmission.type) {
+            const typeSelection = await axios.get(
+                `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${additionalSubmission.type}&sysparm_fields=sys_id,value,lable`,
                 {
                     headers: { 'Authorization':  authHeader }
                 });
             
-            const returnedSubcateogry = subcategorySelection.data.result.length > 0 ? subcategorySelection.data.result[0].value : null;
+            const returnedSubcateogry = typeSelection.data.result.length > 0 ? typeSelection.data.result[0].value : null;
 
-            postBody.subcategory = returnedSubcateogry;
+            postBody.type = returnedSubcateogry;
         }
         
     }
@@ -431,7 +372,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     postBody.urgency = (additionalSubmission && additionalSubmission.urgency) ? additionalSubmission.urgency : 3;
 
     const addLogRes = await axios.post(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -454,25 +395,9 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
     // ---TODO.5: Implement call log fetching---
     // -----------------------------------------
-    const isTokenPresent = await tokenExist(authHeader);
-    // if (!isTokenPresent) {
-    //     return {
-    //         platformUserInfo: {
-    //             id: "",
-    //             name: "",
-    //             timezoneName: "",
-    //             timezoneOffset: "",
-    //             platformAdditionalInfo: {}
-    //         },
-    //         returnMessage: {
-    //             messageType: 'danger',
-    //             message: `You are not having an active license. Please contact us.`,
-    //             ttl: 3000
-    //         }
-    //     };
-    // }
+
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${callLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${callLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -480,11 +405,10 @@ async function getCallLog({ user, callLogId, authHeader }) {
     //-------------------------------------------------------------------------------------
     //---CHECK.5: In extension, for a logged call, click edit to see if info is fetched ---
     //-------------------------------------------------------------------------------------
-
     return {
         callLogInfo: {
             subject: getLogRes.data.result.short_description,
-            note: getLogRes.data.result.description,
+            note: getLogRes.data.result.work_notes,
         },
         returnMessage: {
             message: 'Call log fetched.',
@@ -498,49 +422,39 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
-    const isTokenPresent = await tokenExist(authHeader);
-    // if (!isTokenPresent) {
-    //     return {
-    //         platformUserInfo: {
-    //             id: "",
-    //             name: "",
-    //             timezoneName: "",
-    //             timezoneOffset: "",
-    //             platformAdditionalInfo: {}
-    //         },
-    //         returnMessage: {
-    //             messageType: 'danger',
-    //             message: `You are not having an active license. Please contact us.`,
-    //             ttl: 3000
-    //         }
-    //     };
-    // }
+
     const existingLogId = existingCallLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
-    const originalNote = getLogRes.data.result.description;
+    const originalNote = getLogRes.data.result.work_notes;
     let patchBody = {};
 
     patchBody = {
         data: {
             short_description: subject,
-            description: recordingLink ? note + `\nCall Recording Link: \n${recordingLink}` : note
+            work_notes: recordingLink ? note + `\nCall Recording Link: \n${recordingLink}` : note
         }
     }
-    const patchLogRes = await axios.patch(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
+
+    const patchLog = await axios.patch(
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
         });
+    
+    const patchLogRes = {
+        data: {
+            id: patchLog.data.result.sys_id
+        }
+    }
 
     //-----------------------------------------------------------------------------------------
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
     //-----------------------------------------------------------------------------------------
-    // return patchLogRes.data.result.sys_id;
     return {
         updatedNote: note,
         returnMessage: {
@@ -555,23 +469,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---------------------------------------
     // ---TODO.7: Implement message logging---
     // ---------------------------------------
-    const isTokenPresent = await tokenExist(authHeader);
-    // if (!isTokenPresent) {
-    //     return {
-    //         platformUserInfo: {
-    //             id: "",
-    //             name: "",
-    //             timezoneName: "",
-    //             timezoneOffset: "",
-    //             platformAdditionalInfo: {}
-    //         },
-    //         returnMessage: {
-    //             messageType: 'danger',
-    //             message: `You are not having an active license. Please contact us.`,
-    //             ttl: 3000
-    //         }
-    //     };
-    // }
+
     const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
         headers: {
             'Authorization': authHeader
@@ -581,13 +479,13 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const postBody = {
         data: {
             short_description: `[SMS] ${message.direction} SMS - ${message.from.name ?? ''}(${message.from.phoneNumber}) to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`,
-            description: `${message.direction} SMS - ${message.direction == 'Inbound' ? `from ${message.from.name ?? ''}(${message.from.phoneNumber})` : `to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`} \n${!!message.subject ? `[Message] ${message.subject}` : ''} ${!!recordingLink ? `\n[Recording link] ${recordingLink}` : ''}\n\n--- Created via RingCentral CRM Extension`,
-            contact_type: "Chat",
+            work_notes: `${message.direction} SMS - ${message.direction == 'Inbound' ? `from ${message.from.name ?? ''}(${message.from.phoneNumber})` : `to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`} \n${!!message.subject ? `[Message] ${message.subject}` : ''} ${!!recordingLink ? `\n[Recording link] ${recordingLink}` : ''}\n\n--- Created via RingCentral CRM Extension`,
+            type: "Chat",
             caller_id: caller_id.data.result.id
         }
     }
     const addLogRes = await axios.post(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -611,31 +509,15 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
-    const isTokenPresent = await tokenExist(authHeader);
-    // if (!isTokenPresent) {
-    //     return {
-    //         platformUserInfo: {
-    //             id: "",
-    //             name: "",
-    //             timezoneName: "",
-    //             timezoneOffset: "",
-    //             platformAdditionalInfo: {}
-    //         },
-    //         returnMessage: {
-    //             messageType: 'danger',
-    //             message: `You are not having an active license. Please contact us.`,
-    //             ttl: 3000
-    //         }
-    //     };
-    // }
+
     const existingLogId = existingMessageLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
     const originalNote = getLogRes.data.body;
-    const updateNote = orginalNote.replace();
+    const updateNote = originalNote.replace();
 
     const patchBody = {
         data: {
@@ -643,7 +525,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         }
     }
     const updateLogRes = await axios.patch(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
@@ -658,23 +540,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ----------------------------------------
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
-    const isTokenPresent = await tokenExist(authHeader);
-    // if (!isTokenPresent) {
-    //     return {
-    //         platformUserInfo: {
-    //             id: "",
-    //             name: "",
-    //             timezoneName: "",
-    //             timezoneOffset: "",
-    //             platformAdditionalInfo: {}
-    //         },
-    //         returnMessage: {
-    //             messageType: 'danger',
-    //             message: `You are not having an active license. Please contact us.`,
-    //             ttl: 3000
-    //         }
-    //     };
-    // }
+
     const account = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/account`, {
         headers: {
             'Authorization': authHeader

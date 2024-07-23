@@ -42,7 +42,7 @@
             "scope": "",
             "canOpenLogPage": true,
             "contactPageUrl":"https://dev194338.service-now.com/customer_contact.do?sys_id={contactId}",
-            "logPageUrl":"https://dev194338.service-now.com/incident.do?sys_id={logId}",
+            "logPageUrl":"https://dev194338.service-now.com/interaction.do?sys_id={logId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
                     "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
@@ -53,30 +53,16 @@
                 "callLog": {
                     "additionalFields": [
                         {
-                            "const": "category",
-                            "title": "Category",
+                            "const": "state",
+                            "title": "State",
                             "type": "selection",
                             "contactDependent": true
                         },
                         {
-                            "const": "subcategory",
-                            "title": "Sub-Category",
+                            "const": "type",
+                            "title": "Type",
                             "type": "selection",
                             "contactDependent": true
-                        },
-                        {
-                            "const": "impact",
-                            "title": "Impact",
-                            "type": "selection",
-                            "contactDependent": true,
-                            "default": 3
-                        },
-                        {
-                            "const": "urgency",
-                            "title": "Urgency",
-                            "type": "selection",
-                            "contactDependent": true,
-                            "default": 3
                         }
                     ]
                 },
@@ -85,6 +71,18 @@
                         {
                             "const": "matters",
                             "title": "Matter",
+                            "type": "selection",
+                            "contactDependent": true
+                        },
+                        {
+                            "const": "state",
+                            "title": "State",
+                            "type": "selection",
+                            "contactDependent": true
+                        },
+                        {
+                            "const": "type",
+                            "title": "Type",
                             "type": "selection",
                             "contactDependent": true
                         }
