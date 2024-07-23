@@ -105,12 +105,10 @@ async function getUserInfo({ authHeader, additionalInfo }) {
 
         if(id == '6816f79cc0a8016401c5a33be04be441')
         {
-            console.log('Inside if case');
             let newId = generateAlphanumericString(id.length);
-            console.log(newId,"newId");
             id = newId;
         }
-        console.log("idsaaaaaaaaaaaaaaaS",id);
+
         let userData = {
             id:id,
             email:email,
@@ -153,7 +151,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             if (checkActiveUsers[0].customers) {
                 //check the number of users allowed for the company and compare them with the current active users 
                 //if the max numbers of users is greater than the active customers we allow to insert new customer
-                console.log("CUSTOMER",checkActiveUsers[0].customers.length,"MAX USERS",checkActiveUsers[0].maxAllowedUsers,checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)
+
                 if (checkActiveUsers[0].customers.some(customer => customer.email === email)) {
                     return {
                         successful: true,
@@ -335,6 +333,9 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 
     const impactSelection = [{ const: 1, title: "High" }, { const: 2, title: "Medium" }, { const: 3, title: "Low" }]
     const urgencySelection = [{ const: 1, title: "High" }, { const: 2, title: "Medium" }, { const: 3, title: "Low" }]
+    const state = [{ const: 1, title: "On Hold" }, { const: 2, title: "New" }, { const: 3, title: "Work In Progress" }, { const: 4, title: "Closed Complete" }, { const: 5, title: "Closed Abandoned" }]
+
+    const callType = [{ const: 1, title: "INCIDENT", impact: impactSelection, urgency: urgencySelection, category: categories, state: state }, { const: 2, title: "INTERACTION", state: state, impact: [{}], urgency: [{}]}]
     
 
     // You can use parsePhoneNumber functions to further parse the phone number
@@ -354,7 +355,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
                     id: result.sys_id,
                     name: result.name,
                     phone: numberToQuery,
-                    additionalInfo: {category: categories, impact: impactSelection, urgency: urgencySelection}
+                    additionalInfo: {callType: callType}
                 })
             }
         }

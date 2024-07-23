@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "serverUrl": "https://7eee-2405-201-301c-5130-e3cb-2aad-f59e-d46.ngrok-free.app",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6 Labs",
@@ -53,32 +53,40 @@
                 "callLog": {
                     "additionalFields": [
                         {
-                            "const": "category",
-                            "title": "Category",
+                            "const": "callType",
+                            "title": "Call-Type",
                             "type": "selection",
                             "contactDependent": true,
                             "subFields": [
                                 {
-                                    "const": "subcategory",
-                                    "title": "Sub-Category",
+                                    "const": "impact",
+                                    "title": "Impact",
                                     "type": "selection",
-                                    "contactDependent": true
+                                    "contactDependent": true,
+                                    "default": 3
+                                },
+                                {
+                                    "const": "urgency",
+                                    "title": "Urgency",
+                                    "type": "selection",
+                                    "contactDependent": true,
+                                    "default": 3
+                                },
+                                {
+                                    "const": "category",
+                                    "title": "Category",
+                                    "type": "selection",
+                                    "contactDependent": true,
+                                    "subFields": [
+                                        {
+                                            "const": "subcategory",
+                                            "title": "Sub-Category",
+                                            "type": "selection",
+                                            "contactDependent": true
+                                        }
+                                    ]
                                 }
                             ]
-                        },
-                        {
-                            "const": "impact",
-                            "title": "Impact",
-                            "type": "selection",
-                            "contactDependent": true,
-                            "default": 3
-                        },
-                        {
-                            "const": "urgency",
-                            "title": "Urgency",
-                            "type": "selection",
-                            "contactDependent": true,
-                            "default": 3
                         }
                     ]
                 },
