@@ -60,7 +60,7 @@
                         },
                         {
                             "const": "type",
-                            "title": "State",
+                            "title": "Type",
                             "type": "selection",
                             "contactDependent": true
                         }
@@ -82,7 +82,7 @@
                         },
                         {
                             "const": "type",
-                            "title": "State",
+                            "title": "Type",
                             "type": "selection",
                             "contactDependent": true
                         }
