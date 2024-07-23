@@ -20,8 +20,8 @@ async function saveUserInfo(userObj, accessToken, hostname, companyId) {
                 ]
             }
         });
+        //if current user exists just do nothing 
         if (existingUser) {
-            console.log('Existing user update');
             const updateUser = await UserModel1.update({
                 status: 1
             },
@@ -41,10 +41,8 @@ async function saveUserInfo(userObj, accessToken, hostname, companyId) {
                 accessToken: accessToken,
                 hostname: hostname
             })
-            console.log("User created successfully");
         }
     } catch (error) {
-        console.log(error);
         return error
     }
 }
