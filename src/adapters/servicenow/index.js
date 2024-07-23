@@ -341,9 +341,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const postBody = {
         short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phoneNumber}]`,
-        description: `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`,
-        contact_type: "Phone",
-        caller_id: caller_id.data.result.id
+        work_notes: `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`
     }
 
     if (additionalSubmission && additionalSubmission.state){
@@ -410,7 +408,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     return {
         callLogInfo: {
             subject: getLogRes.data.result.short_description,
-            note: getLogRes.data.result.description,
+            note: getLogRes.data.result.work_notes,
         },
         returnMessage: {
             message: 'Call log fetched.',
@@ -431,7 +429,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         {
             headers: { 'Authorization': authHeader }
         });
-    const originalNote = getLogRes.data.result.description;
+    const originalNote = getLogRes.data.result.work_notes;
     console.log("originalNote ", originalNote)
     console.log("note ", note)
     let patchBody = {};
@@ -439,7 +437,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     patchBody = {
         data: {
             short_description: subject,
-            description: recordingLink ? note + `\nCall Recording Link: \n${recordingLink}` : note
+            work_notes: recordingLink ? note + `\nCall Recording Link: \n${recordingLink}` : note
         }
     }
     console.log("patchBody ", patchBody)
@@ -452,7 +450,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     
     const patchLogRes = {
         data: {
-            id: patchLog.data.id
+            id: patchLog.data.result.sys_id
         }
     }
     console.log("patchLogRes ", patchLogRes)
@@ -484,13 +482,13 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const postBody = {
         data: {
             short_description: `[SMS] ${message.direction} SMS - ${message.from.name ?? ''}(${message.from.phoneNumber}) to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`,
-            description: `${message.direction} SMS - ${message.direction == 'Inbound' ? `from ${message.from.name ?? ''}(${message.from.phoneNumber})` : `to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`} \n${!!message.subject ? `[Message] ${message.subject}` : ''} ${!!recordingLink ? `\n[Recording link] ${recordingLink}` : ''}\n\n--- Created via RingCentral CRM Extension`,
-            contact_type: "Chat",
+            work_notes: `${message.direction} SMS - ${message.direction == 'Inbound' ? `from ${message.from.name ?? ''}(${message.from.phoneNumber})` : `to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`} \n${!!message.subject ? `[Message] ${message.subject}` : ''} ${!!recordingLink ? `\n[Recording link] ${recordingLink}` : ''}\n\n--- Created via RingCentral CRM Extension`,
+            type: "Chat",
             caller_id: caller_id.data.result.id
         }
     }
     const addLogRes = await axios.post(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -517,12 +515,12 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
     const existingLogId = existingMessageLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
     const originalNote = getLogRes.data.body;
-    const updateNote = orginalNote.replace();
+    const updateNote = originalNote.replace();
 
     const patchBody = {
         data: {
@@ -530,7 +528,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         }
     }
     const updateLogRes = await axios.patch(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
