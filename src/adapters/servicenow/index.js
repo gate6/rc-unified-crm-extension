@@ -268,35 +268,21 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 
     numberToQueryArray.push(phoneNumber.trim());
 
-    const categorySelection = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=incident^element=category&sysparm_fields=sys_id,label,value`,
+    const stateSelection = await axios.get(
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
     
-    const subcategorySelection = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=incident^element=subcategory&sysparm_fields=sys_id,label,dependent_value`,
+    const typeSelection = await axios.get(
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
-    
-    const subcategories = subcategorySelection.data.result.length > 0 ? subcategorySelection.data.result.map(m => { return { const: m.sys_id, title: m.label, dependent_value: m.dependent_value } }) : null;
 
-    let categories = categorySelection.data.result.length > 0 ? categorySelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
+    const states = stateSelection.data.result.length > 0 ? stateSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
 
-    categories = categories.map(category => {
-        const titleToMatch = category.title.toLowerCase() === 'inquiry / help' ? 'inquiry' : category.title.toLowerCase();
-        const matchedSubcategories = subcategories.filter(
-          subcategory => subcategory.dependent_value.toLowerCase() === titleToMatch
-        );
-        if (matchedSubcategories.length > 0) {
-          return { ...category, subcategory: matchedSubcategories };
-        }
-        return category;
-      });
-
-    const impactSelection = [{ const: 1, title: "High" }, { const: 2, title: "Medium" }, { const: 3, title: "Low" }]
-    const urgencySelection = [{ const: 1, title: "High" }, { const: 2, title: "Medium" }, { const: 3, title: "Low" }]
+    const interactionType = typeSelection.data.result.length > 0 ? typeSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
     
 
     // You can use parsePhoneNumber functions to further parse the phone number
@@ -316,7 +302,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
                     id: result.sys_id,
                     name: result.name,
                     phone: numberToQuery,
-                    additionalInfo: {category: categories, impact: impactSelection, urgency: urgencySelection}
+                    additionalInfo: {state: states, type: interactionType}
                 })
             }
         }
@@ -360,26 +346,26 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         caller_id: caller_id.data.result.id
     }
 
-    if (additionalSubmission && additionalSubmission.category){
-        const categorySelection = await axios.get(
-            `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=incident^element=category^sys_id=${additionalSubmission.category}&sysparm_fields=sys_id,label,value`,
+    if (additionalSubmission && additionalSubmission.state){
+        const stateSelection = await axios.get(
+            `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${additionalSubmission.state}&sysparm_fields=sys_id,label,value`,
             {
                 headers: { 'Authorization':  authHeader }
             });
     
-        const returnedCateogry = categorySelection.data.result.length > 0 ? categorySelection.data.result[0].value : null;
-        postBody.category = returnedCateogry;
+        const returnedCateogry = stateSelection.data.result.length > 0 ? stateSelection.data.result[0].value : null;
+        postBody.state = returnedCateogry;
 
-        if (additionalSubmission.subcategory) {
-            const subcategorySelection = await axios.get(
-                `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=incident^element=subcategory^sys_id=${additionalSubmission.subcategory}&sysparm_fields=sys_id,value,dependent_value`,
+        if (additionalSubmission.type) {
+            const typeSelection = await axios.get(
+                `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${additionalSubmission.type}&sysparm_fields=sys_id,value,lable`,
                 {
                     headers: { 'Authorization':  authHeader }
                 });
             
-            const returnedSubcateogry = subcategorySelection.data.result.length > 0 ? subcategorySelection.data.result[0].value : null;
+            const returnedSubcateogry = typeSelection.data.result.length > 0 ? typeSelection.data.result[0].value : null;
 
-            postBody.subcategory = returnedSubcateogry;
+            postBody.type = returnedSubcateogry;
         }
         
     }
@@ -388,7 +374,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     postBody.urgency = (additionalSubmission && additionalSubmission.urgency) ? additionalSubmission.urgency : 3;
 
     const addLogRes = await axios.post(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -413,7 +399,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
 
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${callLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${callLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -441,11 +427,13 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
     const existingLogId = existingCallLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
     const originalNote = getLogRes.data.result.description;
+    console.log("originalNote ", originalNote)
+    console.log("note ", note)
     let patchBody = {};
 
     patchBody = {
@@ -454,17 +442,24 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             description: recordingLink ? note + `\nCall Recording Link: \n${recordingLink}` : note
         }
     }
-    const patchLogRes = await axios.patch(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/incident/${existingLogId}`,
+    console.log("patchBody ", patchBody)
+    const patchLog = await axios.patch(
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
         });
+    
+    const patchLogRes = {
+        data: {
+            id: patchLog.data.id
+        }
+    }
+    console.log("patchLogRes ", patchLogRes)
 
     //-----------------------------------------------------------------------------------------
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
     //-----------------------------------------------------------------------------------------
-    // return patchLogRes.data.result.sys_id;
     return {
         updatedNote: note,
         returnMessage: {
