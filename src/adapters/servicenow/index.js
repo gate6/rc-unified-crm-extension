@@ -433,10 +433,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     let patchBody = {};
 
     patchBody = {
-        data: {
             short_description: subject,
             work_notes: recordingLink ? note + `\nCall Recording Link: \n${recordingLink}` : note
-        }
     }
 
     console.log("PathBody ", patchBody)
