@@ -439,6 +439,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         }
     }
 
+    console.log("PathBody ", patchBody)
+
     const patchLog = await axios.patch(
         `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
