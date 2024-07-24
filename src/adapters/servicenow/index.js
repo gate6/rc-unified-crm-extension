@@ -455,6 +455,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 
     console.log("patchLogRes", patchLogRes)
+    console.log("note", note)
 
     //-----------------------------------------------------------------------------------------
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
