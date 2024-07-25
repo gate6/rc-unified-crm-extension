@@ -437,8 +437,6 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             work_notes: recordingLink ? note + `\nCall Recording Link: \n${recordingLink}` : note
     }
 
-    console.log("PathBody ", patchBody)
-
     const patchLog = await axios.patch(
         `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
@@ -451,9 +449,6 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             id: patchLog.data.result.sys_id
         }
     }
-
-    console.log("patchLogRes", patchLogRes)
-    console.log("note", note)
 
     //-----------------------------------------------------------------------------------------
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
