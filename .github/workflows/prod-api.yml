@@ -18,7 +18,7 @@ jobs:
 
         run: |
           rm -rf api.zip
-          zip -r api.zip  ./*
+          zip -r api.zip  .env ./*
           
         # deploying api.zip to the API server
       - name: copy file via SSH password
