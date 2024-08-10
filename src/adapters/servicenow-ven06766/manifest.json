@@ -1,0 +1,95 @@
+{
+    "serverUrl": "https://rcservicenowapi.gate6.com",
+    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
+    "author": {
+        "name": "Gate6 Labs",
+        "websiteUrl": "",
+        "iconUrl": "",
+        "supportUrl": ""
+    },
+    "platforms": {
+        "servicenow": {
+            "urlIdentifier": "*servicenow.com*",
+            "name": "servicenow-ven06766",
+            "displayName": "servicenow",
+            "requestConfig": {
+                "timeout": 30
+            },
+            "auth": {
+                "type": "oauth",
+                "apiKey": {
+                    "page": {
+                        "title": "test CRM",
+                        "content": [
+                            {
+                                "const": "apiKey",
+                                "title": "apiKey",
+                                "type": "string",
+                                "required": true
+                            }
+                        ]
+                    }
+                },
+                "oauth": {
+                    "authUrl": "https://ven06766.service-now.com/oauth_auth.do",
+                    "clientId": "7ecec80bc07f8e10a852daa71a6f5de4",
+                    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
+                    "customState": "",
+                    "scope": ""
+                }
+            },
+            "customState": "",
+            "scope": "",
+            "canOpenLogPage": true,
+            "contactPageUrl": "https://ven06766.service-now.com/customer_contact.do?sys_id={contactId}",
+            "logPageUrl": "https://ven06766.service-now.com/interaction.do?sys_id={logId}",
+            "embeddedOnCrmPage": {
+                "welcomePage": {
+                    "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
+                    "videoLink": "https://youtu.be/pQgdsAR1UCI"
+                }
+            },
+            "page": {
+                "callLog": {
+                    "additionalFields": [
+                        {
+                            "const": "state",
+                            "title": "State",
+                            "type": "selection",
+                            "contactDependent": true
+                        },
+                        {
+                            "const": "type",
+                            "title": "Type",
+                            "type": "selection",
+                            "contactDependent": true
+                        }
+                    ]
+                },
+                "messageLog": {
+                    "additionalFields": [
+                        {
+                            "const": "matters",
+                            "title": "Matter",
+                            "type": "selection",
+                            "contactDependent": true
+                        },
+                        {
+                            "const": "state",
+                            "title": "State",
+                            "type": "selection",
+                            "contactDependent": true
+                        },
+                        {
+                            "const": "type",
+                            "title": "Type",
+                            "type": "selection",
+                            "contactDependent": true
+                        }
+                    ]
+                }
+            }
+        }
+    },
+    "version": "1.0.1"
+}
