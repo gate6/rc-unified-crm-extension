@@ -2,14 +2,14 @@
     "serverUrl": "https://rc-crmapi.test.gate6.com",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
-        "name": "Gate6 Labs",
-        "websiteUrl": "",
-        "iconUrl": "",
-        "supportUrl": ""
+        "name": "Gate6",
+        "websiteUrl": "https://www.gate6.com/",
+        "iconUrl": "https://www.gate6.com/images/gate6.png",
+        "supportUrl": "https://www.gate6.com/contact-us/"
     },
     "platforms": {
         "servicenow": {
-            "urlIdentifier": "*servicenow.com*",
+            "urlIdentifier": "*service-now.com*",
             "name": "servicenow",
             "displayName": "servicenow",
             "requestConfig": {
