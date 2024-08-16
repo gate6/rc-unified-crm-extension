@@ -2,6 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
+const { UserModel } = require('../../models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
 const Sequelize = require('sequelize');
@@ -37,13 +38,34 @@ function getBasicAuth({ apiKey }) {
 }
 
 // CASE: If using OAuth
- function getOauthInfo() {
+
+async function getHostname(hostname)
+{
+    
+    const existingUser = await UserModel.findOne({
+        where: {
+           hostname:hostname
+        },
+        attributes:['id','hostname'],
+        raw:true
+    });
+    console.log(existingUser);
+    return existingUser;
+}
+ async function getOauthInfo(hostname) {
+
+    const [ { clientId, clientSecret, crmRedirectUrl,tokenUrl } = {} ] = await models.companies.findAll({
+        where:{
+            hostname:hostname.hostname
+        },
+        raw:true
+    })
 
     return {
-        clientId: process.env.SERVICE_NOW_CLIENT_ID,
-        clientSecret:process.env.SERVICE_NOW_CLIENT_SECRET,
-        accessTokenUri: process.env.SERVICE_NOW_TOKEN_URL,
-        redirectUri: process.env.SERVICE_NOW_CRM_REDIRECT_URI
+        clientId: clientId,
+        clientSecret:clientSecret,
+        accessTokenUri: tokenUrl,
+        redirectUri: crmRedirectUrl
     }
 }
 
@@ -67,19 +89,31 @@ function getBasicAuth({ apiKey }) {
 
 
 // For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
-async function getUserInfo({ authHeader, additionalInfo }) {
+async function getUserInfo({ authHeader, additionalInfo,hostname }) {
    
     // ------------------------------------------------------
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
     try {
+        console.log("Hostname inside get user info",hostname);
+        const getHost = await getHostname(hostname);
+        console.log("getHost",getHost.hostname);
 
-        const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+        const getCompanyDetails = await models.companies.findAll({
+            where:{
+                hostname:getHost.hostname
+            },
+            raw:true
+        })
+
+        console.log(getCompanyDetails[0]);
+
+        const userInfoResponse = await axios.get(`${getCompanyDetails[0].instanceUrl}/${getCompanyDetails[0].userDetailsPath}`, {
             headers: {
                 'Authorization': authHeader
             }
         });
-
+        console.log("userInfoResponse",userInfoResponse.data.result);
         let id = userInfoResponse.data.result.id;
         const email = userInfoResponse.data.result.email;
         const name = userInfoResponse.data.result.user_name;
@@ -215,6 +249,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         }
 
     } catch (error) {
+        console.log(error);
         return {
             successful: false,
             returnMessage: {
