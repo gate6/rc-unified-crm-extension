@@ -40,10 +40,10 @@ function getBasicAuth({ apiKey }) {
  function getOauthInfo() {
 
     return {
-        clientId: process.env.SERVICE_NOW_CLIENT_ID,
-        clientSecret:process.env.SERVICE_NOW_CLIENT_SECRET,
-        accessTokenUri: process.env.SERVICE_NOW_TOKEN_URL,
-        redirectUri: process.env.SERVICE_NOW_CRM_REDIRECT_URI
+        clientId: process.env.SERVICE_NOW_CLIENT_ID_ven06766,
+        clientSecret:process.env.SERVICE_NOW_CLIENT_SECRET_ven06766,
+        accessTokenUri: process.env.SERVICE_NOW_TOKEN_URL_ven06766,
+        redirectUri: process.env.SERVICE_NOW_CRM_REDIRECT_URI_ven06766
     }
 }
 
@@ -54,9 +54,9 @@ function getBasicAuth({ apiKey }) {
 //         query: {
 //             grant_type: 'authorization_code',
 //             code,
-//             client_id: process.env.SERVICE_NOW_CLIENT_ID,
-//             client_secret: process.env.SERVICE_NOW_CLIENT_SECRET,
-//             redirect_uri: process.env.SERVICE_NOW_CRM_REDIRECT_URI,
+//             client_id: process.env.SERVICE_NOW_CLIENT_ID_ven06766,
+//             client_secret: process.env.SERVICE_NOW_CLIENT_SECRET_ven06766,
+//             redirect_uri: process.env.SERVICE_NOW_CRM_REDIRECT_URI_ven06766,
 //         },
 //         headers: {
 //             Authorization: ''
@@ -74,7 +74,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
     // ------------------------------------------------------
     try {
 
-        const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+        const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH_ven06766}`, {
             headers: {
                 'Authorization': authHeader
             }
@@ -102,7 +102,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         //Get information of company along with its customers based on hostname
         const checkActiveUsers = await models.companies.findAll({
             where: {
-                hostname: process.env.SERVICE_NOW_HOSTNAME
+                hostname: process.env.SERVICE_NOW_HOSTNAME_ven06766
             },
             include: [{
                 model: models.customer,
@@ -269,13 +269,13 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     numberToQueryArray.push(phoneNumber.trim());
 
     const stateSelection = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
     
     const typeSelection = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
@@ -291,7 +291,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
-            `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/contact?sysparm_query=phoneLIKE${numberToQuery}`,
+            `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/contact?sysparm_query=phoneLIKE${numberToQuery}`,
             {
                 headers: { 'Authorization':  authHeader }
             });
@@ -333,7 +333,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ---TODO.4: Implement call logging---
     // ------------------------------------
 
-    const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+    const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH_ven06766}`, {
         headers: {
             'Authorization': authHeader
         }
@@ -346,7 +346,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     if (additionalSubmission && additionalSubmission.state){
         const stateSelection = await axios.get(
-            `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${additionalSubmission.state}&sysparm_fields=sys_id,label,value`,
+            `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${additionalSubmission.state}&sysparm_fields=sys_id,label,value`,
             {
                 headers: { 'Authorization':  authHeader }
             });
@@ -356,7 +356,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
         if (additionalSubmission.type) {
             const typeSelection = await axios.get(
-                `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${additionalSubmission.type}&sysparm_fields=sys_id,value,lable`,
+                `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${additionalSubmission.type}&sysparm_fields=sys_id,value,lable`,
                 {
                     headers: { 'Authorization':  authHeader }
                 });
@@ -372,7 +372,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     postBody.urgency = (additionalSubmission && additionalSubmission.urgency) ? additionalSubmission.urgency : 3;
 
     const addLogRes = await axios.post(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -397,7 +397,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
 
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${callLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/interaction/${callLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -425,7 +425,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
     const existingLogId = existingCallLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -438,7 +438,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 
     const patchLog = await axios.patch(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
@@ -468,7 +468,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---TODO.7: Implement message logging---
     // ---------------------------------------
 
-    const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+    const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH_ven06766}`, {
         headers: {
             'Authorization': authHeader
         }
@@ -483,7 +483,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         }
     }
     const addLogRes = await axios.post(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -510,7 +510,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
     const existingLogId = existingMessageLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -523,7 +523,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         }
     }
     const updateLogRes = await axios.patch(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
@@ -539,7 +539,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
 
-    const account = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/account`, {
+    const account = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/account`, {
         headers: {
             'Authorization': authHeader
         }
@@ -553,7 +553,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 
     const contactInfoRes = await axios.post(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/contact`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_ven06766}.service-now.com/api/now/contact`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
