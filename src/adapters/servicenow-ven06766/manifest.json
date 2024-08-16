@@ -9,7 +9,7 @@
     },
     "platforms": {
         "servicenow": {
-            "urlIdentifier": "*servicenow.com*",
+            "urlIdentifier": "*service-now.com*",
             "name": "servicenow-ven06766",
             "displayName": "servicenow",
             "requestConfig": {
