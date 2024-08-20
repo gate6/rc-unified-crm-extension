@@ -1,6 +1,6 @@
 {
   "name": "rc-unified-crm-extension-server",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "RingCentral Unified CRM Extension",
   "main": "index.js",
   "bin": {
@@ -38,17 +38,19 @@
     "body-parser": "^1.20.1",
     "client-oauth2": "^4.3.3",
     "cors": "^2.8.5",
+    "country-state-city": "^3.2.1",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "jsonwebtoken": "^8.5.1",
     "mixpanel": "^0.18.0",
     "moment": "^2.29.4",
     "moment-timezone": "^0.5.39",
-    "mysql2": "^3.10.2",
+    "mysql2": "^3.11.0",
     "pg": "^8.8.0",
     "sequelize": "^6.25.0",
     "serverless-http": "^3.0.3",
     "shortid": "^2.2.16",
+    "tz-lookup": "^6.1.25",
     "ua-parser-js": "^1.0.38"
   },
   "devDependencies": {

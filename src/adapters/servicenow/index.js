@@ -39,26 +39,28 @@ function getBasicAuth({ apiKey }) {
 
 // CASE: If using OAuth
 
-async function getHostname(hostname)
-{
+async function getHostname(hostname) {
     
     const existingUser = await UserModel.findOne({
         where: {
-           hostname:hostname
+           hostname: hostname
         },
         attributes:['id','hostname'],
         raw:true
     });
-    console.log(existingUser);
+
+    const instanceId = existingUser.hostname.substring(0, existingUser.hostname.indexOf('.service-now.com'));
+    existingUser.instanceId = instanceId;
     return existingUser;
 }
- async function getOauthInfo(hostname) {
 
-    const [ { clientId, clientSecret, crmRedirectUrl,tokenUrl } = {} ] = await models.companies.findAll({
-        where:{
-            hostname:hostname.hostname
+async function getOauthInfo(requestData) {
+
+    const { clientId, clientSecret, crmRedirectUrl, tokenUrl }  = await models.companies.findOne({
+        where: {
+            hostname: requestData.hostname
         },
-        raw:true
+        raw: true
     })
 
     return {
@@ -89,31 +91,26 @@ async function getHostname(hostname)
 
 
 // For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
-async function getUserInfo({ authHeader, additionalInfo,hostname }) {
+async function getUserInfo({ authHeader, additionalInfo, hostname}) {
    
     // ------------------------------------------------------
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
     try {
-        console.log("Hostname inside get user info",hostname);
-        const getHost = await getHostname(hostname);
-        console.log("getHost",getHost.hostname);
-
-        const getCompanyDetails = await models.companies.findAll({
-            where:{
-                hostname:getHost.hostname
+        console.log(hostname);
+        const getCompanyDetails = await models.companies.findOne({
+            where: {
+                hostname: hostname
             },
             raw:true
         })
-
-        console.log(getCompanyDetails[0]);
-
-        const userInfoResponse = await axios.get(`${getCompanyDetails[0].instanceUrl}/${getCompanyDetails[0].userDetailsPath}`, {
+        console.log('getCompanyDetails',getCompanyDetails);
+        const userInfoResponse = await axios.get(`${getCompanyDetails.instanceUrl}/api/${getCompanyDetails.userDetailsPath}`, {
             headers: {
                 'Authorization': authHeader
             }
         });
-        console.log("userInfoResponse",userInfoResponse.data.result);
+
         let id = userInfoResponse.data.result.id;
         const email = userInfoResponse.data.result.email;
         const name = userInfoResponse.data.result.user_name;
@@ -134,9 +131,9 @@ async function getUserInfo({ authHeader, additionalInfo,hostname }) {
             name:name
         }
         //Get information of company along with its customers based on hostname
-        const checkActiveUsers = await models.companies.findAll({
+        const checkActiveUsers = await models.companies.findOne({
             where: {
-                hostname: process.env.SERVICE_NOW_HOSTNAME
+                hostname: hostname
             },
             include: [{
                 model: models.customer,
@@ -146,30 +143,14 @@ async function getUserInfo({ authHeader, additionalInfo,hostname }) {
             logging: false,
         })
         //check if the current company exists in the MYSQL database if not exists thorw error
-        if (checkActiveUsers.length == 0) {
-            return {
-                successful: false,
-                platformUserInfo: {
-                    id,
-                    name,
-                    timezoneName,
-                    timezoneOffset,
-                    platformAdditionalInfo: {}
-                },
-                returnMessage: {
-                    messageType: 'danger',
-                    message: 'Could not find the company details.',
-                    ttl: 3000
-                }
-            };
-        }
-        if (checkActiveUsers.length) {
+
+        if (checkActiveUsers) {
             //Fetch the all the customers for the company and check the current loggedInUser is new or existing
-            if (checkActiveUsers[0].customers) {
+            if (checkActiveUsers.customers) {
                 //check the number of users allowed for the company and compare them with the current active users 
                 //if the max numbers of users is greater than the active customers we allow to insert new customer
 
-                if (checkActiveUsers[0].customers.some(customer => customer.email === email)) {
+                if (checkActiveUsers.customers.some(customer => customer.email === email)) {
                     return {
                         successful: true,
                         platformUserInfo: {
@@ -187,9 +168,9 @@ async function getUserInfo({ authHeader, additionalInfo,hostname }) {
                     };
                 }
                 //allow login of new user
-                if ((checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)) {
+                if ((checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers)) {
 
-                    if (checkActiveUsers[0].customers.some(customer => customer.sysId === id)) {
+                    if (checkActiveUsers.customers.some(customer => customer.sysId === id)) {
                         return {
                             successful: true,
                             platformUserInfo: {
@@ -209,7 +190,7 @@ async function getUserInfo({ authHeader, additionalInfo,hostname }) {
                     else {
                         const accessToken = authHeader.split(' ')[1];
                         //Save the auth token and new user information in the MYSQL customers table
-                        await saveUserInfo(userData, accessToken, checkActiveUsers[0].dataValues.hostname, checkActiveUsers[0].dataValues.id);
+                        await saveUserInfo(userData, accessToken, checkActiveUsers.dataValues.hostname, checkActiveUsers.dataValues.id);
                         return {
                             successful: true,
                             platformUserInfo: {
@@ -246,10 +227,26 @@ async function getUserInfo({ authHeader, additionalInfo,hostname }) {
                 }
             }
 
+        } else {
+            return {
+                successful: false,
+                platformUserInfo: {
+                    id,
+                    name,
+                    timezoneName,
+                    timezoneOffset,
+                    platformAdditionalInfo: {}
+                },
+                returnMessage: {
+                    messageType: 'danger',
+                    message: 'Could not find the company details.',
+                    ttl: 3000
+                }
+            };
         }
 
     } catch (error) {
-        console.log(error);
+        console.log("Exception in getUserInfo ", error);
         return {
             successful: false,
             returnMessage: {
@@ -300,17 +297,20 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     // ----------------------------------------
 
     const numberToQueryArray = [];
-
+    console.log("user",user.dataValues.hostname);
     numberToQueryArray.push(phoneNumber.trim());
 
+    const userInfo = await getHostname(user.dataValues.hostname);
+    const instanceId = userInfo.instanceId;
+    console.log("instanceId",instanceId);
     const stateSelection = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
+        `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
     
     const typeSelection = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
+        `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
@@ -326,7 +326,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
-            `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/contact?sysparm_query=phoneLIKE${numberToQuery}`,
+            `https://${instanceId}.service-now.com/api/now/contact?sysparm_query=phoneLIKE${numberToQuery}`,
             {
                 headers: { 'Authorization':  authHeader }
             });
@@ -367,8 +367,19 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ------------------------------------
     // ---TODO.4: Implement call logging---
     // ------------------------------------
+    console.log(user.dataValues.hostname);
+    const userInfo = await getHostname(user.dataValues.hostname);
 
-    const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+    const { userDetailsPath }  = await models.companies.findOne({
+        where: {
+            hostname: userInfo.hostname
+        },
+        raw: true
+    })
+
+    const instanceId = userInfo.instanceId;
+    
+    const caller_id = await axios.get(`https://${instanceId}.service-now.com/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
         }
@@ -381,7 +392,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     if (additionalSubmission && additionalSubmission.state){
         const stateSelection = await axios.get(
-            `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${additionalSubmission.state}&sysparm_fields=sys_id,label,value`,
+            `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${additionalSubmission.state}&sysparm_fields=sys_id,label,value`,
             {
                 headers: { 'Authorization':  authHeader }
             });
@@ -391,7 +402,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
         if (additionalSubmission.type) {
             const typeSelection = await axios.get(
-                `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${additionalSubmission.type}&sysparm_fields=sys_id,value,lable`,
+                `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${additionalSubmission.type}&sysparm_fields=sys_id,value,lable`,
                 {
                     headers: { 'Authorization':  authHeader }
                 });
@@ -407,7 +418,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     postBody.urgency = (additionalSubmission && additionalSubmission.urgency) ? additionalSubmission.urgency : 3;
 
     const addLogRes = await axios.post(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction`,
+        `https://${instanceId}.service-now.com/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -431,8 +442,11 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // ---TODO.5: Implement call log fetching---
     // -----------------------------------------
 
+    const userInfo = await getHostname(user.dataValues.hostname);
+    const instanceId = userInfo.instanceId;
+
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${callLogId}`,
+        `https://${instanceId}.service-now.com/api/now/table/interaction/${callLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -458,9 +472,12 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
 
+    const userInfo = await getHostname(user.dataValues.hostname);
+    const instanceId = userInfo.instanceId;
+
     const existingLogId = existingCallLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -473,7 +490,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 
     const patchLog = await axios.patch(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
@@ -503,7 +520,18 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---TODO.7: Implement message logging---
     // ---------------------------------------
 
-    const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH}`, {
+    const userInfo = await getHostname(user.dataValues.hostname);
+
+    const { userDetailsPath }  = await models.companies.findOne({
+        where: {
+            hostname: userInfo.hostname
+        },
+        raw: true
+    })
+
+    const instanceId = userInfo.instanceId;
+    
+    const caller_id = await axios.get(`https://${instanceId}.service-now.com/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
         }
@@ -518,7 +546,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         }
     }
     const addLogRes = await axios.post(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction`,
+        `https://${instanceId}.service-now.com/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -543,9 +571,12 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
 
+    const userInfo = await getHostname(user.dataValues.hostname);
+    const instanceId = userInfo.instanceId;
+    
     const existingLogId = existingMessageLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -558,7 +589,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         }
     }
     const updateLogRes = await axios.patch(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
@@ -574,7 +605,10 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
 
-    const account = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/account`, {
+    const userInfo = await getHostname(user.dataValues.hostname);
+    const instanceId = userInfo.instanceId;
+    
+    const account = await axios.get(`https://${instanceId}.service-now.com/api/now/account`, {
         headers: {
             'Authorization': authHeader
         }
@@ -588,7 +622,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 
     const contactInfoRes = await axios.post(
-        `https://${process.env.SERVICE_NOW_INSTANCE_ID}.service-now.com/api/now/contact`,
+        `https://${instanceId}.service-now.com/api/now/contact`,
         postBody,
         {
             headers: { 'Authorization': authHeader }

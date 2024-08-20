@@ -3,17 +3,19 @@ const moment = require('moment');
 const url = require('url');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { parse } = require('path');
+const { getTimeZone } = require('../../lib/util');
 
 function getAuthType() {
     return 'oauth';
 }
 
 
-function getOauthInfo() {
+async function getOauthInfo({ hostname }) {
+    const tokenUrl = `https://${hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/auth/oauth2/v1/token`;
     return {
         clientId: process.env.NETSUITE_CRM_CLIENT_ID,
         clientSecret: process.env.NETSUITE_CRM_CLIENT_SECRET,
-        accessTokenUri: process.env.NETSUITE_CRM_TOKEN_URI,
+        accessTokenUri: tokenUrl,
         redirectUri: process.env.NETSUITE_CRM_REDIRECT_URI
     }
 }
@@ -29,6 +31,8 @@ async function getUserInfo({ authHeader, additionalInfo, query }) {
         const name = employeResponse.data.firstName + ' ' + employeResponse.data.lastName;
         const timezoneName = employeResponse.data.time_zone ?? '';
         const timezoneOffset = employeResponse.data.time_zone_offset ?? null;
+        const location = employeResponse.data.location ?? '';
+        const subsidiaryId = employeResponse.data.subsidiary?.id ?? '';
         return {
             successful: true,
             platformUserInfo: {
@@ -39,6 +43,7 @@ async function getUserInfo({ authHeader, additionalInfo, query }) {
                 platformAdditionalInfo: {
                     email: employeResponse.data.email,
                     name: name,
+                    subsidiaryId,
                 },
 
             },
@@ -52,7 +57,7 @@ async function getUserInfo({ authHeader, additionalInfo, query }) {
         console.log({ message: "Error in getting User Info", error });
         const isForbiddenError = isNetSuiteForbiddenError(error);
         const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Employee Record && Lists -> Employee' permission to authorize. Please contact your administrator."
+            ? "Permission violation: Make Sure You have 'Lists -> Employee Record & Lists -> Employee' permission to authorize. Please contact your administrator."
             : "Error in getting NetSuite User Info.";
         return {
             successful: false,
@@ -165,7 +170,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
                 }
             }
         }
-        console.log(`found netsuite contacts... \n\n${JSON.stringify(matchedContactInfo, null, 2)}`);
         matchedContactInfo.push({
             id: 'createNewContact',
             name: 'Create new contact...',
@@ -179,7 +183,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
         console.log({ message: "Error in Finding Contact/Customer", error });
         const isForbiddenError = isNetSuiteForbiddenError(error);
         const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Reports -> SuiteAnalytics Workbook, Lists -> Contacts && Lists -> Customer' permission to fetch details. Please contact your administrator."
+            ? "Permission violation: Make Sure You have 'Reports -> SuiteAnalytics Workbook, Lists -> Contacts & Lists -> Customer' permission to fetch details. Please contact your administrator."
             : "Error in Finding Contact.";
         return {
             successful: false,
@@ -195,16 +199,30 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission }) {
     try {
         const title = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+        const subsidiary = await axios.post(
+            `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+            {
+                q: `SELECT * FROM Subsidiary WHERE id = ${user?.platformAdditionalInfo?.subsidiaryId}`
+            },
+            {
+                headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
+            });
+        const timeZone = getTimeZone(subsidiary.data.items[0]?.country, subsidiary.data.items[0]?.state);
+        const callStartTime = moment(moment(callLog.startTime).toISOString()).tz(timeZone);
+        const callEndTime = moment(callStartTime).add(callLog.duration, 'seconds');
+        const formatedStartTime = callStartTime.format('YYYY-MM-DD HH:mm:ss');
+        const formatedEndTime = callEndTime.format('YYYY-MM-DD HH:mm:ss');
+        //const callDate = moment.tz(moment(callLog.startTime).toISOString(), timeZone).format('YYYY-MM-DD HH:mm:ss');
         let postBody = {
             title: title,
             phone: contactInfo?.phoneNumber || '',
             priority: "MEDIUM",
             status: "COMPLETE",
             startDate: moment(callLog.startTime).toISOString(),
-            message: `\nContact Number: ${contactInfo.phoneNumber}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`,
+            timedEvent: true,
+            message: `\nCall Start Time: ${formatedStartTime}\n Duration In Second: ${callLog.duration}Sec.\n Call End Time : ${formatedEndTime}\nContact Number: ${contactInfo.phoneNumber}\nNote: ${note}${callLog.recording ? `\nCall recording link ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`,
         };
         if (contactInfo.type?.toUpperCase() === 'CONTACT') {
-            console.log({ message: "Contact CallLog", contactInfo })
             const contactInfoRes = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/contact/${contactInfo.id}`, {
                 headers: { 'Authorization': authHeader }
             });
@@ -213,9 +231,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         } else if (contactInfo.type === 'custjob') {
             postBody.company = { id: contactInfo.id };
         }
-        console.log(`adding call log... \n${JSON.stringify(callLog, null, 2)}`);
-        console.log(`with note... \n${note}`);
-        console.log(`with additional info... \n${JSON.stringify(additionalSubmission, null, 2)}`);
 
         const addLogRes = await axios.post(
             `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phonecall`,
@@ -245,6 +260,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             {
                 headers: { 'Authorization': authHeader }
             });*/
+        console.log({ message: "Call Log Added with CallLogId", callLogId });
         return {
             logId: callLogId,
             returnMessage: {
@@ -257,7 +273,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         console.log({ message: "Error in creating Call Log", error });
         const isForbiddenError = isNetSuiteForbiddenError(error);
         const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts && Lists -> Customers' permission to CallLog. Please contact your administrator."
+            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts & Lists -> Customers' permission to CallLog. Please contact your administrator."
             : "Error in Creating Call Log";
         return {
             returnMessage: {
@@ -278,8 +294,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
             {
                 headers: { 'Authorization': authHeader }
             });
-        const note = getLogRes.data?.message.includes('[Call recording link]') ?
-            getLogRes.data?.message.split('Note: ')[1].split('\n[Call recording link]')[0] :
+        const note = getLogRes.data?.message.includes('Call recording link') ?
+            getLogRes.data?.message.split('Note: ')[1].split('\nCall recording link')[0] :
             getLogRes.data?.message.split('Note: ')[1].split('\n\n--- Created via RingCentral CRM Extension')[0];
         return {
             callLogInfo: {
@@ -294,7 +310,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
         console.log({ message: "Error in getting Call Log", error });
         const isForbiddenError = isNetSuiteForbiddenError(error);
         const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts && Lists -> Customers' permission to CallLog. Please contact your administrator."
+            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts & Lists -> Customers' permission to CallLog. Please contact your administrator."
             : "Error in getting NetSuite Call Log.";
         return {
             returnMessage: {
@@ -309,25 +325,23 @@ async function getCallLog({ user, callLogId, authHeader }) {
 
 async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note }) {
     try {
-        console.log({ user, existingCallLog, authHeader, recordingLink, subject, note });
         const existingLogId = existingCallLog.thirdPartyLogId;
         const callLogResponse = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phonecall/${existingLogId}`, { headers: { 'Authorization': authHeader } });
         let messageBody = callLogResponse.data.message;
-        console.log({ messageBody });
         let patchBody = { title: subject };
         if (!!recordingLink) {
             const urlDecodedRecordingLink = decodeURIComponent(recordingLink);
             if (messageBody.includes('\n\n--- Created via RingCentral CRM Extension')) {
-                messageBody = messageBody.replace('\n\n--- Created via RingCentral CRM Extension', `\n[Call recording link]${urlDecodedRecordingLink}\n\n--- Created via RingCentral CRM Extension`);
+                messageBody = messageBody.replace('\n\n--- Created via RingCentral CRM Extension', `\nCall recording link${urlDecodedRecordingLink}\n\n--- Created via RingCentral CRM Extension`);
             }
             else {
-                messageBody += `\n[Call recording link]${urlDecodedRecordingLink}`;
+                messageBody += `\nCall recording link${urlDecodedRecordingLink}`;
             }
         }
         else {
             let originalNote = '';
-            if (messageBody.includes('\n[Call recording link]')) {
-                originalNote = messageBody.split('\n[Call recording link]')[0].split('Note: ')[1];
+            if (messageBody.includes('\nCall recording link')) {
+                originalNote = messageBody.split('\nCall recording link')[0].split('Note: ')[1];
             }
             else {
                 originalNote = messageBody.split('\n\n--- Created via RingCentral CRM Extension')[0].split('Note: ')[1];
@@ -337,7 +351,6 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             messageBody = messageBody.replace(`Note: ${originalNote}`, `Note: ${note}`);
         }
         patchBody.message = messageBody;
-        console.log({ patchBody });
         const patchLogRes = await axios.patch(
             `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phoneCall/${existingLogId}`,
             patchBody,
@@ -356,7 +369,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         console.log({ message: "Error in Updating Call Log", error });
         const isForbiddenError = isNetSuiteForbiddenError(error);
         const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts && Lists -> Customers' permission to CallLog. Please contact your administrator."
+            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts & Lists -> Customers' permission to CallLog. Please contact your administrator."
             : "Error in getting Updating Call Log.";
         return {
             returnMessage: {
@@ -370,7 +383,6 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
 async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
     try {
-        console.log({ message: "Create Message Log", user, contactInfo, message, additionalSubmission, recordingLink, faxDocLink });
         const sender =
         {
             id: contactInfo?.id,
@@ -381,7 +393,6 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             id: user?.id,
             type: 'User'
         }
-
         const userName = user?.dataValues?.platformAdditionalInfo?.name ?? 'NetSuiteCRM';
         const messageType = !!recordingLink ? 'Voicemail' : (!!faxDocLink ? 'Fax' : 'SMS');
         let logBody = '';
@@ -424,7 +435,6 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 
         }
         if (contactInfo.type?.toUpperCase() === 'CONTACT') {
-            console.log({ message: "Contact CallLog", contactInfo })
             const contactInfoRes = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/contact/${contactInfo.id}`, {
                 headers: { 'Authorization': authHeader }
             });
@@ -453,7 +463,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         console.log({ message: "Error in creating Message Log", error });
         const isForbiddenError = isNetSuiteForbiddenError(error);
         const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts && Lists -> Customers' permission to Message Log. Please contact your administrator."
+            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts & Lists -> Customers' permission to Message Log. Please contact your administrator."
             : "Error in Creating Message Log";
         return {
             returnMessage: {
@@ -504,7 +514,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         console.log({ message: "Error in Updating Message Log", error });
         const isForbiddenError = isNetSuiteForbiddenError(error);
         const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts && Lists -> Customers' permission to MessageLog. Please contact your administrator."
+            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts & Lists -> Customers' permission to MessageLog. Please contact your administrator."
             : "Error in Updating Message Log";
         return {
             returnMessage: {
@@ -519,7 +529,6 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType }) {
     try {
         const nameParts = splitName(newContactName);
-        console.log({ message: 'NetSuite Create contact', user, phoneNumber, newContactName, newContactType });
         let contactId = 0;
         switch (newContactType) {
             case 'contact':
@@ -541,7 +550,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                         const createCompany = await axios.post(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/customer`,
                             {
                                 companyName: 'RingCentral_CRM_Extension_Placeholder_Company',
-                                comments: "This company was created automatically by the RingCentral Unified CRM Extension. Feel free to edit, or associate this company's contacts to more appropriate records."
+                                comments: "This company was created automatically by the RingCentral Unified CRM Extension. Feel free to edit, or associate this company's contacts to more appropriate records.",
+                                subsidiary: { id: user.platformAdditionalInfo?.subsidiaryId }
                             }
                             ,
                             {
@@ -554,7 +564,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                         middleName: nameParts.middleName,
                         lastName: nameParts.lastName,
                         phone: phoneNumber || '',
-                        company: { id: companyId }
+                        company: { id: companyId },
+                        subsidiary: { id: user.platformAdditionalInfo?.subsidiaryId }
                     };
                     const createContactRes = await axios.post(
                         `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/contact`,
@@ -585,7 +596,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     middleName: nameParts.middleName,
                     lastName: nameParts.lastName.length > 0 ? nameParts.lastName : nameParts.firstName,
                     phone: phoneNumber || '',
-                    isPerson: true
+                    isPerson: true,
+                    subsidiary: { id: user.platformAdditionalInfo?.subsidiaryId }
 
                 };
                 try {
@@ -632,7 +644,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
         console.log({ message: "Error in creating Contact/Customer", error });
         const isForbiddenError = isNetSuiteForbiddenError(error);
         const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Contacts && Lists -> Customers' permission to Create Contact/Customer. Please contact your administrator."
+            ? "Permission violation: Make Sure You have 'Lists -> Contacts & Lists -> Customers' permission to Create Contact/Customer. Please contact your administrator."
             : "Error in Creating Contact/Customer Log";
         return {
             returnMessage: {
@@ -672,7 +684,6 @@ function isNetSuiteForbiddenError(error) {
     try {
         const data = error?.response?.data;
         const errorDetails = data['o:errorDetails'][0].detail;
-        console.log({ Data: data, errorDetails });
         if (data.title === 'Forbidden' && data.status === 403) {
             return true;
         } else if (errorDetails.includes("Your current role does not have permission ")) {
