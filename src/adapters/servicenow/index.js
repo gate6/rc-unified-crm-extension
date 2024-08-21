@@ -39,13 +39,11 @@ function getBasicAuth({ apiKey }) {
 
 // CASE: If using OAuth
 
-async function getHostname() {
+async function getHostname(hostname) {
     
     const existingUser = await UserModel.findOne({
         where: {
-           hostname: {
-            [Op.like]: '%service-now.com%'
-          }
+           hostname: hostname
         },
         attributes:['id','hostname'],
         raw:true
@@ -53,7 +51,6 @@ async function getHostname() {
 
     const instanceId = existingUser.hostname.substring(0, existingUser.hostname.indexOf('.service-now.com'));
     existingUser.instanceId = instanceId;
-
     return existingUser;
 }
 
@@ -303,7 +300,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 
     numberToQueryArray.push(phoneNumber.trim());
 
-    const userInfo = await getHostname();
+    const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
 
     const stateSelection = await axios.get(
@@ -371,7 +368,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ---TODO.4: Implement call logging---
     // ------------------------------------
 
-    const userInfo = await getHostname();
+    const userInfo = await getHostname(user.dataValues.hostname);
 
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
@@ -445,7 +442,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // ---TODO.5: Implement call log fetching---
     // -----------------------------------------
 
-    const userInfo = await getHostname();
+    const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
 
     const getLogRes = await axios.get(
@@ -475,7 +472,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
 
-    const userInfo = await getHostname();
+    const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
 
     const existingLogId = existingCallLog.thirdPartyLogId;
@@ -523,7 +520,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---TODO.7: Implement message logging---
     // ---------------------------------------
 
-    const userInfo = await getHostname();
+    const userInfo = await getHostname(user.dataValues.hostname);
 
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
@@ -574,7 +571,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
 
-    const userInfo = await getHostname();
+    const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     
     const existingLogId = existingMessageLog.thirdPartyLogId;
@@ -608,7 +605,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
 
-    const userInfo = await getHostname();
+    const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     
     const account = await axios.get(`https://${instanceId}.service-now.com/api/now/account`, {

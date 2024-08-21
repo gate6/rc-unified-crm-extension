@@ -6,7 +6,7 @@ function getAuthType() {
     return 'oauth';
 }
 
-function getOauthInfo({ tokenUrl }) {
+async function getOauthInfo({ tokenUrl }) {
     return {
         clientId: process.env.BULLHORN_CLIENT_ID,
         clientSecret: process.env.BULLHORN_CLIENT_SECRET,
@@ -509,7 +509,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 }
 
 async function getCallLog({ user, callLogId, authHeader }) {
-    let getLogRes
+    let getLogRes;
     try {
         getLogRes = await axios.get(
             `${user.platformAdditionalInfo.restUrl}entity/Note/${callLogId}?fields=comments,candidates,clientContacts`,
