@@ -62,7 +62,6 @@ app.get('/crmManifest', (req, res) => {
                 throw 'author name is required';
             }
             res.json(crmManifest);
-            return ;
         }
         else {
             res.status(400).send('Platform not found');
@@ -179,7 +178,6 @@ app.get('/oauth-callback', async function (req, res) {
         }
     }
     catch (e) {
-        console.log("GIVE FULL ERROR ",e);
         console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
         res.status(400).send(e);
         success = false;
