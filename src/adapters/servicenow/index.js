@@ -298,7 +298,23 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 
     const numberToQueryArray = [];
 
-    numberToQueryArray.push(phoneNumber.trim());
+    if (overridingFormat === '') {
+        numberToQueryArray.push(phoneNumber.trim());
+    }
+    else {
+        const formats = overridingFormat.split(',');
+        for (var format of formats) {
+            const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
+            if (phoneNumberObj.valid) {
+                const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
+                let formattedNumber = format;
+                for (const numberBit of phoneNumberWithoutCountryCode) {
+                    formattedNumber = formattedNumber.replace('*', numberBit);
+                }
+                numberToQueryArray.push(formattedNumber);
+            }
+        }
+    }
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
