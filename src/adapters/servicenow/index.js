@@ -65,7 +65,7 @@ async function getOauthInfo(requestData) {
 
     return {
         clientId: clientId,
-        clientSecret:clientSecret,
+        clientSecret: clientSecret,
         accessTokenUri: tokenUrl,
         redirectUri: crmRedirectUrl
     }
@@ -168,7 +168,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                     };
                 }
                 //allow login of new user
-                if ((checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers)) {
+                if ((checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers) && checkActiveUsers.status == 1) {
 
                     if (checkActiveUsers.customers.some(customer => customer.sysId === id)) {
                         return {
@@ -319,6 +319,31 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
 
+    const count = await models.companies.count({
+        where: {
+            hostname: userInfo.hostname,
+            status: 1
+        }
+    });
+
+    if (count == 0) {
+        return {
+            successful: false,
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
+
     const stateSelection = await axios.get(
         `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
         {
@@ -388,10 +413,29 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
-            hostname: userInfo.hostname
+            hostname: userInfo.hostname,
+            status: 1
         },
         raw: true
     })
+
+    if (!userDetailsPath) {
+        return {
+            successful: false,
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
 
     const instanceId = userInfo.instanceId;
     
@@ -540,10 +584,29 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
-            hostname: userInfo.hostname
+            hostname: userInfo.hostname,
+            status: 1
         },
         raw: true
     })
+
+    if (!userDetailsPath) {
+        return {
+            successful: false,
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
 
     const instanceId = userInfo.instanceId;
     
