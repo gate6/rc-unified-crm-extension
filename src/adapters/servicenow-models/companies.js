@@ -58,6 +58,10 @@ module.exports = function(sequelize, DataTypes) {
     status: {
       type: DataTypes.BOOLEAN,
       allowNull: true
+    },
+    rcAccountId: {
+      type: DataTypes.STRING(100),
+      allowNull: true
     }
   }, {
     sequelize,
