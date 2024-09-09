@@ -55,20 +55,57 @@ async function getHostname(hostname) {
 }
 
 async function getOauthInfo(requestData) {
-
-    const { clientId, clientSecret, crmRedirectUrl, tokenUrl }  = await models.companies.findOne({
-        where: {
-            hostname: requestData.hostname
+    if(!requestData.rcAccountId)
+    {
+        return {
+            successful: false,
+            platformUserInfo: {
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: 'Rc Account id missing.',
+                ttl: 3000
+            }
+        }; 
+    }
+    const isRcIdPresent = await models.companies.findOne({
+        where:{
+            rcAccountId : requestData.rcAccountId
         },
+        attributes:['id','rcAccountId'],
         raw: true
     })
-
-    return {
-        clientId: clientId,
-        clientSecret:clientSecret,
-        accessTokenUri: tokenUrl,
-        redirectUri: crmRedirectUrl
+    if(!isRcIdPresent)
+    {
+        return {
+            successful: false,
+            platformUserInfo: {
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: 'Sorry we could not find this rc account associated with us.',
+                ttl: 3000
+            }
+        };
     }
+    else{
+        const { clientId, clientSecret, crmRedirectUrl, tokenUrl }  = await models.companies.findOne({
+            where: {
+                hostname: requestData.hostname
+            },
+            raw: true
+        })
+    
+        return {
+            clientId: clientId,
+            clientSecret:clientSecret,
+            accessTokenUri: tokenUrl,
+            redirectUri: crmRedirectUrl
+        }
+    }
+
 }
 
 // // CASE: If using OAuth and Auth server requires CLIENT_ID in token exchange request
