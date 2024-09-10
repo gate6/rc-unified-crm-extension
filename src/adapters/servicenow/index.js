@@ -55,21 +55,42 @@ async function getHostname(hostname) {
 }
 
 async function getOauthInfo(requestData) {
+    if(!requestData.rcAccountId) {
+        return {
+            failMessage: 'RingCentral Account ID Missing'
+        }; 
+    }
 
-    const { clientId, clientSecret, crmRedirectUrl, tokenUrl }  = await models.companies.findOne({
+    const isRcIdPresent = await models.companies.findOne({
         where: {
-            hostname: requestData.hostname
+            rcAccountId : requestData.rcAccountId
         },
+        attributes:['id','rcAccountId'],
         raw: true
     })
 
-    return {
-        clientId: clientId,
-        clientSecret: clientSecret,
-        accessTokenUri: tokenUrl,
-        redirectUri: crmRedirectUrl
+    if(!isRcIdPresent){
+        return {
+            failMessage: 'RingCentral Account ID is not Associated with Gate6'
+        }; 
+    } else {
+        const { clientId, clientSecret, crmRedirectUrl, tokenUrl }  = await models.companies.findOne({
+            where: {
+                hostname: requestData.hostname
+            },
+            raw: true
+        })
+    
+        return {
+            clientId: clientId,
+            clientSecret:clientSecret,
+            accessTokenUri: tokenUrl,
+            redirectUri: crmRedirectUrl
+        }
     }
+
 }
+
 
 // // CASE: If using OAuth and Auth server requires CLIENT_ID in token exchange request
 // function getOverridingOAuthOption({ code }) {
@@ -459,6 +480,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     
         const returnedCateogry = stateSelection.data.result.length > 0 ? stateSelection.data.result[0].value : null;
         postBody.state = returnedCateogry;
+        postBody.assigned_to = caller_id.data.result.id;
 
         if (additionalSubmission.type) {
             const typeSelection = await axios.get(
