@@ -55,39 +55,72 @@ async function getHostname(hostname) {
 }
 
 async function getOauthInfo(requestData) {
-    if(!requestData.rcAccountId) {
-        return {
-            failMessage: 'RingCentral Account ID Missing'
-        }; 
-    }
+    // if(!requestData.rcAccountId) {
+    //     return {
+    //         failMessage: 'RingCentral Account ID Missing'
+    //     }; 
+    // }
 
-    const isRcIdPresent = await models.companies.findOne({
+    const companyData = await models.companies.findOne({
         where: {
-            rcAccountId : requestData.rcAccountId
+            hostname: requestData.hostname
         },
-        attributes:['id','rcAccountId'],
         raw: true
-    })
-
-    if(!isRcIdPresent){
-        return {
-            failMessage: 'RingCentral Account ID is not Associated with Gate6'
-        }; 
-    } else {
-        const { clientId, clientSecret, crmRedirectUrl, tokenUrl }  = await models.companies.findOne({
-            where: {
-                hostname: requestData.hostname
-            },
-            raw: true
-        })
+    });
     
+    if (!companyData) {
         return {
-            clientId: clientId,
-            clientSecret:clientSecret,
-            accessTokenUri: tokenUrl,
-            redirectUri: crmRedirectUrl
-        }
+            failMessage: 'Company data not found for the provided hostname.'
+        };
     }
+    
+    const { clientId, clientSecret, crmRedirectUrl, tokenUrl } = companyData;
+    
+    if (!clientId || !clientSecret || !crmRedirectUrl || !tokenUrl) {
+        return {
+            failMessage: 'RingCentral Account is not fully configured with Gate6.'
+        };
+    }
+    
+    return {
+        clientId,
+        clientSecret,
+        accessTokenUri: tokenUrl,
+        redirectUri: crmRedirectUrl
+    };
+    
+
+    // console.log("requestData.rcAccountId", requestData.rcAccountId)
+
+    // const isRcIdPresent = await models.companies.findOne({
+    //     where: {
+    //         rcAccountId : requestData.rcAccountId
+    //     },
+    //     attributes:['id','rcAccountId'],
+    //     raw: true
+    // })
+
+    // console.log("isRcIdPresent", isRcIdPresent)
+
+    // if(!isRcIdPresent){
+    //     return {
+    //         failMessage: 'RingCentral Account ID is not Associated with Gate6'
+    //     }; 
+    // } else {
+    //     const { clientId, clientSecret, crmRedirectUrl, tokenUrl }  = await models.companies.findOne({
+    //         where: {
+    //             hostname: requestData.hostname
+    //         },
+    //         raw: true
+    //     })
+    
+    //     return {
+    //         clientId: clientId,
+    //         clientSecret:clientSecret,
+    //         accessTokenUri: tokenUrl,
+    //         redirectUri: crmRedirectUrl
+    //     }
+    // }
 
 }
 
