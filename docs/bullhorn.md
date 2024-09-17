@@ -29,3 +29,24 @@ Once the extension has been installed, follow these steps to setup and configure
 When you login successfully, the Chrome extension will automatically update to show you are connected to Bullhorn. If you are connected, the button next to Bullhorn will say, "logout".
 
 And with that, you will be connected to Bullhorn and ready to begin using the integration. 
+
+## Auto log with default Note Action preference setup
+
+In Settings, there's a "Bullhorn Default Note Action" entry button.
+
+![Bullhorn default Note Action](img/bullhorn-default-note-action-entry.png)
+
+We provide 3 most common cases here. Once you input the same Note Action string inside the field, the extension will try to find the assigned Note Action and select that for you on the log form page.
+
+There's also a "Apply to auto log" toggle to turn on this defaulting mechanism for auto log so that the extension won't generate unresolved items due to conflicts over multiple Note Actions. 
+
+![Bullhorn default Note Action page](img/bullhorn-default-note-action-page.png)
+
+## Placeholder companies when creating contacts
+
+Bullhorn requires that every contact be associated with a company. When logging calls for new contacts, the Unified CRM extension will first look for a company called, "Placeholder company." If a company with that name is not found, one will be created. Then the contact will be associated with that company record. It is the intent that once the call is complete that an agent do one of the following:
+
+1. Edit the company called "Placeholder Company" with a more appropriate name and with additional details.
+2. Edit the contact to associate it with a more appropriate company stored in Bullhorn. 
+
+In this way, the Unified CRM extension ensures that all contacts created by it conform to the requirements of Bullhorn so that all contact records are complete. 

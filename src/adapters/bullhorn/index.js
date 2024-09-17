@@ -6,7 +6,7 @@ function getAuthType() {
     return 'oauth';
 }
 
-function getOauthInfo({ tokenUrl }) {
+async function getOauthInfo({ tokenUrl }) {
     return {
         clientId: process.env.BULLHORN_CLIENT_ID,
         clientSecret: process.env.BULLHORN_CLIENT_SECRET,
@@ -509,7 +509,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 }
 
 async function getCallLog({ user, callLogId, authHeader }) {
-    let getLogRes
+    let getLogRes;
     try {
         getLogRes = await axios.get(
             `${user.platformAdditionalInfo.restUrl}entity/Note/${callLogId}?fields=comments,candidates,clientContacts`,
@@ -533,7 +533,14 @@ async function getCallLog({ user, callLogId, authHeader }) {
     }
     const logBody = getLogRes.data.data.comments;
     const note = logBody.split('<b>Call details</b>')[0].replaceAll('<br>', '');
-    const contact = getLogRes.data.data.clientContacts.total > 0 ? getLogRes.data.data.clientContacts.data[0] : getLogRes.data.data.candidates.data[0];
+    const totalContactCount = getLogRes.data.data.clientContacts.total + getLogRes.data.data.candidates.total;
+    let contact = {
+        firstName: '',
+        lastName: ''
+    }
+    if (totalContactCount > 0) {
+        contact = getLogRes.data.data.clientContacts.total > 0 ? getLogRes.data.data.clientContacts.data[0] : getLogRes.data.data.candidates.data[0];
+    }
     return {
         callLogInfo: {
             subject: getLogRes.data.data.comments.split('<li><b>Summary</b>: ')[1].split('<li><b>')[0],

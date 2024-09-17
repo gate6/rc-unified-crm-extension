@@ -2,14 +2,14 @@
     "serverUrl": "https://rcservicenowapi.gate6.com",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
-        "name": "Gate6 Labs",
-        "websiteUrl": "",
-        "iconUrl": "",
-        "supportUrl": ""
+        "name": "Gate6",
+        "websiteUrl": "https://www.gate6.com/",
+        "iconUrl": "https://www.gate6.com/images/gate6.png",
+        "supportUrl": "https://www.gate6.com/contact-us/"
     },
     "platforms": {
         "servicenow": {
-            "urlIdentifier": "*servicenow.com*",
+            "urlIdentifier": "*service-now.com*",
             "name": "servicenow",
             "displayName": "servicenow",
             "requestConfig": {
@@ -87,9 +87,80 @@
                             "contactDependent": true
                         }
                     ]
-                }
+            },
+            "feedback": {
+                    "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}",
+                    "elements": [
+                        {
+                            "const": "pageDescription",
+                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
+                            "type": "string",
+                            "bold": false
+                        },
+                        {
+                            "const": "scoreDescription",
+                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
+                            "type": "string",
+                            "bold": true
+                        },
+                        {
+                            "const": "score",
+                            "title": "Score from 1 to 10",
+                            "type": "selection",
+                            "selections": [
+                                {
+                                    "const": "1",
+                                    "title": "1"
+                                },
+                                {
+                                    "const": "2",
+                                    "title": "2"
+                                },
+                                {
+                                    "const": "3",
+                                    "title": "3"
+                                },
+                                {
+                                    "const": "4",
+                                    "title": "4"
+                                },
+                                {
+                                    "const": "5",
+                                    "title": "5"
+                                },
+                                {
+                                    "const": "6",
+                                    "title": "6"
+                                },
+                                {
+                                    "const": "7",
+                                    "title": "7"
+                                },
+                                {
+                                    "const": "8",
+                                    "title": "8"
+                                },
+                                {
+                                    "const": "9",
+                                    "title": "9"
+                                },
+                                {
+                                    "const": "10",
+                                    "title": "10"
+                                }
+                            ],
+                            "required": true
+                        },
+                        {
+                            "const": "feedback",
+                            "title": "Feedback",
+                            "type": "inputField",
+                            "placeholder": "Please share your feedback...",
+                            "required": true
+                        }
+                    ]
+                }}
             }
-        }
     },
-    "version": "1.0.1"
+    "version": "1.0.5"
 }

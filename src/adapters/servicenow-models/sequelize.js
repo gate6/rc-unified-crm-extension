@@ -1,6 +1,6 @@
 const { Sequelize } = require('sequelize');
 const path = require('path')
-console.log(path.join(__dirname,'..','..','.env'));
+// console.log(path.join(__dirname,'..','..','.env'));
 require('dotenv').config({path:path.join(__dirname,'..','..','.env')});
 // console.log(process.env.MYSQL_DATABASE);
 // return 0
