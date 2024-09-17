@@ -62,7 +62,6 @@ app.get('/crmManifest', (req, res) => {
                 throw 'author name is required';
             }
             res.json(crmManifest);
-            return ;
         }
         else {
             res.status(400).send('Platform not found');
@@ -86,7 +85,7 @@ app.get('/pipedrive-redirect', function (req, res) {
         res.sendFile(path.join(__dirname, 'adapters/pipedrive/redirect.html'));
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}.`);
         res.status(500).send(e);
     }
 })
@@ -106,7 +105,7 @@ app.delete('/pipedrive-redirect', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}`);
         res.status(500).send(e);
     }
 })
@@ -131,7 +130,7 @@ app.get('/hostname', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}`);
         res.status(500).send(e);
     }
 })
@@ -179,8 +178,7 @@ app.get('/oauth-callback', async function (req, res) {
         }
     }
     catch (e) {
-        console.log("GIVE FULL ERROR ",e);
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
         res.status(400).send(e);
         success = false;
     }
@@ -224,7 +222,7 @@ app.post('/apiKeyLogin', async function (req, res) {
         success = true;
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
         res.status(400).send(e);
         success = false;
     }
@@ -273,7 +271,7 @@ app.post('/unAuthorize', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
         res.status(400).send(e);
         success = false;
     }
@@ -298,7 +296,7 @@ app.get('/userInfoHash', async function (req, res) {
         res.status(200).send({ extensionId, accountId });
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}`);
         res.status(400).send(e);
     }
 })
@@ -306,6 +304,7 @@ app.get('/contact', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let resultCount = 0;
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
         const jwtToken = req.query.jwtToken;
@@ -314,7 +313,12 @@ app.get('/contact', async function (req, res) {
             platformName = platform;
             const { successful, returnMessage, contact } = await contactCore.findContact({ platform, userId, phoneNumber: req.query.phoneNumber, overridingFormat: req.query.overridingFormat });
             res.status(200).send({ successful, returnMessage, contact });
-            success = true;
+            if(successful)
+            {
+                const nonNewContact = contact.filter(c => !c.isNewContact);
+                resultCount = nonNewContact.length;
+                success = true;
+            }
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
@@ -322,7 +326,7 @@ app.get('/contact', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
         res.status(400).send(e);
         success = false;
     }
@@ -337,7 +341,10 @@ app.get('/contact', async function (req, res) {
         requestDuration: (requestEndTime - requestStartTime) / 1000,
         userAgent,
         ip,
-        author
+        author,
+        extras: {
+            resultCount
+        }
     });
 });
 app.post('/contact', async function (req, res) {
@@ -360,7 +367,7 @@ app.post('/contact', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
         res.status(400).send(e);
         success = false;
     }
@@ -398,7 +405,7 @@ app.get('/callLog', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
         res.status(400).send(e);
         success = false;
     }
@@ -435,7 +442,7 @@ app.post('/callLog', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
         res.status(400).send(e);
         success = false;
     }
@@ -473,7 +480,7 @@ app.patch('/callLog', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
         res.status(400).send(e);
         success = false;
     }
@@ -511,7 +518,7 @@ app.post('/messageLog', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
+        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
         res.status(400).send(e);
         success = false;
     }
@@ -544,150 +551,4 @@ function getAnalyticsVariablesInReqHeaders({ headers }) {
         author
     }
 }
-
-// Legacy endpoints for backward compatibility
-
-app.get('/oauth-callbackV2', async function (req, res) {
-    const requestStartTime = new Date().getTime();
-    let platformName = null;
-    let success = false;
-    const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
-    try {
-        if (!!!req.query?.callbackUri || req.query.callbackUri === 'undefined') {
-            throw 'Missing callbackUri';
-        }
-        platformName = platform = req.query.state ?
-            req.query.state.split('platform=')[1] :
-            decodeURIComponent(req.originalUrl).split('state=')[1].split('&')[0].split('platform=')[1];
-        const hostname = req.query.hostname;
-        const tokenUrl = req.query.tokenUrl;
-        if (!platform) {
-            throw 'Missing platform name';
-        }
-        const hasAuthCodeInCallbackUri = req.query.callbackUri.includes('code=');
-        if (!hasAuthCodeInCallbackUri) {
-            req.query.callbackUri = `${req.query.callbackUri}&code=${req.query.code}`;
-        }
-        const { userInfo, returnMessage } = await authCore.onOAuthCallback({
-            platform,
-            hostname,
-            tokenUrl,
-            callbackUri: req.query.callbackUri,
-            apiUrl: req.query.apiUrl,
-            username: req.query.username,
-            query: req.query
-        });
-        const jwtToken = jwt.generateJwt({
-            id: userInfo.id.toString(),
-            platform: platform
-        });
-        res.status(200).send({ jwtToken, name: userInfo.name, returnMessage });
-        success = true;
-    }
-    catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
-        res.status(400).send(e);
-        success = false;
-    }
-    const requestEndTime = new Date().getTime();
-    analytics.track({
-        eventName: 'OAuth Callback',
-        interfaceName: 'onOAuthCallback',
-        adapterName: platformName,
-        accountId: hashedAccountId,
-        extensionId: hashedExtensionId,
-        success,
-        requestDuration: (requestEndTime - requestStartTime) / 1000,
-        userAgent,
-        ip,
-        author,
-        isLegacy: true
-    });
-})
-
-app.post('/apiKeyLoginV2', async function (req, res) {
-    const requestStartTime = new Date().getTime();
-    let platformName = null;
-    let success = false;
-    const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
-    try {
-        const platform = req.body.platform;
-        platformName = platform;
-        const apiKey = req.body.apiKey;
-        const hostname = req.body.hostname;
-        const additionalInfo = req.body.additionalInfo;
-        if (!platform) {
-            throw 'Missing platform name';
-        }
-        if (!apiKey) {
-            throw 'Missing api key';
-        }
-        const { userInfo, returnMessage } = await authCore.onApiKeyLogin({ platform, hostname, apiKey, additionalInfo });
-        const jwtToken = jwt.generateJwt({
-            id: userInfo.id.toString(),
-            platform: platform
-        });
-        res.status(200).send({ jwtToken, name: userInfo.name, returnMessage });
-        success = true;
-    }
-    catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
-        res.status(400).send(e);
-        success = false;
-    }
-    const requestEndTime = new Date().getTime();
-    analytics.track({
-        eventName: 'API Key Login',
-        interfaceName: 'onApiKeyLogin',
-        adapterName: platformName,
-        accountId: hashedAccountId,
-        extensionId: hashedExtensionId,
-        success,
-        requestDuration: (requestEndTime - requestStartTime) / 1000,
-        userAgent,
-        ip,
-        author,
-        isLegacy: true
-    });
-})
-
-app.get('/contactV2', async function (req, res) {
-    const requestStartTime = new Date().getTime();
-    let platformName = null;
-    let success = false;
-    const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
-    try {
-        const jwtToken = req.query.jwtToken;
-        if (!!jwtToken) {
-            const { id: userId, platform } = jwt.decodeJwt(jwtToken);
-            platformName = platform;
-            const { successful, returnMessage, contact } = await contactCore.findContact({ platform, userId, phoneNumber: req.query.phoneNumber, overridingFormat: req.query.overridingFormat });
-            res.status(200).send({ successful, message: '', contact: contact.filter(c => c.id != 'createNewContact') });
-            success = true;
-        }
-        else {
-            res.status(400).send('Please go to Settings and authorize CRM platform');
-            success = false;
-        }
-    }
-    catch (e) {
-        console.log(`Error: status: ${e.response?.status}. data: ${e.response?.data}`);
-        res.status(400).send(e);
-        success = false;
-    }
-    const requestEndTime = new Date().getTime();
-    analytics.track({
-        eventName: 'Find contact',
-        interfaceName: 'findContact',
-        adapterName: platformName,
-        accountId: hashedAccountId,
-        extensionId: hashedExtensionId,
-        success,
-        requestDuration: (requestEndTime - requestStartTime) / 1000,
-        userAgent,
-        ip,
-        author,
-        isLegacy: true
-    });
-});
 exports.server = app;

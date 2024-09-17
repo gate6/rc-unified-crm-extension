@@ -1,5 +1,37 @@
 # Release notes
 
+## 1.0.7
+
+- Fix: Incoming call pop contact page fixed
+
+## 1.0.6
+
+- Better: User settings are organized in a better way 
+- New: Support page is added to user settings
+- New: Community forum is created, can be accessed via support page -> 'Get support'
+- Clio&Insightly: Number formatters are in user setting contact page now
+
+## 1.0.5
+
+- Better: Bullhorn now has Voicemail default note action
+- Fix: SMS template remembers orders after close
+
+## 1.0.4
+
+- New: An About page in user settings to show info and helper links
+- Better: Factor reset now also cleans up unresolved conflicts
+- Better: SMS template supports drag and drop to arrange item orders
+
+## 1.0.3
+
+- Better: Use SMS template that syncs with RingCentral App's SMS template
+- New: Show notification when a call recording link is uploaded. Typically, a call recording link won't be immediately ready upon hang up. If call is logged right after, call recording will be uploaded when it's ready
+
+## 1.0.2
+
+- Fix: SMS template cannot apply issue
+- New: Factor reset button in user settings
+
 ## 1.0.1
 
 - Fix: RingCentral sign in issue where pop up sign in window is stuck at loading screen
