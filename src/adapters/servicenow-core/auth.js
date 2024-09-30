@@ -13,26 +13,12 @@ async function saveUserInfo(userObj, accessToken, hostname, companyId) {
         //Check Current user exist or not
         const existingUser = await models.customer.findOne({
             where: {
-                [Op.and]: [
-                    {
-                        id,
-                    }
-                ]
+                [Op.and]: [{ id }]
             }
         });
         //if current user exists just do nothing 
-        if (existingUser) {
-            const updateUser = await UserModel1.update({
-                status: 1
-            },
-                {
-                    where: {
-                        id: id
-                    }
-                })
-        }
-        else {
-            const createUser = await models.customer.create({
+        if ( !existingUser?.id ) {
+            await models.customer.create({
                 sysId: userObj.id,
                 firstname: userObj.first_name,
                 lastname: userObj.last_name,
@@ -43,6 +29,7 @@ async function saveUserInfo(userObj, accessToken, hostname, companyId) {
             })
         }
     } catch (error) {
+        console.log("Error while saving user info Gate6 Auth", error)
         return error
     }
 }
