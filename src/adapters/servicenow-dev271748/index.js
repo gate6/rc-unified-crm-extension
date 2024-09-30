@@ -2,7 +2,6 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
-const { UserModel } = require('../../models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
 const Sequelize = require('sequelize');
@@ -38,92 +37,15 @@ function getBasicAuth({ apiKey }) {
 }
 
 // CASE: If using OAuth
+ function getOauthInfo() {
 
-async function getHostname(hostname) {
-    
-    const existingUser = await UserModel.findOne({
-        where: {
-           hostname: hostname
-        },
-        attributes:['id','hostname'],
-        raw:true
-    });
-
-    const instanceId = existingUser.hostname.substring(0, existingUser.hostname.indexOf('.service-now.com'));
-    existingUser.instanceId = instanceId;
-    return existingUser;
-}
-
-async function getOauthInfo(requestData) {
-    // if(!requestData.rcAccountId) {
-    //     return {
-    //         failMessage: 'RingCentral Account ID Missing'
-    //     }; 
-    // }
-
-    const companyData = await models.companies.findOne({
-        where: {
-            hostname: requestData.hostname
-        },
-        raw: true
-    });
-
-    if (!companyData) {
-        return {
-            failMessage: 'Company data not found for the provided hostname.'
-        };
-    }
-    
-    const { clientId, clientSecret, crmRedirectUrl, tokenUrl } = companyData;
-    
-    if (!clientId || !clientSecret || !crmRedirectUrl || !tokenUrl) {
-        return {
-            failMessage: 'RingCentral Account is not fully configured with Gate6.'
-        };
-    }
-    
     return {
-        clientId,
-        clientSecret,
-        accessTokenUri: tokenUrl,
-        redirectUri: crmRedirectUrl
-    };
-    
-
-    // console.log("requestData.rcAccountId", requestData.rcAccountId)
-
-    // const isRcIdPresent = await models.companies.findOne({
-    //     where: {
-    //         rcAccountId : requestData.rcAccountId
-    //     },
-    //     attributes:['id','rcAccountId'],
-    //     raw: true
-    // })
-
-    // console.log("isRcIdPresent", isRcIdPresent)
-
-    // if(!isRcIdPresent){
-    //     return {
-    //         failMessage: 'RingCentral Account ID is not Associated with Gate6'
-    //     }; 
-    // } else {
-    //     const { clientId, clientSecret, crmRedirectUrl, tokenUrl }  = await models.companies.findOne({
-    //         where: {
-    //             hostname: requestData.hostname
-    //         },
-    //         raw: true
-    //     })
-    
-    //     return {
-    //         clientId: clientId,
-    //         clientSecret:clientSecret,
-    //         accessTokenUri: tokenUrl,
-    //         redirectUri: crmRedirectUrl
-    //     }
-    // }
-
+        clientId: process.env.SERVICE_NOW_CLIENT_ID_dev271748,
+        clientSecret:process.env.SERVICE_NOW_CLIENT_SECRET_dev271748,
+        accessTokenUri: process.env.SERVICE_NOW_TOKEN_URL_dev271748,
+        redirectUri: process.env.SERVICE_NOW_CRM_REDIRECT_URI_dev271748
+    }
 }
-
 
 // // CASE: If using OAuth and Auth server requires CLIENT_ID in token exchange request
 // function getOverridingOAuthOption({ code }) {
@@ -132,9 +54,9 @@ async function getOauthInfo(requestData) {
 //         query: {
 //             grant_type: 'authorization_code',
 //             code,
-//             client_id: process.env.SERVICE_NOW_CLIENT_ID,
-//             client_secret: process.env.SERVICE_NOW_CLIENT_SECRET,
-//             redirect_uri: process.env.SERVICE_NOW_CRM_REDIRECT_URI,
+//             client_id: process.env.SERVICE_NOW_CLIENT_ID_dev271748,
+//             client_secret: process.env.SERVICE_NOW_CLIENT_SECRET_dev271748,
+//             redirect_uri: process.env.SERVICE_NOW_CRM_REDIRECT_URI_dev271748,
 //         },
 //         headers: {
 //             Authorization: ''
@@ -145,21 +67,14 @@ async function getOauthInfo(requestData) {
 
 
 // For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
-async function getUserInfo({ authHeader, additionalInfo, hostname}) {
+async function getUserInfo({ authHeader, additionalInfo }) {
    
     // ------------------------------------------------------
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
     try {
 
-        const getCompanyDetails = await models.companies.findOne({
-            where: {
-                hostname: hostname
-            },
-            raw:true
-        })
-
-        const userInfoResponse = await axios.get(`${getCompanyDetails.instanceUrl}/api/${getCompanyDetails.userDetailsPath}`, {
+        const userInfoResponse = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH_dev271748}`, {
             headers: {
                 'Authorization': authHeader
             }
@@ -178,18 +93,16 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
             id = newId;
         }
         let userData = {
-            id: id,
-            email: email,
-            timezoneName: timezoneName,
-            timezoneOffset: timezoneOffset,
-            name: name,
-            first_name: userInfoResponse.data.result.first_name,
-            last_name: userInfoResponse.data.result.last_name
+            id:id,
+            email:email,
+            timezoneName:timezoneName,
+            timezoneOffset:timezoneOffset,
+            name:name
         }
         //Get information of company along with its customers based on hostname
-        const checkActiveUsers = await models.companies.findOne({
+        const checkActiveUsers = await models.companies.findAll({
             where: {
-                hostname: hostname
+                hostname: process.env.SERVICE_NOW_HOSTNAME_dev271748
             },
             include: [{
                 model: models.customer,
@@ -199,14 +112,30 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
             logging: false,
         })
         //check if the current company exists in the MYSQL database if not exists thorw error
-
-        if (checkActiveUsers) {
+        if (checkActiveUsers.length == 0) {
+            return {
+                successful: false,
+                platformUserInfo: {
+                    id,
+                    name,
+                    timezoneName,
+                    timezoneOffset,
+                    platformAdditionalInfo: {}
+                },
+                returnMessage: {
+                    messageType: 'danger',
+                    message: 'Could not find the company details.',
+                    ttl: 3000
+                }
+            };
+        }
+        if (checkActiveUsers.length) {
             //Fetch the all the customers for the company and check the current loggedInUser is new or existing
-            if (checkActiveUsers.customers) {
+            if (checkActiveUsers[0].customers) {
                 //check the number of users allowed for the company and compare them with the current active users 
                 //if the max numbers of users is greater than the active customers we allow to insert new customer
 
-                if (userData.name == 'admin' && checkActiveUsers.customers.some(customer => customer.email === email)) {
+                if (checkActiveUsers[0].customers.some(customer => customer.email === email)) {
                     return {
                         successful: true,
                         platformUserInfo: {
@@ -224,9 +153,9 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                     };
                 }
                 //allow login of new user
-                if ((checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers) && checkActiveUsers.status == 1) {
+                if ((checkActiveUsers[0].customers.length < checkActiveUsers[0].maxAllowedUsers)) {
 
-                    if (checkActiveUsers.customers.some(customer => customer.sysId === id)) {
+                    if (checkActiveUsers[0].customers.some(customer => customer.sysId === id)) {
                         return {
                             successful: true,
                             platformUserInfo: {
@@ -246,7 +175,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                     else {
                         const accessToken = authHeader.split(' ')[1];
                         //Save the auth token and new user information in the MYSQL customers table
-                        await saveUserInfo(userData, accessToken, checkActiveUsers.dataValues.hostname, checkActiveUsers.dataValues.id);
+                        await saveUserInfo(userData, accessToken, checkActiveUsers[0].dataValues.hostname, checkActiveUsers[0].dataValues.id);
                         return {
                             successful: true,
                             platformUserInfo: {
@@ -283,26 +212,9 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                 }
             }
 
-        } else {
-            return {
-                successful: false,
-                platformUserInfo: {
-                    id,
-                    name,
-                    timezoneName,
-                    timezoneOffset,
-                    platformAdditionalInfo: {}
-                },
-                returnMessage: {
-                    messageType: 'danger',
-                    message: 'Could not find the company details.',
-                    ttl: 3000
-                }
-            };
         }
 
     } catch (error) {
-        console.log("Exception in getUserInfo ", error);
         return {
             successful: false,
             returnMessage: {
@@ -354,60 +266,16 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 
     const numberToQueryArray = [];
 
-    if (overridingFormat === '') {
-        numberToQueryArray.push(phoneNumber.trim());
-    }
-    else {
-        const formats = overridingFormat.split(',');
-        for (var format of formats) {
-            const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
-            if (phoneNumberObj.valid) {
-                const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
-                let formattedNumber = format;
-                for (const numberBit of phoneNumberWithoutCountryCode) {
-                    formattedNumber = formattedNumber.replace('*', numberBit);
-                }
-                numberToQueryArray.push(formattedNumber);
-            }
-        }
-    }
-
-    const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId;
-
-    const count = await models.companies.count({
-        where: {
-            hostname: userInfo.hostname,
-            status: 1
-        }
-    });
-
-    if (count == 0) {
-        return {
-            successful: false,
-            platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
-            },
-            returnMessage: {
-                messageType: 'danger',
-                message: `You are not having an active license. Please contact us.`,
-                ttl: 3000
-            }
-        };
-    }
+    numberToQueryArray.push(phoneNumber.trim());
 
     const stateSelection = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
     
     const typeSelection = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
@@ -423,7 +291,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
-            `https://${instanceId}.service-now.com/api/now/contact?sysparm_query=phoneLIKE${numberToQuery}`,
+            `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/contact?sysparm_query=phoneLIKE${numberToQuery}`,
             {
                 headers: { 'Authorization':  authHeader }
             });
@@ -465,37 +333,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ---TODO.4: Implement call logging---
     // ------------------------------------
 
-    const userInfo = await getHostname(user.dataValues.hostname);
-
-    const { userDetailsPath }  = await models.companies.findOne({
-        where: {
-            hostname: userInfo.hostname,
-            status: 1
-        },
-        raw: true
-    })
-
-    if (!userDetailsPath) {
-        return {
-            successful: false,
-            platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
-            },
-            returnMessage: {
-                messageType: 'danger',
-                message: `You are not having an active license. Please contact us.`,
-                ttl: 3000
-            }
-        };
-    }
-
-    const instanceId = userInfo.instanceId;
-    
-    const caller_id = await axios.get(`https://${instanceId}.service-now.com/api/${userDetailsPath}`, {
+    const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH_dev271748}`, {
         headers: {
             'Authorization': authHeader
         }
@@ -508,18 +346,17 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     if (additionalSubmission && additionalSubmission.state){
         const stateSelection = await axios.get(
-            `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${additionalSubmission.state}&sysparm_fields=sys_id,label,value`,
+            `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${additionalSubmission.state}&sysparm_fields=sys_id,label,value`,
             {
                 headers: { 'Authorization':  authHeader }
             });
     
         const returnedCateogry = stateSelection.data.result.length > 0 ? stateSelection.data.result[0].value : null;
         postBody.state = returnedCateogry;
-        postBody.assigned_to = caller_id.data.result.id;
 
         if (additionalSubmission.type) {
             const typeSelection = await axios.get(
-                `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${additionalSubmission.type}&sysparm_fields=sys_id,value,lable`,
+                `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${additionalSubmission.type}&sysparm_fields=sys_id,value,lable`,
                 {
                     headers: { 'Authorization':  authHeader }
                 });
@@ -535,7 +372,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     postBody.urgency = (additionalSubmission && additionalSubmission.urgency) ? additionalSubmission.urgency : 3;
 
     const addLogRes = await axios.post(
-        `https://${instanceId}.service-now.com/api/now/table/interaction`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -559,11 +396,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // ---TODO.5: Implement call log fetching---
     // -----------------------------------------
 
-    const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId;
-
     const getLogRes = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/interaction/${callLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/interaction/${callLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -589,12 +423,9 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
 
-    const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId;
-
     const existingLogId = existingCallLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -607,7 +438,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 
     const patchLog = await axios.patch(
-        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
@@ -637,37 +468,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---TODO.7: Implement message logging---
     // ---------------------------------------
 
-    const userInfo = await getHostname(user.dataValues.hostname);
-
-    const { userDetailsPath }  = await models.companies.findOne({
-        where: {
-            hostname: userInfo.hostname,
-            status: 1
-        },
-        raw: true
-    })
-
-    if (!userDetailsPath) {
-        return {
-            successful: false,
-            platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
-            },
-            returnMessage: {
-                messageType: 'danger',
-                message: `You are not having an active license. Please contact us.`,
-                ttl: 3000
-            }
-        };
-    }
-
-    const instanceId = userInfo.instanceId;
-    
-    const caller_id = await axios.get(`https://${instanceId}.service-now.com/api/${userDetailsPath}`, {
+    const caller_id = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/${process.env.SERVICE_NOW_USER_DETAILS_PATH_dev271748}`, {
         headers: {
             'Authorization': authHeader
         }
@@ -682,7 +483,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         }
     }
     const addLogRes = await axios.post(
-        `https://${instanceId}.service-now.com/api/now/table/interaction`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -707,12 +508,9 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
 
-    const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId;
-    
     const existingLogId = existingMessageLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -725,7 +523,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         }
     }
     const updateLogRes = await axios.patch(
-        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
@@ -741,10 +539,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
 
-    const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId;
-    
-    const account = await axios.get(`https://${instanceId}.service-now.com/api/now/account`, {
+    const account = await axios.get(`https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/account`, {
         headers: {
             'Authorization': authHeader
         }
@@ -758,7 +553,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 
     const contactInfoRes = await axios.post(
-        `https://${instanceId}.service-now.com/api/now/contact`,
+        `https://${process.env.SERVICE_NOW_INSTANCE_ID_dev271748}.service-now.com/api/now/contact`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
