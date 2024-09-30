@@ -67,7 +67,7 @@ async function getOauthInfo(requestData) {
         },
         raw: true
     });
-    
+
     if (!companyData) {
         return {
             failMessage: 'Company data not found for the provided hostname.'
@@ -178,11 +178,13 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
             id = newId;
         }
         let userData = {
-            id:id,
-            email:email,
-            timezoneName:timezoneName,
-            timezoneOffset:timezoneOffset,
-            name:name
+            id: id,
+            email: email,
+            timezoneName: timezoneName,
+            timezoneOffset: timezoneOffset,
+            name: name,
+            first_name: userInfoResponse.data.result.first_name,
+            last_name: userInfoResponse.data.result.last_name
         }
         //Get information of company along with its customers based on hostname
         const checkActiveUsers = await models.companies.findOne({
@@ -204,7 +206,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                 //check the number of users allowed for the company and compare them with the current active users 
                 //if the max numbers of users is greater than the active customers we allow to insert new customer
 
-                if (checkActiveUsers.customers.some(customer => customer.email === email)) {
+                if (userData.name == 'admin' && checkActiveUsers.customers.some(customer => customer.email === email)) {
                     return {
                         successful: true,
                         platformUserInfo: {
