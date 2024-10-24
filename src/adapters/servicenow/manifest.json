@@ -9,6 +9,9 @@
     },
     "platforms": {
         "servicenow": {
+            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
+            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
             "urlIdentifier": "*service-now.com*",
             "name": "servicenow",
             "displayName": "servicenow",
@@ -31,8 +34,8 @@
                     }
                 },
                 "oauth": {
-                    "authUrl": "https://dev194338.service-now.com/oauth_auth.do",
-                    "clientId": "28f5e591b712021007de332ca7b91efb",
+                    "authUrl": "https://dev254249.service-now.com/oauth_auth.do",
+                    "clientId": "77a84277d15d1210909d516826f605b6",
                     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
                     "customState": "",
                     "scope": ""
@@ -41,14 +44,53 @@
             "customState": "",
             "scope": "",
             "canOpenLogPage": true,
-            "contactPageUrl":"https://dev194338.service-now.com/customer_contact.do?sys_id={contactId}",
-            "logPageUrl":"https://dev194338.service-now.com/interaction.do?sys_id={logId}",
+            "contactPageUrl":"https://dev254249.service-now.com/customer_contact.do?sys_id={contactId}",
+            "logPageUrl":"https://dev254249.service-now.com/interaction.do?sys_id={logId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
                     "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
                     "videoLink": "https://youtu.be/pQgdsAR1UCI"
                 }
             },
+            "settings": [
+                {
+                    "id": "serviceNowState",
+                    "type": "section",
+                    "name": "serviceNow options",
+                    "items": [
+                        {
+                            "id": "noteActionMatchWarning",
+                            "name": "Info: note action matching warning",
+                            "type": "warning",
+                            "value": "Note action value match ignores cases and spaces"
+                        },
+                        {
+                            "id": "serviceNowInboundCallNoteAction",
+                            "type": "inputField",
+                            "name": "Default action for inbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowOutboundCallNoteAction",
+                            "type": "inputField",
+                            "name": "Default action for outbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowMessageNoteAction",
+                            "type": "inputField",
+                            "name": "Default action for SMS",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowVoicemailNoteAction",
+                            "type": "inputField",
+                            "name": "Default action for voicemails",
+                            "placeholder": "Enter action value"
+                        }
+                    ]
+                }
+            ],
             "page": {
                 "callLog": {
                     "additionalFields": [
@@ -56,13 +98,31 @@
                             "const": "state",
                             "title": "State",
                             "type": "selection",
-                            "contactDependent": true
+                            "contactDependent": true,
+                            "defaultSettingId": "serviceNowState",
+                            "defaultSettingValues": {
+                                "message": {
+                                    "settingId": "serviceNowMessageNoteAction"
+                                },
+                                "voicemail": {
+                                    "settingId": "serviceNowVoicemailNoteAction"
+                                }
+                            }
                         },
                         {
                             "const": "type",
                             "title": "Type",
                             "type": "selection",
-                            "contactDependent": true
+                            "contactDependent": true,
+                            "defaultSettingId": "serviceNowState",
+                            "defaultSettingValues": {
+                                "message": {
+                                    "settingId": "serviceNowMessageNoteAction"
+                                },
+                                "voicemail": {
+                                    "settingId": "serviceNowVoicemailNoteAction"
+                                }
+                            }
                         }
                     ]
                 },

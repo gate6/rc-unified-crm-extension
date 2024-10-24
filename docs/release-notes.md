@@ -1,5 +1,31 @@
 # Release notes
 
+## 1.1.0
+
+- New: Show error page when CRM initialization fails
+- Better: Use local cached contact info to avoid rate limit issue
+- Better: Auto call log now supports retrospectively logging up to 100 unlogged records upon extension open
+- Bullhorn: Default note action matching ignores case and spaces
+- Bullhorn: Fix issue on user id confusion
+
+## 1.0.10
+
+- Change: Unreolved tab is removed now. To check out unlogged calls, there's now a filter on call history page
+- Change: Updated notification UI.
+- Fix: Numbers can now be copied from call page and call history page
+- Fix: Click-to-dial now supports detecting phone numbers in input fields
+- Fix: Click-to-dial now supports detecting extension numbers with format as eg. +13334445555#134
+
+## 1.0.9
+
+- New: Call history page now has a search bar with filters
+- New: Contact pop settings now support both inbound and outbound calls on different timings
+- New: RingCentral team message is added as a new tab
+
+## 1.0.8
+
+- New: More historical call records can be viewed from call history page with 'Load more' button
+
 ## 1.0.7
 
 - Fix: Incoming call pop contact page fixed
@@ -37,7 +63,8 @@
 - Fix: RingCentral sign in issue where pop up sign in window is stuck at loading screen
 - Better: Auto log conflict messages now contain more meaningful info
 
-### Bullhorn
+**Bullhorn**
+
 - Better: Default Note Action is now moved to User Settings where you can setup default actions. Can also work for auto log.
 
 ## 1.0.0

@@ -1,6 +1,7 @@
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
+const { UserModel } = require('../../models/userModel');
 
 function getAuthType() {
     return 'oauth';
@@ -15,13 +16,48 @@ async function getOauthInfo({ tokenUrl }) {
     }
 }
 
+async function tempMigrateUserId({ existingUser }) {
+    const bhRestToken = existingUser.platformAdditionalInfo.bhRestToken;
+    const existingUserId = existingUser.id.replace('-bullhorn', '');
+    let userInfoResponse
+    try {
+        userInfoResponse = await axios.get(`${existingUser.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,masterUserID&BhRestToken=${bhRestToken}&where=id=${existingUserId}`);
+    }
+    catch (e) {
+        if (isAuthError(e.response.status)) {
+            existingUser = await refreshSessionToken(existingUser);
+            userInfoResponse = await axios.get(`${existingUser.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,masterUserID&BhRestToken=${bhRestToken}&where=id=${existingUserId}`);
+        }
+    }
+    const newUserId = userInfoResponse.data.data[0]?.masterUserID;
+    if(!!!newUserId){
+        return null;
+    }
+    const newUser = await UserModel.create({
+        id: `${newUserId}-bullhorn`,
+        hostname: existingUser.hostname,
+        timezoneName: existingUser.timezoneName,
+        timezoneOffset: existingUser.timezoneOffset,
+        platform: existingUser.platform,
+        accessToken: existingUser.accessToken,
+        refreshToken: existingUser.refreshToken,
+        tokenExpiry: existingUser.tokenExpiry,
+        platformAdditionalInfo: existingUser.platformAdditionalInfo
+    });
+    await existingUser.destroy();
+    return {
+        id: newUser.id,
+        name: userInfoResponse.data.name
+    }
+}
+
 async function getUserInfo({ authHeader, tokenUrl, apiUrl, username }) {
     try {
         const userLoginResponse = await axios.post(`${apiUrl}/login?version=2.0&access_token=${authHeader.split('Bearer ')[1]}`);
         const { BhRestToken: bhRestToken, restUrl } = userLoginResponse.data;
-        const userInfoResponse = await axios.get(`${restUrl}query/CorporateUser?fields=id,name,timeZoneOffsetEST&BhRestToken=${bhRestToken}&where=username='${username}'`);
+        const userInfoResponse = await axios.get(`${restUrl}query/CorporateUser?fields=id,name,timeZoneOffsetEST,masterUserID&BhRestToken=${bhRestToken}&where=username='${username}'`);
         const userData = userInfoResponse.data.data[0];
-        const id = `${userData.id.toString()}-bullhorn`;
+        const id = `${userData.masterUserID.toString()}-bullhorn`;
         const name = userData.name;
         const timezoneOffset = userData.timeZoneOffsetEST - 5 * 60;
         const timezoneName = '';
@@ -42,7 +78,7 @@ async function getUserInfo({ authHeader, tokenUrl, apiUrl, username }) {
             },
             returnMessage: {
                 messageType: 'success',
-                message: 'Successfully connceted to Bullhorn.',
+                message: 'Successfully connected to Bullhorn.',
                 ttl: 3000
             }
         };
@@ -98,7 +134,7 @@ async function findContact({ user, phoneNumber }) {
             });
     }
     catch (e) {
-        if (e.response.status === 401) {
+        if (isAuthError(e.response.status)) {
             user = await refreshSessionToken(user);
             commentActionListResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}settings/commentActionList`,
                 {
@@ -264,7 +300,9 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         personReference: {
             id: contactInfo.id
         },
-        dateAdded: callLog.startTime
+        dateAdded: callLog.startTime,
+        externalID: callLog.sessionId,
+        minutesSpent: callLog.duration / 60
     }
     let addLogRes;
     try {
@@ -279,7 +317,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         );
     }
     catch (e) {
-        if (e.response.status === 401) {
+        if (isAuthError(e.response.status)) {
             user = await refreshSessionToken(user);
             addLogRes = await axios.put(
                 `${user.platformAdditionalInfo.restUrl}entity/Note`,
@@ -315,7 +353,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             });
     }
     catch (e) {
-        if (e.response.status === 401) {
+        if (isAuthError(e.response.status)) {
             user = await refreshSessionToken(user);
             getLogRes = await axios.get(
                 `${user.platformAdditionalInfo.restUrl}entity/Note/${existingBullhornLogId}?fields=comments`,
@@ -369,7 +407,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const noteActions = additionalSubmission.noteActions ?? '';
     let userInfoResponse;
     try {
-        userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=id=${user.id.replace('-bullhorn', '')}`,
+        userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=masterUserID=${user.id.replace('-bullhorn', '')}`,
             {
                 headers: {
                     BhRestToken: user.platformAdditionalInfo.bhRestToken
@@ -377,9 +415,9 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             });
     }
     catch (e) {
-        if (e.response.status === 401) {
+        if (isAuthError(e.response.status)) {
             user = await refreshSessionToken(user);
-            userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=id=${user.id.replace('-bullhorn', '')}`,
+            userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=masterUserID=${user.id.replace('-bullhorn', '')}`,
                 {
                     headers: {
                         BhRestToken: user.platformAdditionalInfo.bhRestToken
@@ -454,7 +492,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     const existingLogId = existingMessageLog.thirdPartyLogId;
     let userInfoResponse;
     try {
-        userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=id=${user.id.replace('-bullhorn', '')}`,
+        userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=masterUserID=${user.id.replace('-bullhorn', '')}`,
             {
                 headers: {
                     BhRestToken: user.platformAdditionalInfo.bhRestToken
@@ -462,9 +500,9 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
             });
     }
     catch (e) {
-        if (e.response.status === 401) {
+        if (isAuthError(e.response.status)) {
             user = await refreshSessionToken(user);
-            userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=id=${user.id.replace('-bullhorn', '')}`,
+            userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=masterUserID=${user.id.replace('-bullhorn', '')}`,
                 {
                     headers: {
                         BhRestToken: user.platformAdditionalInfo.bhRestToken
@@ -520,7 +558,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
             });
     }
     catch (e) {
-        if (e.response.status === 401) {
+        if (isAuthError(e.response.status)) {
             user = await refreshSessionToken(user);
             getLogRes = await axios.get(
                 `${user.platformAdditionalInfo.restUrl}entity/Note/${callLogId}?fields=comments,candidates,clientContacts`,
@@ -563,6 +601,10 @@ async function refreshSessionToken(user) {
     return user;
 }
 
+function isAuthError(statusCode) {
+    return statusCode >= 400 && statusCode < 500;
+}
+
 exports.getAuthType = getAuthType;
 exports.getOauthInfo = getOauthInfo;
 exports.getOverridingOAuthOption = getOverridingOAuthOption;
@@ -575,3 +617,4 @@ exports.getCallLog = getCallLog;
 exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
+exports.tempMigrateUserId = tempMigrateUserId;
