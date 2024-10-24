@@ -80,11 +80,11 @@ async function createCallLog({ platform, userId, incomingData }) {
         }
         return { successful: true, logId, returnMessage };
     } catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platform}`);
+        console.log(`platform: ${platform} \n${e.stack}`);
         if (e.response?.status === 429) {
             return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
         }
-        return { successful: false };
+        return { successful: false, returnMessage: { message: `Failed to create call log.`, messageType: 'warning', ttl: 5000 } };
     }
 }
 
@@ -184,11 +184,17 @@ async function updateCallLog({ platform, userId, incomingData }) {
         }
         return { successful: false };
     } catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platform}`);
+        console.log(`platform: ${platform} \n${e.stack}`);
         if (e.response?.status === 429) {
             return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
         }
-        return { successful: false };
+        if(!!incomingData.recordingLink)
+        {
+            return { successful: false, returnMessage: { message: `Failed to upload call recording link.`, messageType: 'warning', ttl: 5000 } };
+        }
+        else{
+            return { successful: false, returnMessage: { message: `Failed to update call log. Please check if the log entity still exist on ${platform}`, messageType: 'warning', ttl: 5000 } };
+        }
     }
 }
 
@@ -310,11 +316,11 @@ async function createMessageLog({ platform, userId, incomingData }) {
         return { successful: true, logIds, returnMessage };
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platform}`);
+        console.log(`platform: ${platform} \n${e.stack}`);
         if (e.response?.status === 429) {
             return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
         }
-        return { successful: false };
+        return { successful: false, returnMessage: { message: `Failed to create message log.`, messageType: 'warning', ttl: 5000 } };
     }
 }
 
