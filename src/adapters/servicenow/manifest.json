@@ -59,31 +59,68 @@
                     "name": "serviceNow options",
                     "items": [
                         {
-                            "id": "noteActionMatchWarning",
+                            "id": "stateMatchWarning",
                             "name": "Info: note action matching warning",
                             "type": "warning",
                             "value": "Note action value match ignores cases and spaces"
                         },
                         {
-                            "id": "serviceNowInboundCallNoteAction",
+                            "id": "serviceNowInboundCallState",
                             "type": "inputField",
                             "name": "Default action for inbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
-                            "id": "serviceNowOutboundCallNoteAction",
+                            "id": "serviceNowOutboundCallState",
                             "type": "inputField",
                             "name": "Default action for outbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
-                            "id": "serviceNowMessageNoteAction",
+                            "id": "serviceNowMessageState",
                             "type": "inputField",
                             "name": "Default action for SMS",
                             "placeholder": "Enter action value"
                         },
                         {
-                            "id": "serviceNowVoicemailNoteAction",
+                            "id": "serviceNowVoicemailState",
+                            "type": "inputField",
+                            "name": "Default action for voicemails",
+                            "placeholder": "Enter action value"
+                        }
+                    ]
+                },
+                {
+                    "id": "serviceNowType",
+                    "type": "section",
+                    "name": "serviceNow options",
+                    "items": [
+                        {
+                            "id": "typeMatchWarning",
+                            "name": "Info: note action matching warning",
+                            "type": "warning",
+                            "value": "Note action value match ignores cases and spaces"
+                        },
+                        {
+                            "id": "serviceNowInboundCallType",
+                            "type": "inputField",
+                            "name": "Default action for inbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowOutboundCallType",
+                            "type": "inputField",
+                            "name": "Default action for outbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowMessageType",
+                            "type": "inputField",
+                            "name": "Default action for SMS",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowVoicemailType",
                             "type": "inputField",
                             "name": "Default action for voicemails",
                             "placeholder": "Enter action value"
@@ -102,10 +139,10 @@
                             "defaultSettingId": "serviceNowState",
                             "defaultSettingValues": {
                                 "message": {
-                                    "settingId": "serviceNowMessageNoteAction"
+                                    "settingId": "serviceNowMessageState"
                                 },
                                 "voicemail": {
-                                    "settingId": "serviceNowVoicemailNoteAction"
+                                    "settingId": "serviceNowVoicemailState"
                                 }
                             }
                         },
@@ -114,13 +151,13 @@
                             "title": "Type",
                             "type": "selection",
                             "contactDependent": true,
-                            "defaultSettingId": "serviceNowState",
+                            "defaultSettingId": "serviceNowType",
                             "defaultSettingValues": {
                                 "message": {
-                                    "settingId": "serviceNowMessageNoteAction"
+                                    "settingId": "serviceNowMessageType"
                                 },
                                 "voicemail": {
-                                    "settingId": "serviceNowVoicemailNoteAction"
+                                    "settingId": "serviceNowVoicemailTypr"
                                 }
                             }
                         }
