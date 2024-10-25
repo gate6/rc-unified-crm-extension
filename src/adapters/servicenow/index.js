@@ -531,8 +531,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         
     }
 
-    // postBody.impact = (additionalSubmission && additionalSubmission.impact) ? additionalSubmission.impact : 3;
-    // postBody.urgency = (additionalSubmission && additionalSubmission.urgency) ? additionalSubmission.urgency : 3;
+    postBody.impact = (additionalSubmission && additionalSubmission.impact) ? additionalSubmission.impact : 3;
+    postBody.urgency = (additionalSubmission && additionalSubmission.urgency) ? additionalSubmission.urgency : 3;
 
     const addLogRes = await axios.post(
         `https://${instanceId}.service-now.com/api/now/table/interaction`,
