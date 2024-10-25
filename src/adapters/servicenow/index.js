@@ -506,8 +506,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         work_notes: `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`
     }
 
-    console.log("additionalSubmission", additionalSubmission)
-
     if (additionalSubmission && additionalSubmission.state){
         const stateSelection = await axios.get(
             `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${additionalSubmission.state}&sysparm_fields=sys_id,label,value`,
