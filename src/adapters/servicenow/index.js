@@ -440,8 +440,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
         }
     }
 
-    console.log("FindCOntact")
-
     matchedContactInfo.push({
         id: 'createNewContact',
         name: 'Create new contact...',
