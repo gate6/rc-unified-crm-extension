@@ -20,7 +20,7 @@
                 "oauth": {
                     "authUrl": "https://oauth.pipedrive.com/oauth/authorize",
                     "clientId": "5d4736e322561f57",
-                    "redirectUri": "https://rc-crmapi.test.gate6.com/pipedrive-redirect"
+                    "redirectUri": "https://unified-crm-extension.labs.ringcentral.com/pipedrive-redirect"
                 }
             },
             "canOpenLogPage": false,
