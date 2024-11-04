@@ -4,6 +4,7 @@ const url = require('url');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { parse } = require('path');
 const { getTimeZone } = require('../../lib/util');
+const { get } = require('shortid/lib/alphabet');
 
 function getAuthType() {
     return 'oauth';
@@ -22,17 +23,23 @@ async function getOauthInfo({ hostname }) {
 
 async function getUserInfo({ authHeader, additionalInfo, query }) {
     try {
-        const url = `https://${query.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/employee/${query.entity}`;
-        const employeResponse = await axios.get(url,
-            {
+        let getCurrentLoggedInUserResponse;
+        try {
+            const getCurrentLoggedInUserUrl = `https://${query.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_getcurrentuser&deploy=customdeploy_getcurrentuser`;
+            getCurrentLoggedInUserResponse = await axios.get(getCurrentLoggedInUserUrl, {
                 headers: { 'Authorization': authHeader }
             });
-        const id = query.entity;
-        const name = employeResponse.data.firstName + ' ' + employeResponse.data.lastName;
-        const timezoneName = employeResponse.data.time_zone ?? '';
-        const timezoneOffset = employeResponse.data.time_zone_offset ?? null;
-        const location = employeResponse.data.location ?? '';
-        const subsidiaryId = employeResponse.data.subsidiary?.id ?? '';
+        } catch (e) {
+            console.log({ message: "Error in getting employee information using RestLet" });
+            return {
+                successful: false,
+                returnMessage: {
+                    messageType: 'danger',
+                    message: "It appears that your SuiteApp is an older version. Please update it to the latest version.",
+                    ttl: 60000
+                }
+            }
+        }
         let oneWorldEnabled;
         try {
             const checkOneWorldLicenseUrl = `https://${query.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_getoneworldlicense_scriptid&deploy=customdeploy_getoneworldlicense_deployid`;
@@ -46,17 +53,68 @@ async function getUserInfo({ authHeader, additionalInfo, query }) {
                 oneWorldEnabled = true;
             }
         }
+        try {
+            const checkPermissionSetUrl = `https://${query.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_checkrolepermissionscriptid&deploy=customdeploy_checkrolepermissiondeployid`;
+            const requestData = {
+                requiredPermissions: [
+                    "LIST_CONTACT",
+                    "REPO_ANALYTICS",
+                    "TRAN_SALESORD",
+                    "LIST_CUSTJOB",
+                    "ADMI_LOGIN_OAUTH2",
+                    "ADMI_RESTWEBSERVICES",
+                    "LIST_CALL",
+                    "LIST_SUBSIDIARY"
+                ]
+            };
+            const permissionMessages = {
+                "LIST_CONTACT": "List -> Contact -> Full",
+                "LIST_CUSTJOB": "List -> Customer -> Full",
+                "LIST_CALL": "List -> Phone Calls -> Full",
+                "LIST_SUBSIDIARY": "List -> Subsidiaries -> View",
+                "REPO_ANALYTICS": "Report -> SuiteAnalytics Workbook -> Edit",
+                "TRAN_SALESORD": "Transactions -> Sales Orders -> Full",
+                "ADMI_LOGIN_OAUTH2": "Setup -> Log in using OAuth 2.0 Access Tokens -> Full",
+                "ADMI_RESTWEBSERVICES": "Setup -> REST Web Services -> Full"
+            };
+
+            const permissionsResponse = await axios.post(checkPermissionSetUrl, requestData, {
+                headers: { 'Authorization': authHeader }
+            });
+            console.log({ Data: permissionsResponse.data });
+            const missingPermissions = Object.keys(permissionsResponse?.data?.permissionResults).filter(permission => {
+                if (permission === "LIST_SUBSIDIARY" && !oneWorldEnabled) {
+                    return false; // Skip this permission if oneWorldEnabled is false
+                }
+                return !permissionsResponse?.data?.permissionResults[permission]; // Include other permissions that are not granted
+            });
+            console.log({ missingPermissions });
+            if (missingPermissions.length > 0) {
+                const missingSpecificPermissions = missingPermissions.filter(permission => permissionMessages[permission]);
+                let requiredPermissions = `To connect, you need the following specific permissions: ${missingSpecificPermissions.map(permission => permissionMessages[permission]).join(", ")}.`;
+                // let requiredPermissions = `Following permissions are missing in your role: ${missingPermissions.join(", ")}.`;
+                return {
+                    successful: false,
+                    returnMessage: {
+                        messageType: 'danger',
+                        message: requiredPermissions,
+                        ttl: 60000
+                    }
+                }
+            }
+
+        } catch (error) {
+            console.log({ message: "Error in getting permission set" });
+        }
         return {
             successful: true,
             platformUserInfo: {
-                id,
-                name,
-                timezoneName,
-                timezoneOffset,
+                id: query.entity,
+                name: getCurrentLoggedInUserResponse?.data?.name,
                 platformAdditionalInfo: {
-                    email: employeResponse.data.email,
-                    name: name,
-                    subsidiaryId,
+                    email: getCurrentLoggedInUserResponse?.data?.email,
+                    name: getCurrentLoggedInUserResponse?.data?.name,
+                    subsidiaryId: getCurrentLoggedInUserResponse?.data?.subsidiary,
                     oneWorldEnabled: oneWorldEnabled,
                 },
 
