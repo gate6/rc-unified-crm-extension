@@ -2,6 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
+const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById } = require('../servicenow-core/interaction');
 const { UserModel } = require('../../models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
@@ -347,7 +348,7 @@ async function unAuthorize({ user }) {
     //--------------------------------------------------------------
 }
 
-async function findContact({ user, authHeader, phoneNumber, overridingFormat }) {
+async function findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension }) {
     // ----------------------------------------
     // ---TODO.3: Implement contact matching---
     // ----------------------------------------
@@ -360,14 +361,19 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     else {
         const formats = overridingFormat.split(',');
         for (var format of formats) {
-            const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
-            if (phoneNumberObj.valid) {
-                const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
-                let formattedNumber = format;
-                for (const numberBit of phoneNumberWithoutCountryCode) {
-                    formattedNumber = formattedNumber.replace('*', numberBit);
+            let phoneNumberObj;
+            if(isExtension) {
+                numberToQueryArray.push(phoneNumber);
+            } else {
+                phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
+                if (phoneNumberObj.valid) {
+                    const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
+                    let formattedNumber = format;
+                    for (const numberBit of phoneNumberWithoutCountryCode) {
+                        formattedNumber = formattedNumber.replace('*', numberBit);
+                    }
+                    numberToQueryArray.push(formattedNumber);
                 }
-                numberToQueryArray.push(formattedNumber);
             }
         }
     }
@@ -507,32 +513,17 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     }
 
     if (additionalSubmission && additionalSubmission.state){
-        const stateSelection = await axios.get(
-            `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${additionalSubmission.state}&sysparm_fields=sys_id,label,value`,
-            {
-                headers: { 'Authorization':  authHeader }
-            });
     
-        const returnedCateogry = stateSelection.data.result.length > 0 ? stateSelection.data.result[0].value : null;
-        postBody.state = returnedCateogry;
+        const returnedState = await findStateValueById(instanceId, authHeader, additionalSubmission.state);
+        postBody.state =  returnedState ? returnedState : await findStateValueByName(instanceId, authHeader, additionalSubmission.state);
         postBody.assigned_to = caller_id.data.result.id;
 
         if (additionalSubmission.type) {
-            const typeSelection = await axios.get(
-                `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${additionalSubmission.type}&sysparm_fields=sys_id,value,lable`,
-                {
-                    headers: { 'Authorization':  authHeader }
-                });
-            
-            const returnedSubcateogry = typeSelection.data.result.length > 0 ? typeSelection.data.result[0].value : null;
-
-            postBody.type = returnedSubcateogry;
+            const returnedType = await findTypeValueById(instanceId, authHeader, additionalSubmission.type);
+            postBody.type = returnedType ? returnedType : await findTypeValueByName(instanceId, authHeader, additionalSubmission.type);
         }
         
     }
-
-    postBody.impact = (additionalSubmission && additionalSubmission.impact) ? additionalSubmission.impact : 3;
-    postBody.urgency = (additionalSubmission && additionalSubmission.urgency) ? additionalSubmission.urgency : 3;
 
     const addLogRes = await axios.post(
         `https://${instanceId}.service-now.com/api/now/table/interaction`,

@@ -15,6 +15,7 @@
             "urlIdentifier": "*service-now.com*",
             "name": "servicenow",
             "displayName": "servicenow",
+            "enableExtensionNumberLoggingSetting": true,
             "requestConfig": {
                 "timeout": 30
             },
@@ -136,6 +137,7 @@
                             "title": "State",
                             "type": "selection",
                             "contactDependent": true,
+                            "allowCustomValue": true,
                             "defaultSettingId": "serviceNowState",
                             "defaultSettingValues": {
                                 "inboundCall": {
@@ -151,6 +153,7 @@
                             "title": "Type",
                             "type": "selection",
                             "contactDependent": true,
+                            "allowCustomValue": true,
                             "defaultSettingId": "serviceNowType",
                             "defaultSettingValues": {
                                 "inboundCall": {
@@ -259,5 +262,5 @@
                 }}
             }
     },
-    "version": "1.1.1"
+    "version": "1.1.4"
 }
