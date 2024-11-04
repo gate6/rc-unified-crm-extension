@@ -1,5 +1,20 @@
 # Release notes
 
+## 1.1.4
+
+- Bullhorn: Fix default SMS note action issue
+- Bullhorn: Fix message log timezone issue
+
+## 1.1.3
+
+- Fix: Auto log association
+- New: User setting in advanced features to turn on "Auto open extension" to open itself when opening a CRM page
+- Redtail: Fix domain matching
+
+## 1.1.2
+
+- Change: Auto pop up log page is not dependent on auto log setting anymore
+
 ## 1.1.1
 
 - Fix: Call/SMS logging issue

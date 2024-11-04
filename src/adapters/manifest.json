@@ -440,7 +440,7 @@
             "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
             "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
             "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
-            "urlIdentifier": "crm.redtailtechnology.com",
+            "urlIdentifier": "redtailtechnology.com",
             "name": "redtail",
             "auth": {
                 "type": "apiKey",
@@ -636,6 +636,7 @@
                             "title": "Note action",
                             "type": "selection",
                             "contactDependent": false,
+                            "allowCustomValue": true,
                             "defaultSettingId": "bullhornDefaultNoteAction",
                             "defaultSettingValues": {
                                 "inboundCall": {
@@ -655,6 +656,7 @@
                             "title": "Note action",
                             "type": "selection",
                             "contactDependent": false,
+                            "allowCustomValue": true,
                             "defaultSettingId": "bullhornDefaultNoteAction",
                             "defaultSettingValues": {
                                 "message": {
@@ -868,5 +870,5 @@
             }
         }
     },
-    "version": "1.1.1"
+    "version": "1.1.4"
 }
