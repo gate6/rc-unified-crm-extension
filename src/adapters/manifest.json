@@ -3,13 +3,15 @@
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "RingCentral Labs",
-        "websiteUrl": "https://github.com/ringcentral/rc-unified-crm-extension",
-        "iconUrl": "https://lh3.googleusercontent.com/opCzi-yJ2FLuN_XmmZPj_OuKtXhgW6w77_8tZPH5Y6tFw2Zwk8T-XGW0z0Xio_FgdvTRLJ3k-kYplXtmUhKjzxMkJEQ=s60",
-        "supportUrl": "https://forms.gle/2uC1FSiRq4QapPpD6"
+        "websiteUrl": "https://github.com/ringcentral/rc-unified-crm-extension"
     },
     "platforms": {
         "pipedrive": {
             "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Pipedrive_logo.png",
+            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/pipedrive/",
+            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
+            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
             "urlIdentifier": "pipedrive.com",
             "name": "pipedrive",
             "displayName": "Pipedrive",
@@ -127,6 +129,10 @@
         },
         "insightly": {
             "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Insightly_logo.png",
+            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/insightly/",
+            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
+            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
             "urlIdentifier": "insightly.com",
             "name": "insightly",
             "displayName": "Insightly",
@@ -180,7 +186,7 @@
                 "callLog": {
                     "additionalFields": [
                         {
-                            "const": "organization",
+                            "const": "organisation",
                             "title": "Organisation",
                             "type": "selection",
                             "contactDependent": true
@@ -303,6 +309,10 @@
         },
         "clio": {
             "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Clio_Logo.png",
+            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/clio/",
+            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
+            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
             "urlIdentifier": "app.clio.com",
             "name": "clio",
             "displayName": "Clio",
@@ -426,7 +436,11 @@
         },
         "redtail": {
             "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Redtail_Logo.png",
-            "urlIdentifier": "crm.redtailtechnology.com",
+            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/redtail/",
+            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
+            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
+            "urlIdentifier": "redtailtechnology.com",
             "name": "redtail",
             "auth": {
                 "type": "apiKey",
@@ -434,6 +448,16 @@
                     "page": {
                         "title": "Redtail",
                         "content": [
+                            {
+                                "const": "description",
+                                "description": "Please enter your Redtail CRM credentials below",
+                                "type": "string",
+                                "uiSchema": {
+                                    "ui:field": "typography",
+                                    "ui:variant": "body2",
+                                    "ui:align": "center"
+                                }
+                            },
                             {
                                 "const": "username",
                                 "title": "username",
@@ -539,6 +563,10 @@
         },
         "bullhorn": {
             "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Bullhorn_Logo.png",
+            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/bullhorn/",
+            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
+            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
             "urlIdentifier": "app.bullhornstaffing.com",
             "name": "bullhorn",
             "displayName": "Bullhorn",
@@ -561,6 +589,45 @@
                     "value": "Contact"
                 }
             ],
+            "settings": [
+                {
+                    "id": "bullhornDefaultNoteAction",
+                    "type": "section",
+                    "name": "Bullhorn options",
+                    "items": [
+                        {
+                            "id": "noteActionMatchWarning",
+                            "name": "Info: note action matching warning",
+                            "type": "warning",
+                            "value": "Note action value match ignores cases and spaces"
+                        },
+                        {
+                            "id": "bullhornInboundCallNoteAction",
+                            "type": "inputField",
+                            "name": "Default action for inbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "bullhornOutboundCallNoteAction",
+                            "type": "inputField",
+                            "name": "Default action for outbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "bullhornMessageNoteAction",
+                            "type": "inputField",
+                            "name": "Default action for SMS",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "bullhornVoicemailNoteAction",
+                            "type": "inputField",
+                            "name": "Default action for voicemails",
+                            "placeholder": "Enter action value"
+                        }
+                    ]
+                }
+            ],
             "page": {
                 "callLog": {
                     "additionalFields": [
@@ -568,7 +635,17 @@
                             "const": "noteActions",
                             "title": "Note action",
                             "type": "selection",
-                            "contactDependent": false
+                            "contactDependent": false,
+                            "allowCustomValue": true,
+                            "defaultSettingId": "bullhornDefaultNoteAction",
+                            "defaultSettingValues": {
+                                "inboundCall": {
+                                    "settingId": "bullhornInboundCallNoteAction"
+                                },
+                                "outboundCall": {
+                                    "settingId": "bullhornOutboundCallNoteAction"
+                                }
+                            }
                         }
                     ]
                 },
@@ -578,7 +655,17 @@
                             "const": "noteActions",
                             "title": "Note action",
                             "type": "selection",
-                            "contactDependent": false
+                            "contactDependent": false,
+                            "allowCustomValue": true,
+                            "defaultSettingId": "bullhornDefaultNoteAction",
+                            "defaultSettingValues": {
+                                "message": {
+                                    "settingId": "bullhornMessageNoteAction"
+                                },
+                                "voicemail": {
+                                    "settingId": "bullhornVoicemailNoteAction"
+                                }
+                            }
                         }
                     ]
                 },
@@ -664,6 +751,10 @@
         },
         "netsuite": {
             "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Netsuite_Logo.png",
+            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/netsuite/",
+            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
+            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
             "urlIdentifier": "*.app.netsuite.com/app*",
             "name": "netsuite",
             "displayName": "NetSuite",
@@ -678,7 +769,7 @@
                 }
             },
             "platform": "netsuite",
-            "contactPageUrl": "https://{hostname}/app/common/entity/{contactType}.nl?id={contactId}",
+            "contactPageUrl": "https://{hostname}/app/common/entity/{contactType}.nl?id={contactId}&source=ringcentral",
             "logPageUrl": "https://{hostname}/app/crm/calendar/call.nl?id={logId}",
             "canOpenLogPage": true,
             "contactTypes": [
@@ -779,5 +870,5 @@
             }
         }
     },
-    "version": "1.0.7"
+    "version": "1.1.4"
 }

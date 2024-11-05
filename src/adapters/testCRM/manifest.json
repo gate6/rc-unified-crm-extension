@@ -1,17 +1,21 @@
 {
-    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "serverUrl": "https://xxxx.ngrok.app",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Test Developer",
-        "websiteUrl": "",
-        "iconUrl": "",
-        "supportUrl": ""
+        "websiteUrl": ""
     },
     "platforms": {
         "testCRM": {
-            "urlIdentifier": "*developers.ringcentral.com*",
+            "logoUrl": "https://avatars.githubusercontent.com/u/6549285?s=200&v=4",
+            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension",
+            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
+            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
+            "urlIdentifier": "*.labs.ringcentral.com/*",
             "name": "testCRM",
             "displayName": "Test CRM",
+            "enableExtensionNumberLoggingSetting": true,
             "requestConfig": {
                 "timeout": 30
             },
@@ -41,12 +45,12 @@
             "canOpenLogPage": false,
             "contactTypes": [
                 {
-                  "display": "TestContactType",
-                  "value": "testContact"
+                    "display": "TestContactType",
+                    "value": "testContact"
                 },
                 {
-                  "display": "Contact",
-                  "value": "cta"
+                    "display": "Contact",
+                    "value": "cta"
                 }
             ],
             "embeddedOnCrmPage": {
@@ -91,5 +95,5 @@
             }
         }
     },
-    "version": "1.0.7"
+    "version": "1.1.4"
 }
