@@ -1,7 +1,7 @@
 const oauth = require('../lib/oauth');
 const { UserModel } = require('../models/userModel');
 
-async function findContact({ platform, userId, phoneNumber, overridingFormat }) {
+async function findContact({ platform, userId, phoneNumber, overridingFormat, isExtension }) {
     try {
         let user = await UserModel.findOne({
             where: {
@@ -33,7 +33,7 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat }) 
                 authHeader = `Basic ${basicAuth}`;
                 break;
         }
-        const { matchedContactInfo, returnMessage } = await platformModule.findContact({ user, authHeader, phoneNumber, overridingFormat });
+        const { matchedContactInfo, returnMessage } = await platformModule.findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension });
         if (matchedContactInfo != null && matchedContactInfo.length > 0) {
             return { successful: true, returnMessage, contact: matchedContactInfo };
         }
@@ -41,7 +41,7 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat }) 
             return { successful: false, returnMessage };
         }
     } catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platform}`);
+        console.log(`platform: ${platform} \n${e.stack}`);
         if (e.response?.status === 429) {
             return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
         }
@@ -82,7 +82,7 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
             return { successful: false, returnMessage };
         }
     } catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platform}`);
+        console.log(`platform: ${platform} \n${e.stack}`);
         if (e.response?.status === 429) {
             return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
         }

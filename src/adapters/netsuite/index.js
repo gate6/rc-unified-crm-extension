@@ -4,6 +4,7 @@ const url = require('url');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { parse } = require('path');
 const { getTimeZone } = require('../../lib/util');
+const { get } = require('shortid/lib/alphabet');
 
 function getAuthType() {
     return 'oauth';
@@ -22,28 +23,99 @@ async function getOauthInfo({ hostname }) {
 
 async function getUserInfo({ authHeader, additionalInfo, query }) {
     try {
-        const url = `https://${query.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/employee/${query.entity}`;
-        const employeResponse = await axios.get(url,
-            {
+        let getCurrentLoggedInUserResponse;
+        try {
+            const getCurrentLoggedInUserUrl = `https://${query.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_getcurrentuser&deploy=customdeploy_getcurrentuser`;
+            getCurrentLoggedInUserResponse = await axios.get(getCurrentLoggedInUserUrl, {
                 headers: { 'Authorization': authHeader }
             });
-        const id = query.entity;
-        const name = employeResponse.data.firstName + ' ' + employeResponse.data.lastName;
-        const timezoneName = employeResponse.data.time_zone ?? '';
-        const timezoneOffset = employeResponse.data.time_zone_offset ?? null;
-        const location = employeResponse.data.location ?? '';
-        const subsidiaryId = employeResponse.data.subsidiary?.id ?? '';
+        } catch (e) {
+            console.log({ message: "Error in getting employee information using RestLet" });
+            return {
+                successful: false,
+                returnMessage: {
+                    messageType: 'danger',
+                    message: "It appears that your SuiteApp is an older version. Please update it to the latest version.",
+                    ttl: 60000
+                }
+            }
+        }
+        let oneWorldEnabled;
+        try {
+            const checkOneWorldLicenseUrl = `https://${query.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_getoneworldlicense_scriptid&deploy=customdeploy_getoneworldlicense_deployid`;
+            const oneWorldLicenseResponse = await axios.get(checkOneWorldLicenseUrl, {
+                headers: { 'Authorization': authHeader }
+            });
+            oneWorldEnabled = oneWorldLicenseResponse?.data?.oneWorldEnabled;
+        } catch (e) {
+            console.log({ message: "Error in getting OneWorldLicense" });
+            if (subsidiaryId !== undefined && subsidiaryId !== '') {
+                oneWorldEnabled = true;
+            }
+        }
+        try {
+            const checkPermissionSetUrl = `https://${query.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_checkrolepermissionscriptid&deploy=customdeploy_checkrolepermissiondeployid`;
+            const requestData = {
+                requiredPermissions: [
+                    "LIST_CONTACT",
+                    "REPO_ANALYTICS",
+                    "TRAN_SALESORD",
+                    "LIST_CUSTJOB",
+                    "ADMI_LOGIN_OAUTH2",
+                    "ADMI_RESTWEBSERVICES",
+                    "LIST_CALL",
+                    "LIST_SUBSIDIARY"
+                ]
+            };
+            const permissionMessages = {
+                "LIST_CONTACT": "List -> Contact -> Full",
+                "LIST_CUSTJOB": "List -> Customer -> Full",
+                "LIST_CALL": "List -> Phone Calls -> Full",
+                "LIST_SUBSIDIARY": "List -> Subsidiaries -> View",
+                "REPO_ANALYTICS": "Report -> SuiteAnalytics Workbook -> Edit",
+                "TRAN_SALESORD": "Transactions -> Sales Orders -> Full",
+                "ADMI_LOGIN_OAUTH2": "Setup -> Log in using OAuth 2.0 Access Tokens -> Full",
+                "ADMI_RESTWEBSERVICES": "Setup -> REST Web Services -> Full"
+            };
+
+            const permissionsResponse = await axios.post(checkPermissionSetUrl, requestData, {
+                headers: { 'Authorization': authHeader }
+            });
+            console.log({ Data: permissionsResponse.data });
+            const missingPermissions = Object.keys(permissionsResponse?.data?.permissionResults).filter(permission => {
+                if (permission === "LIST_SUBSIDIARY" && !oneWorldEnabled) {
+                    return false; // Skip this permission if oneWorldEnabled is false
+                }
+                return !permissionsResponse?.data?.permissionResults[permission]; // Include other permissions that are not granted
+            });
+            console.log({ missingPermissions });
+            if (missingPermissions.length > 0) {
+                const missingSpecificPermissions = missingPermissions.filter(permission => permissionMessages[permission]);
+                let requiredPermissions = `To connect, you need the following specific permissions: ${missingSpecificPermissions.map(permission => permissionMessages[permission]).join(", ")}.`;
+                // let requiredPermissions = `Following permissions are missing in your role: ${missingPermissions.join(", ")}.`;
+                return {
+                    successful: false,
+                    returnMessage: {
+                        messageType: 'danger',
+                        message: requiredPermissions,
+                        ttl: 60000
+                    }
+                }
+            }
+
+        } catch (error) {
+            console.log({ message: "Error in getting permission set" });
+        }
         return {
             successful: true,
             platformUserInfo: {
-                id,
-                name,
-                timezoneName,
-                timezoneOffset,
+                id: query.entity,
+                name: getCurrentLoggedInUserResponse?.data?.name,
                 platformAdditionalInfo: {
-                    email: employeResponse.data.email,
-                    name: name,
-                    subsidiaryId,
+                    email: getCurrentLoggedInUserResponse?.data?.email,
+                    name: getCurrentLoggedInUserResponse?.data?.name,
+                    subsidiaryId: getCurrentLoggedInUserResponse?.data?.subsidiary,
+                    oneWorldEnabled: oneWorldEnabled,
                 },
 
             },
@@ -54,16 +126,13 @@ async function getUserInfo({ authHeader, additionalInfo, query }) {
             }
         };
     } catch (error) {
-        console.log({ message: "Error in getting User Info", error });
-        const isForbiddenError = isNetSuiteForbiddenError(error);
-        const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Employee Record & Lists -> Employee' permission to authorize. Please contact your administrator."
-            : "Error in getting NetSuite User Info.";
+        const errorDetails = netSuiteErrorDetails(error, "Error in getting NetSuite User Info.");
+        console.log({ message: "Error in getting employee information", Path: error?.request?.path, Host: error?.request?.host, errorDetails, responseHeader: error?.response?.headers });
         return {
             successful: false,
             returnMessage: {
                 messageType: 'danger',
-                message: errorMessage,
+                message: errorDetails,
                 ttl: 60000
             }
         }
@@ -71,7 +140,6 @@ async function getUserInfo({ authHeader, additionalInfo, query }) {
 }
 
 async function unAuthorize({ user }) {
-    console.log({ message: "Intiating to unauthorize user", userId: user.id });
     const revokeUrl = `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/auth/oauth2/v1/revoke`;
     const basicAuthHeader = Buffer.from(`${process.env.NETSUITE_CRM_CLIENT_ID}:${process.env.NETSUITE_CRM_CLIENT_SECRET}`).toString('base64');
     const refreshTokenParams = new url.URLSearchParams({
@@ -83,7 +151,6 @@ async function unAuthorize({ user }) {
         {
             headers: { 'Authorization': `Basic ${basicAuthHeader}` }
         });
-    console.log(`Access and Refresh Token is revoked for user ${user.id}...`);
     await user.destroy();
     return {
         returnMessage: {
@@ -96,77 +163,63 @@ async function unAuthorize({ user }) {
 
 async function findContact({ user, authHeader, phoneNumber, overridingFormat }) {
     try {
-        const numberToQueryArray = [];
-        if (overridingFormat === '') {
-            numberToQueryArray.push(phoneNumber.replace(' ', '+'));
-        }
-        else {
-            const formats = overridingFormat.split(',');
-            for (var format of formats) {
-                const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
-                if (phoneNumberObj.valid) {
-                    const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
-                    let formattedNumber = format;
-                    for (const numberBit of phoneNumberWithoutCountryCode) {
-                        formattedNumber = formattedNumber.replace('*', numberBit);
-                    }
-                    numberToQueryArray.push(formattedNumber);
+        const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
+        const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
+        const matchedContactInfo = [];
+        if (phoneNumberWithoutCountryCode !== 'undefined' && phoneNumberWithoutCountryCode !== null && phoneNumberWithoutCountryCode !== '') {
+            const contactQuery = `SELECT * FROM contact WHERE REGEXP_REPLACE(phone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(homePhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(mobilePhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(officePhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%'`;
+            const customerQuery = `SELECT * FROM customer WHERE REGEXP_REPLACE(phone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(homePhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(mobilePhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(altPhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%'`;
+            const personInfo = await axios.post(
+                `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                {
+                    q: contactQuery
+                },
+                {
+                    headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
+                });
+            if (personInfo.data.items.length > 0) {
+                for (var result of personInfo.data.items) {
+                    let firstName = result.firstname ?? '';
+                    let middleName = result.middlename ?? '';
+                    let lastName = result.lastname ?? '';
+                    const contactName = (firstName + middleName + lastName).length > 0 ? `${firstName} ${middleName} ${lastName}` : result.entitytitle;
+                    matchedContactInfo.push({
+                        id: result.id,
+                        name: contactName,
+                        phone: result.phone ?? '',
+                        homephone: result.homephone ?? '',
+                        mobilephone: result.mobilephone ?? '',
+                        officephone: result.officephone ?? '',
+                        additionalInfo: null,
+                        type: 'contact'
+                    })
                 }
             }
-        }
-        const matchedContactInfo = [];
-        for (var numberToQuery of numberToQueryArray) {
-            console.log({ message: "Finding Contact with the number", numberToQuery });
-            if (numberToQuery !== 'undefined' && numberToQuery !== null && numberToQuery !== '') {
-                //For Contact search
-                const personInfo = await axios.post(
-                    `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                    {
-                        q: `SELECT * FROM contact WHERE phone = ${numberToQuery} OR homePhone = ${numberToQuery} OR mobilePhone = ${numberToQuery} OR officePhone = ${numberToQuery}`
-                    },
-                    {
-                        headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
-                    });
-                console.log(personInfo);
-                if (personInfo.data.items.length > 0) {
-                    for (var result of personInfo.data.items) {
-                        let firstName = result.firstname ?? '';
-                        let middleName = result.middlename ?? '';
-                        let lastName = result.lastname ?? '';
-                        const contactName = (firstName + middleName + lastName).length > 0 ? `${firstName} ${middleName} ${lastName}` : result.entitytitle;
-                        matchedContactInfo.push({
-                            id: result.id,
-                            name: contactName,
-                            phone: numberToQuery,
-                            additionalInfo: null,
-                            type: 'contact'
-                        })
-                    }
-                }
-                //For Customer search
-                const customerInfo = await axios.post(
-                    `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                    {
-                        q: `SELECT * FROM customer WHERE phone = ${numberToQuery} OR homePhone = ${numberToQuery} OR mobilePhone = ${numberToQuery}  OR altPhone = ${numberToQuery}`
-                    },
-                    {
-                        headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
-                    });
-                console.log({ message: "Custome Search", customerInfo });
-                if (customerInfo.data.items.length > 0) {
-                    for (var result of customerInfo.data.items) {
-                        let firstName = result.firstname ?? '';
-                        let middleName = result.middlename ?? '';
-                        let lastName = result.lastname ?? '';
-                        const customerName = (firstName + middleName + lastName).length > 0 ? `${firstName} ${middleName} ${lastName}` : result.entitytitle;
-                        matchedContactInfo.push({
-                            id: result.id,
-                            name: customerName,
-                            phone: numberToQuery,
-                            additionalInfo: null,
-                            type: 'custjob'
-                        })
-                    }
+            //For Customer search
+            const customerInfo = await axios.post(
+                `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                {
+                    q: customerQuery
+                },
+                {
+                    headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
+                });
+            if (customerInfo.data.items.length > 0) {
+                for (var result of customerInfo.data.items) {
+                    let firstName = result.firstname ?? '';
+                    let middleName = result.middlename ?? '';
+                    let lastName = result.lastname ?? '';
+                    const customerName = (firstName + middleName + lastName).length > 0 ? `${firstName} ${middleName} ${lastName}` : result.entitytitle;
+                    matchedContactInfo.push({
+                        id: result.id,
+                        name: customerName,
+                        phone: result.phone ?? '',
+                        homephone: result.homephone ?? '',
+                        mobilephone: result.mobilephone ?? '',
+                        altphone: result.altphone ?? '',
+                        additionalInfo: null,
+                        type: 'custjob'
+                    })
                 }
             }
         }
@@ -180,11 +233,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
             matchedContactInfo,
         };
     } catch (error) {
-        console.log({ message: "Error in Finding Contact/Customer", error });
-        const isForbiddenError = isNetSuiteForbiddenError(error);
-        const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Reports -> SuiteAnalytics Workbook, Lists -> Contacts & Lists -> Customer' permission to fetch details. Please contact your administrator."
-            : "Error in Finding Contact.";
+        let errorMessage = netSuiteErrorDetails(error, "Error in Finding Contact.");
+        errorMessage += ' OR Permission violation: You need the "Lists -> Contact -> FULL, Lists -> Customers -> FULL" permission to access this page.';
         return {
             successful: false,
             returnMessage: {
@@ -199,16 +249,23 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
 async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission }) {
     try {
         const title = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
-        const subsidiary = await axios.post(
-            `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-            {
-                q: `SELECT * FROM Subsidiary WHERE id = ${user?.platformAdditionalInfo?.subsidiaryId}`
-            },
-            {
-                headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
-            });
-        const timeZone = getTimeZone(subsidiary.data.items[0]?.country, subsidiary.data.items[0]?.state);
-        const callStartTime = moment(moment(callLog.startTime).toISOString()).tz(timeZone);
+        const oneWorldEnabled = user?.platformAdditionalInfo?.oneWorldEnabled;
+        let callStartTime = moment(moment(callLog.startTime).toISOString());
+        /**
+         * Users without a OneWorld license do not have access to subsidiaries.
+         */
+        if (oneWorldEnabled !== undefined && oneWorldEnabled === true) {
+            const subsidiary = await axios.post(
+                `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                {
+                    q: `SELECT * FROM Subsidiary WHERE id = ${user?.platformAdditionalInfo?.subsidiaryId}`
+                },
+                {
+                    headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
+                });
+            const timeZone = getTimeZone(subsidiary.data.items[0]?.country, subsidiary.data.items[0]?.state);
+            callStartTime = moment(moment(callLog.startTime).toISOString()).tz(timeZone);
+        }
         const callEndTime = moment(callStartTime).add(callLog.duration, 'seconds');
         const formatedStartTime = callStartTime.format('YYYY-MM-DD HH:mm:ss');
         const formatedEndTime = callEndTime.format('YYYY-MM-DD HH:mm:ss');
@@ -252,7 +309,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         if (phoneCallResponse.data.items.length > 0) {
             callLogId = phoneCallResponse.data.items[0].id;
         }
-        console.log(`call log id... \n${callLogId}`);
         await axios.patch(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phoneCall/${callLogId}`,
             {
                 message: originalMessage
@@ -260,7 +316,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             {
                 headers: { 'Authorization': authHeader }
             });*/
-        console.log({ message: "Call Log Added with CallLogId", callLogId });
         return {
             logId: callLogId,
             returnMessage: {
@@ -270,11 +325,10 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             }
         };
     } catch (error) {
-        console.log({ message: "Error in creating Call Log", error });
-        const isForbiddenError = isNetSuiteForbiddenError(error);
-        const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts & Lists -> Customers' permission to CallLog. Please contact your administrator."
-            : "Error in Creating Call Log";
+        let errorMessage = netSuiteErrorDetails(error, "Error in Creating Call Log");
+        if (errorMessage.includes("'Subsidiary' was not found.")) {
+            errorMessage = errorMessage + " OR Permission violation: You need the 'Lists -> Subsidiaries -> View' permission to access this page. "
+        }
         return {
             returnMessage: {
                 messageType: 'danger',
@@ -288,7 +342,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 }
 
 async function getCallLog({ user, callLogId, authHeader }) {
-    console.log({ message: "Finding Call With Id", callLogId });
     try {
         const getLogRes = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phonecall/${callLogId}`,
             {
@@ -307,11 +360,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
             }
         }
     } catch (error) {
-        console.log({ message: "Error in getting Call Log", error });
-        const isForbiddenError = isNetSuiteForbiddenError(error);
-        const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts & Lists -> Customers' permission to CallLog. Please contact your administrator."
-            : "Error in getting NetSuite Call Log.";
+        const errorMessage = netSuiteErrorDetails(error, "Error in getting NetSuite Call Log.");
         return {
             returnMessage: {
                 messageType: 'danger',
@@ -345,7 +394,6 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             }
             else {
                 originalNote = messageBody.split('\n\n--- Created via RingCentral CRM Extension')[0].split('Note: ')[1];
-                console.log({ originalNote });
             }
 
             messageBody = messageBody.replace(`Note: ${originalNote}`, `Note: ${note}`);
@@ -366,11 +414,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             }
         };
     } catch (error) {
-        console.log({ message: "Error in Updating Call Log", error });
-        const isForbiddenError = isNetSuiteForbiddenError(error);
-        const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts & Lists -> Customers' permission to CallLog. Please contact your administrator."
-            : "Error in getting Updating Call Log.";
+        const errorMessage = netSuiteErrorDetails(error, "Error in getting NetSuite Call Log.");
         return {
             returnMessage: {
                 messageType: 'danger',
@@ -450,7 +494,6 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
                 headers: { 'Authorization': authHeader }
             });
         const callLogId = extractIdFromUrl(addLogRes.headers.location);
-        console.log({ message: "CallLogId is", callLogId });
         return {
             logId: callLogId,
             returnMessage: {
@@ -460,11 +503,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             }
         };
     } catch (error) {
-        console.log({ message: "Error in creating Message Log", error });
-        const isForbiddenError = isNetSuiteForbiddenError(error);
-        const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts & Lists -> Customers' permission to Message Log. Please contact your administrator."
-            : "Error in Creating Message Log";
+        const errorMessage = netSuiteErrorDetails(error, "Error in Creating Message Log");
         return {
             returnMessage: {
                 messageType: 'danger',
@@ -511,11 +550,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
             }
         };
     } catch (error) {
-        console.log({ message: "Error in Updating Message Log", error });
-        const isForbiddenError = isNetSuiteForbiddenError(error);
-        const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Phone Calls, Lists -> Contacts & Lists -> Customers' permission to MessageLog. Please contact your administrator."
-            : "Error in Updating Message Log";
+        const errorMessage = netSuiteErrorDetails(error, "Error in Updating Message Log");
         return {
             returnMessage: {
                 messageType: 'danger',
@@ -530,6 +565,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     try {
         const nameParts = splitName(newContactName);
         let contactId = 0;
+        const subsidiaryId = user.platformAdditionalInfo?.subsidiaryId;
+        const oneWorldEnabled = user?.platformAdditionalInfo?.oneWorldEnabled;
         switch (newContactType) {
             case 'contact':
                 let companyId = 0;
@@ -547,12 +584,15 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                         companyId = companyInfo.data.items[0].id;
                     }
                     else {
+                        let companyPostBody = {
+                            companyName: 'RingCentral_CRM_Extension_Placeholder_Company',
+                            comments: "This company was created automatically by the RingCentral Unified CRM Extension. Feel free to edit, or associate this company's contacts to more appropriate records.",
+                        };
+                        if (oneWorldEnabled !== undefined && oneWorldEnabled === true) {
+                            companyPostBody.subsidiary = { id: subsidiaryId };
+                        }
                         const createCompany = await axios.post(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/customer`,
-                            {
-                                companyName: 'RingCentral_CRM_Extension_Placeholder_Company',
-                                comments: "This company was created automatically by the RingCentral Unified CRM Extension. Feel free to edit, or associate this company's contacts to more appropriate records.",
-                                subsidiary: { id: user.platformAdditionalInfo?.subsidiaryId }
-                            }
+                            companyPostBody
                             ,
                             {
                                 headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' }
@@ -564,9 +604,11 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                         middleName: nameParts.middleName,
                         lastName: nameParts.lastName,
                         phone: phoneNumber || '',
-                        company: { id: companyId },
-                        subsidiary: { id: user.platformAdditionalInfo?.subsidiaryId }
+                        company: { id: companyId }
                     };
+                    if (oneWorldEnabled !== undefined && oneWorldEnabled === true) {
+                        contactPayLoad.subsidiary = { id: subsidiaryId };
+                    }
                     const createContactRes = await axios.post(
                         `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/contact`,
                         contactPayLoad
@@ -577,7 +619,6 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     contactId = extractIdFromUrl(createContactRes.headers.location);
                     break;
                 } catch (error) {
-                    console.log({ message: "Error in creating Contact", error });
                     return {
                         contactInfo: {
                             id: contactId,
@@ -596,10 +637,12 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     middleName: nameParts.middleName,
                     lastName: nameParts.lastName.length > 0 ? nameParts.lastName : nameParts.firstName,
                     phone: phoneNumber || '',
-                    isPerson: true,
-                    subsidiary: { id: user.platformAdditionalInfo?.subsidiaryId }
+                    isPerson: true
 
                 };
+                if (oneWorldEnabled !== undefined && oneWorldEnabled === true) {
+                    customerPayLoad.subsidiary = { id: subsidiaryId };
+                }
                 try {
                     const createCustomerRes = await axios.post(
                         `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/customer`,
@@ -611,7 +654,6 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     contactId = extractIdFromUrl(createCustomerRes.headers.location);
                     break;
                 } catch (error) {
-                    console.log({ message: "Error in creating Customer", error });
                     return {
                         contactInfo: {
                             id: contactId,
@@ -641,11 +683,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             }
         }
     } catch (error) {
-        console.log({ message: "Error in creating Contact/Customer", error });
-        const isForbiddenError = isNetSuiteForbiddenError(error);
-        const errorMessage = isForbiddenError
-            ? "Permission violation: Make Sure You have 'Lists -> Contacts & Lists -> Customers' permission to Create Contact/Customer. Please contact your administrator."
-            : "Error in Creating Contact/Customer Log";
+        const errorMessage = netSuiteErrorDetails(error, "Error in Creating Contact/Customer");
         return {
             returnMessage: {
                 messageType: 'danger',
@@ -680,21 +718,25 @@ function extractIdFromUrl(url) {
     const segments = url.split('/').filter(segment => segment !== ''); // Remove empty segments
     return segments.length > 0 ? segments[segments.length - 1] : 0; // Extract the ID from the URL
 }
-function isNetSuiteForbiddenError(error) {
+function netSuiteErrorDetails(error, message) {
     try {
         const data = error?.response?.data;
-        const errorDetails = data['o:errorDetails'][0].detail;
-        if (data.title === 'Forbidden' && data.status === 403) {
-            return true;
-        } else if (errorDetails.includes("Your current role does not have permission ")) {
-            return true;
+        let concatenatedErrorDetails = "";
+        // Check if 'o:errorDetails' exists and is an array
+        if (Array.isArray(data?.['o:errorDetails'])) {
+            // Iterate through each element in 'o:errorDetails' and concatenate the 'detail' field
+            data['o:errorDetails'].forEach(errorDetail => {
+                concatenatedErrorDetails += errorDetail?.detail + " "; // Concatenating with a space
+            });
+            // Trim any trailing space from the concatenated string
+            concatenatedErrorDetails = concatenatedErrorDetails.trim();
         }
-        return false;
+        return concatenatedErrorDetails.length > 0 ? concatenatedErrorDetails : message;
     } catch (error) {
-        console.log({ message: "Error in parsing NetSuite Error", error });
-        return false;
+        return message;
     }
 }
+
 
 exports.getAuthType = getAuthType;
 exports.getOauthInfo = getOauthInfo;

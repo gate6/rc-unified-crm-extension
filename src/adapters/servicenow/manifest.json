@@ -9,9 +9,13 @@
     },
     "platforms": {
         "servicenow": {
+            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
+            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
             "urlIdentifier": "*service-now.com*",
             "name": "servicenow",
             "displayName": "servicenow",
+            "enableExtensionNumberLoggingSetting": true,
             "requestConfig": {
                 "timeout": 30
             },
@@ -31,8 +35,8 @@
                     }
                 },
                 "oauth": {
-                    "authUrl": "https://dev194338.service-now.com/oauth_auth.do",
-                    "clientId": "28f5e591b712021007de332ca7b91efb",
+                    "authUrl": "https://dev254249.service-now.com/oauth_auth.do",
+                    "clientId": "77a84277d15d1210909d516826f605b6",
                     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
                     "customState": "",
                     "scope": ""
@@ -41,14 +45,90 @@
             "customState": "",
             "scope": "",
             "canOpenLogPage": true,
-            "contactPageUrl":"https://dev194338.service-now.com/customer_contact.do?sys_id={contactId}",
-            "logPageUrl":"https://dev194338.service-now.com/interaction.do?sys_id={logId}",
+            "contactPageUrl":"https://dev254249.service-now.com/customer_contact.do?sys_id={contactId}",
+            "logPageUrl":"https://dev254249.service-now.com/interaction.do?sys_id={logId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
                     "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
                     "videoLink": "https://youtu.be/pQgdsAR1UCI"
                 }
             },
+            "settings": [
+                {
+                    "id": "serviceNowState",
+                    "type": "section",
+                    "name": "serviceNow Interaction State Options",
+                    "items": [
+                        {
+                            "id": "stateMatchWarning",
+                            "name": "Info: note action matching warning",
+                            "type": "warning",
+                            "value": "Note action value match ignores cases and spaces"
+                        },
+                        {
+                            "id": "serviceNowInboundCallState",
+                            "type": "inputField",
+                            "name": "Default action for inbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowOutboundCallState",
+                            "type": "inputField",
+                            "name": "Default action for outbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowMessageState",
+                            "type": "inputField",
+                            "name": "Default action for SMS",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowVoicemailState",
+                            "type": "inputField",
+                            "name": "Default action for voicemails",
+                            "placeholder": "Enter action value"
+                        }
+                    ]
+                },
+                {
+                    "id": "serviceNowType",
+                    "type": "section",
+                    "name": "serviceNow Interaction Type options",
+                    "items": [
+                        {
+                            "id": "typeMatchWarning",
+                            "name": "Info: note action matching warning",
+                            "type": "warning",
+                            "value": "Note action value match ignores cases and spaces"
+                        },
+                        {
+                            "id": "serviceNowInboundCallType",
+                            "type": "inputField",
+                            "name": "Default action for inbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowOutboundCallType",
+                            "type": "inputField",
+                            "name": "Default action for outbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowMessageType",
+                            "type": "inputField",
+                            "name": "Default action for SMS",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowVoicemailType",
+                            "type": "inputField",
+                            "name": "Default action for voicemails",
+                            "placeholder": "Enter action value"
+                        }
+                    ]
+                }
+            ],
             "page": {
                 "callLog": {
                     "additionalFields": [
@@ -56,13 +136,33 @@
                             "const": "state",
                             "title": "State",
                             "type": "selection",
-                            "contactDependent": true
+                            "contactDependent": true,
+                            "allowCustomValue": true,
+                            "defaultSettingId": "serviceNowState",
+                            "defaultSettingValues": {
+                                "inboundCall": {
+                                    "settingId": "serviceNowInboundCallState"
+                                },
+                                "outboundCall": {
+                                    "settingId": "serviceNowOutboundCallState"
+                                }
+                            }
                         },
                         {
                             "const": "type",
                             "title": "Type",
                             "type": "selection",
-                            "contactDependent": true
+                            "contactDependent": true,
+                            "allowCustomValue": true,
+                            "defaultSettingId": "serviceNowType",
+                            "defaultSettingValues": {
+                                "inboundCall": {
+                                    "settingId": "serviceNowInboundCallType"
+                                },
+                                "outboundCall": {
+                                    "settingId": "serviceNowOutboundCallType"
+                                }
+                            }
                         }
                     ]
                 },
@@ -162,5 +262,5 @@
                 }}
             }
     },
-    "version": "1.0.5"
+    "version": "1.1.4"
 }

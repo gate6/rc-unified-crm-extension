@@ -22,7 +22,7 @@ These basic properties
 | Name          | Type   | Description                                                                                                           |
 |---------------|--------|-----------------------------------------------------------------------------------------------------------------------|
 | `author`      | string | The author of the adapter. This is displayed to end users within the Chrome extension.                                |
-| `platforms`   | ARRAY of object | An array of [platforms](#platforms-configuration) being integrated with. Each element of this array defines a different CRM. |
+| `platforms`   | ARRAY of object | An array of [platforms](#platform-configuration) being integrated with. Each element of this array defines a different CRM. |
 | `serverUrl`   | string | The base URL the Chrome extension will used when composing requests to your adapter. The URL should utilize HTTPS and should omit the trailing slash (`/`). For example: `https://my-adapter.myserver.com` |
 | `version`     | string | The version of your adapter. This is displayed to end users within the Chrome extension. |
 
@@ -37,7 +37,7 @@ The platforms property is an associative array. Each key should be a unique iden
 | `name`           | string          | The name of the CRM. |
 | `displayName`           | string          | The display name of the CRM. |
 | `urlIdentifier`  | string          | The URL for which this CRM will be enabled. When the CRM is enabled for a domain, the extension's orange quick access button will appear. (`*` for wildcard match is supported) |
-| `auth`       | object          | Contains all info for authorization. [Details](#setup-authorization) |
+| `auth`       | object          | Contains all info for authorization. [Details](#authorization) |
 | `canOpenLogPage` | boolean         | Set to `true` if the corresponding CRM supports permalinks for a given activity/log. When set to `true` users will have the option view/open the activity log in the CRM from the call history page. When set to `false`, users will open the contact page instead. |
 | `contactTypes`   | ARRAY of object | (Optional) CRMs often adopt unique vernaculars to describe contacts. Provide the enumerated list of contact types supported by the corresponding CRM. Each object has `display` and `value`. |
 | `contactPageUrl` | string          | A format string to open a CRM's contact page, e.g.`https://{hostname}/person/{contactId}`. Supported parameters: `{hostname}`, `{contactId}`, `{contactType}`|
@@ -139,3 +139,103 @@ Currently welcome pages are relatively simple, providing developers with the abi
 
 * `docLink`: A URL to read documentation
 * `videoLink`: A URL to watch a video
+
+## User settings for default log form values
+
+This topic is closely related to the use of [auto log](../users//logging.md#automatically-logging-calls). For manual log cases, using Bullhorn as example, users would need to manually select one of the `Note action` codes. In auto log scenarios, the extension would refuse to auto log because it misses selection for `Note action` code value. Now, default log form values would be able to help. It has 4 cases: `inbound call`, `outbound call`, `message` and `voicemail` where we can predefine default values.
+
+Here's the example from Bullhorn. In `settings`, we want to add a new custom setting, and on log page render, we want to link the default values from user settings.
+
+![Bullhorn default Note Action page](../img/bullhorn-default-note-action-page.png)
+
+```json
+{
+    "settings": 
+        [
+            {
+                "id": "bullhornDefaultNoteAction",
+                "type": "section",
+                "name": "Bullhorn options",
+                "items": [
+                    {
+                        "id": "noteActionMatchWarning",
+                        "name": "Info: note action matching warning",
+                        "type": "warning",
+                        "value": "Note action value match ignores cases and spaces"
+                    },
+                    {
+                        "id": "bullhornInboundCallNoteAction",
+                        "type": "inputField",
+                        "name": "Default action for inbound calls",
+                        "placeholder": "Enter action value"
+                    },
+                    {
+                        "id": "bullhornOutboundCallNoteAction",
+                        "type": "inputField",
+                        "name": "Default action for outbound calls",
+                        "placeholder": "Enter action value"
+                    },
+                    {
+                        "id": "bullhornMessageNoteAction",
+                        "type": "inputField",
+                        "name": "Default action for SMS",
+                        "placeholder": "Enter action value"
+                    },
+                    {
+                        "id": "bullhornVoicemailNoteAction",
+                        "type": "inputField",
+                        "name": "Default action for voicemails",
+                        "placeholder": "Enter action value"
+                    }
+                ]
+            }
+        ]
+}
+```
+
+Page fields need to be set to use default values mapped from user settings. 
+
+```json
+{
+    "page": {
+        "callLog": {
+            "additionalFields": [
+                {
+                    "const": "noteActions",
+                    "title": "Note action",
+                    "type": "selection",
+                    "contactDependent": false,
+                    "defaultSettingId": "bullhornDefaultNoteAction",
+                    "defaultSettingValues": {
+                        "inboundCall": {
+                            "settingId": "bullhornInboundCallNoteAction"
+                        },
+                        "outboundCall": {
+                            "settingId": "bullhornOutboundCallNoteAction"
+                        }
+                    }
+                }
+            ]
+        },
+        "messageLog": {
+            "additionalFields": [
+                {
+                    "const": "noteActions",
+                    "title": "Note action",
+                    "type": "selection",
+                    "contactDependent": false,
+                    "defaultSettingId": "bullhornDefaultNoteAction",
+                    "defaultSettingValues": {
+                        "message": {
+                            "settingId": "bullhornMessageNoteAction"
+                        },
+                        "voicemail": {
+                            "settingId": "bullhornVoicemailNoteAction"
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}
+```

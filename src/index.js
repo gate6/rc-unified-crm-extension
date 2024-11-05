@@ -76,7 +76,8 @@ app.get('/is-alive', (req, res) => {
     res.send(`OK`);
 });
 app.get('/serverVersionInfo', (req, res) => {
-    res.send({ version: process.env.VERSION });
+    const defaultCrmManifest = require('./adapters/manifest.json');
+    res.send({ version: defaultCrmManifest.version });
 });
 
 // Unique: Pipedrive
@@ -85,7 +86,7 @@ app.get('/pipedrive-redirect', function (req, res) {
         res.sendFile(path.join(__dirname, 'adapters/pipedrive/redirect.html'));
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}.`);
+        console.log(`platform: pipedrive \n${e.stack}`);
         res.status(500).send(e);
     }
 })
@@ -105,7 +106,7 @@ app.delete('/pipedrive-redirect', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}`);
+        console.log(`platform: pipedrive \n${e.stack}`);
         res.status(500).send(e);
     }
 })
@@ -130,10 +131,40 @@ app.get('/hostname', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}`);
+        console.log(`${e.stack}`);
         res.status(500).send(e);
     }
 })
+
+app.get('/temp-bullhorn-migrate-userId', async function (req, res) {
+    try {
+        const jwtToken = req.query.jwtToken;
+        if (!!jwtToken) {
+            const { id: userId, platform } = jwt.decodeJwt(jwtToken);
+            const userInfo = await authCore.tempMigrateBullhornUserId({ oldUserId: userId });
+            if (!!userInfo) {
+                const jwtToken = jwt.generateJwt({
+                    id: userInfo.id.toString(),
+                    platform: platform
+                });
+                res.status(200).send({ jwtToken, name: userInfo.name });
+            }
+            else {
+                res.status(200).send();
+            }
+        }
+        else {
+            res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
+        }
+        console.log('Event: bullhorn user id migrate')
+    }
+    catch (e) {
+        console.log(`platform: bullhorn \n${e.stack}`);
+        res.status(400).send(e);
+    }
+})
+
 app.get('/oauth-callback', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
@@ -178,7 +209,7 @@ app.get('/oauth-callback', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
+        console.log(`platform: ${platformName} \n${e.stack}`);
         res.status(400).send(e);
         success = false;
     }
@@ -214,15 +245,21 @@ app.post('/apiKeyLogin', async function (req, res) {
             throw 'Missing api key';
         }
         const { userInfo, returnMessage } = await authCore.onApiKeyLogin({ platform, hostname, apiKey, additionalInfo });
-        const jwtToken = jwt.generateJwt({
-            id: userInfo.id.toString(),
-            platform: platform
-        });
-        res.status(200).send({ jwtToken, name: userInfo.name, returnMessage });
-        success = true;
+        if (!!userInfo) {
+            const jwtToken = jwt.generateJwt({
+                id: userInfo.id.toString(),
+                platform: platform
+            });
+            res.status(200).send({ jwtToken, name: userInfo.name, returnMessage });
+            success = true;
+        }
+        else {
+            res.status(400).send({ returnMessage });
+            success = false;
+        }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
+        console.log(`platform: ${platformName} \n${e.stack}`);
         res.status(400).send(e);
         success = false;
     }
@@ -271,7 +308,7 @@ app.post('/unAuthorize', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
+        console.log(`platform: ${platformName} \n${e.stack}`);
         res.status(400).send(e);
         success = false;
     }
@@ -296,7 +333,7 @@ app.get('/userInfoHash', async function (req, res) {
         res.status(200).send({ extensionId, accountId });
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}`);
+        console.log(`${e.stack}`);
         res.status(400).send(e);
     }
 })
@@ -311,10 +348,9 @@ app.get('/contact', async function (req, res) {
         if (!!jwtToken) {
             const { id: userId, platform } = jwt.decodeJwt(jwtToken);
             platformName = platform;
-            const { successful, returnMessage, contact } = await contactCore.findContact({ platform, userId, phoneNumber: req.query.phoneNumber, overridingFormat: req.query.overridingFormat });
+            const { successful, returnMessage, contact } = await contactCore.findContact({ platform, userId, phoneNumber: req.query.phoneNumber, overridingFormat: req.query.overridingFormat, isExtension: req.query?.isExtension ?? false });
             res.status(200).send({ successful, returnMessage, contact });
-            if(successful)
-            {
+            if (successful) {
                 const nonNewContact = contact.filter(c => !c.isNewContact);
                 resultCount = nonNewContact.length;
                 success = true;
@@ -326,7 +362,7 @@ app.get('/contact', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
+        console.log(`platform: ${platformName} \n${e.stack}`);
         res.status(400).send(e);
         success = false;
     }
@@ -367,7 +403,7 @@ app.post('/contact', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
+        console.log(`platform: ${platformName} \n${e.stack}`);
         res.status(400).send(e);
         success = false;
     }
@@ -405,7 +441,7 @@ app.get('/callLog', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
+        console.log(`platform: ${platformName} \n${e.stack}`);
         res.status(400).send(e);
         success = false;
     }
@@ -442,7 +478,7 @@ app.post('/callLog', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
+        console.log(`platform: ${platformName} \n${e.stack}`);
         res.status(400).send(e);
         success = false;
     }
@@ -480,7 +516,7 @@ app.patch('/callLog', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
+        console.log(`platform: ${platformName} \n${e.stack}`);
         res.status(400).send(e);
         success = false;
     }
@@ -518,7 +554,7 @@ app.post('/messageLog', async function (req, res) {
         }
     }
     catch (e) {
-        console.log(`Error: status: ${e.response?.status}. message: ${e.response?.message}. platform: ${platformName}`);
+        console.log(`platform: ${platformName} \n${e.stack}`);
         res.status(400).send(e);
         success = false;
     }
