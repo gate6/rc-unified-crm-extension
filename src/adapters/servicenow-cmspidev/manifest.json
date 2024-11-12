@@ -35,7 +35,7 @@
                     }
                 },
                 "oauth": {
-                    "authUrl": "https://cmspidev.servicenowservices.com/oauth_auth.do",
+                    "authUrl": "https://cmscpidev.servicenowservices.com/oauth_auth.do",
                     "clientId": "d8b84cac0871d6100671821fcbefd490",
                     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
                     "customState": "",
@@ -45,8 +45,8 @@
             "customState": "",
             "scope": "",
             "canOpenLogPage": true,
-            "contactPageUrl":"https://cmspidev.servicenowservices.com/customer_contact.do?sys_id={contactId}",
-            "logPageUrl":"https://cmspidev.servicenowservices.com/interaction.do?sys_id={logId}",
+            "contactPageUrl":"https://cmscpidev.servicenowservices.com/customer_contact.do?sys_id={contactId}",
+            "logPageUrl":"https://cmscpidev.servicenowservices.com/interaction.do?sys_id={logId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
                     "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
