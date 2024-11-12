@@ -36,7 +36,7 @@
                 },
                 "oauth": {
                     "authUrl": "https://cmspidev.servicenowservices.com/oauth_auth.do",
-                    "clientId": "0719cc02cbe916100897c5fd6b56e4f7",
+                    "clientId": "d8b84cac0871d6100671821fcbefd490",
                     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
                     "customState": "",
                     "scope": ""
