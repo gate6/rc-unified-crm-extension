@@ -50,7 +50,12 @@ async function getHostname(hostname) {
         raw:true
     });
 
-    const instanceId = existingUser.hostname.substring(0, existingUser.hostname.indexOf('.service-now.com'));
+    let instanceId;
+    if (existingUser.hostname.includes('.service-now.com')) {
+        instanceId = existingUser.hostname.substring(0, existingUser.hostname.indexOf('.service-now.com'));
+    } else if (existingUser.hostname.includes('.servicenowservices.com')) {
+        instanceId = existingUser.hostname.substring(0, existingUser.hostname.indexOf('.servicenowservices.com'));
+    }
     existingUser.instanceId = instanceId;
     return existingUser;
 }
@@ -380,10 +385,11 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
+    const hostname = userInfo.hostname;
 
     const count = await models.companies.count({
         where: {
-            hostname: userInfo.hostname,
+            hostname: hostname,
             status: 1
         }
     });
@@ -407,13 +413,13 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     }
 
     const stateSelection = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
+        `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
     
     const typeSelection = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
+        `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
@@ -429,7 +435,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
-            `https://${instanceId}.service-now.com/api/now/table/sys_user?sysparm_query=phoneLIKE${numberToQuery}`,
+            `https://${hostname}/api/now/table/sys_user?sysparm_query=phoneLIKE${numberToQuery}`,
             {
                 headers: { 'Authorization':  authHeader }
             });
@@ -500,8 +506,9 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     }
 
     const instanceId = userInfo.instanceId;
+    const hostname = userInfo.hostname;
     
-    const caller_id = await axios.get(`https://${instanceId}.service-now.com/api/${userDetailsPath}`, {
+    const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
         }
@@ -514,19 +521,19 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     if (additionalSubmission && additionalSubmission.state){
     
-        const returnedState = await findStateValueById(instanceId, authHeader, additionalSubmission.state);
-        postBody.state =  returnedState ? returnedState : await findStateValueByName(instanceId, authHeader, additionalSubmission.state);
+        const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
+        postBody.state =  returnedState ? returnedState : await findStateValueByName(hostname, authHeader, additionalSubmission.state);
         postBody.assigned_to = caller_id.data.result.id;
 
         if (additionalSubmission.type) {
-            const returnedType = await findTypeValueById(instanceId, authHeader, additionalSubmission.type);
-            postBody.type = returnedType ? returnedType : await findTypeValueByName(instanceId, authHeader, additionalSubmission.type);
+            const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
+            postBody.type = returnedType ? returnedType : await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
         }
         
     }
 
     const addLogRes = await axios.post(
-        `https://${instanceId}.service-now.com/api/now/table/interaction`,
+        `https://${hostname}/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -552,9 +559,10 @@ async function getCallLog({ user, callLogId, authHeader }) {
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
+    const hostname = userInfo.hostname;
 
     const getLogRes = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/interaction/${callLogId}`,
+        `https://${hostname}/api/now/table/interaction/${callLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -582,10 +590,11 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
+    const hostname = userInfo.hostname;
 
     const existingLogId = existingCallLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -598,7 +607,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 
     const patchLog = await axios.patch(
-        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
@@ -629,10 +638,12 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---------------------------------------
 
     const userInfo = await getHostname(user.dataValues.hostname);
+    const instanceId = userInfo.instanceId;
+    const hostname = userInfo.hostname;
 
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
-            hostname: userInfo.hostname,
+            hostname: hostname,
             status: 1
         },
         raw: true
@@ -655,10 +666,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             }
         };
     }
-
-    const instanceId = userInfo.instanceId;
     
-    const caller_id = await axios.get(`https://${instanceId}.service-now.com/api/${userDetailsPath}`, {
+    const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
         }
@@ -673,7 +682,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         }
     }
     const addLogRes = await axios.post(
-        `https://${instanceId}.service-now.com/api/now/table/interaction`,
+        `https://${hostname}/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -700,10 +709,11 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
+    const hostname = userInfo.hostname;
     
     const existingLogId = existingMessageLog.thirdPartyLogId;
     const getLogRes = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -716,7 +726,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         }
     }
     const updateLogRes = await axios.patch(
-        `https://${instanceId}.service-now.com/api/now/table/interaction/${existingLogId}`,
+        `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
@@ -734,8 +744,9 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
+    const hostname = userInfo.hostname;
     
-    // const account = await axios.get(`https://${instanceId}.service-now.com/api/now/account`, {
+    // const account = await axios.get(`https://${hostname}/api/now/account`, {
     //     headers: {
     //         'Authorization': authHeader
     //     }
@@ -749,7 +760,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 
     const contactInfoRes = await axios.post(
-        `https://${instanceId}.service-now.com/api/now/table/sys_user`,
+        `https://${hostname}/api/now/table/sys_user`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
