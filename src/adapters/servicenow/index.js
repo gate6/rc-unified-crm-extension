@@ -429,7 +429,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
-            `https://${instanceId}.service-now.com/api/now/contact?sysparm_query=phoneLIKE${numberToQuery}`,
+            `https://${instanceId}.service-now.com/api/now/table/sys_user?sysparm_query=phoneLIKE${numberToQuery}`,
             {
                 headers: { 'Authorization':  authHeader }
             });
@@ -735,21 +735,21 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     
-    const account = await axios.get(`https://${instanceId}.service-now.com/api/now/account`, {
-        headers: {
-            'Authorization': authHeader
-        }
-    });
+    // const account = await axios.get(`https://${instanceId}.service-now.com/api/now/account`, {
+    //     headers: {
+    //         'Authorization': authHeader
+    //     }
+    // });
 
     const postBody = {
-        name: newContactName,
+        user_name: newContactName?.toLowerCase(),
         phone: phoneNumber,
         type: newContactType,
-        account: account.data.result[0].sys_id
+        // account: account.data.result[0].sys_id
     }
 
     const contactInfoRes = await axios.post(
-        `https://${instanceId}.service-now.com/api/now/contact`,
+        `https://${instanceId}.service-now.com/api/now/table/sys_user`,
         postBody,
         {
             headers: { 'Authorization': authHeader }

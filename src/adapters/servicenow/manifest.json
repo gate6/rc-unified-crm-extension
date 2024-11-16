@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "serverUrl": "http://localhost:6066",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6",
@@ -45,7 +45,7 @@
             "customState": "",
             "scope": "",
             "canOpenLogPage": true,
-            "contactPageUrl":"https://dev254249.service-now.com/customer_contact.do?sys_id={contactId}",
+            "contactPageUrl":"https://dev254249.service-now.com/now/nav/ui/classic/params/target/sys_user.do?sys_id={contactId}",
             "logPageUrl":"https://dev254249.service-now.com/interaction.do?sys_id={logId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
