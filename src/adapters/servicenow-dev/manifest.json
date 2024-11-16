@@ -2,625 +2,126 @@
     "serverUrl": "https://rc-crmapi.test.gate6.com",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
-        "name": "RingCentral Labs",
-        "websiteUrl": "https://github.com/ringcentral/rc-unified-crm-extension"
+        "name": "Gate6",
+        "websiteUrl": "https://www.gate6.com/",
+        "iconUrl": "https://www.gate6.com/images/gate6.png",
+        "supportUrl": "https://www.gate6.com/contact-us/"
     },
     "platforms": {
-        "pipedrive": {
-            "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Pipedrive_logo.png",
-            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/pipedrive/",
+        "servicenow": {
             "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
             "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
             "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
-            "urlIdentifier": "pipedrive.com",
-            "name": "pipedrive",
-            "displayName": "Pipedrive",
+            "urlIdentifier": "*service-now.com*",
+            "name": "servicenow",
+            "displayName": "servicenow",
+            "enableExtensionNumberLoggingSetting": true,
+            "requestConfig": {
+                "timeout": 30
+            },
             "auth": {
                 "type": "oauth",
-                "oauth": {
-                    "authUrl": "https://oauth.pipedrive.com/oauth/authorize",
-                    "clientId": "5d4736e322561f57",
-                    "redirectUri": "https://rc-crmapi.test.gate6.com/pipedrive-redirect"
-                }
-            },
-            "canOpenLogPage": false,
-            "contactPageUrl": "https://{hostname}/person/{contactId}",
-            "logPageUrl": "https://{hostname}/activities/{logId}",
-            "page": {
-                "callLog": {
-                    "additionalFields": [
-                        {
-                            "const": "deals",
-                            "title": "Deal",
-                            "type": "selection",
-                            "contactDependent": true
-                        }
-                    ]
-                },
-                "messageLog": {
-                    "additionalFields": [
-                        {
-                            "const": "deals",
-                            "title": "Deal",
-                            "type": "selection",
-                            "contactDependent": true
-                        }
-                    ]
-                },
-                "feedback": {
-                    "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}&entry.800026675={version}",
-                    "elements": [
-                        {
-                            "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
-                            "type": "string",
-                            "bold": false
-                        },
-                        {
-                            "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
-                            "type": "string",
-                            "bold": true
-                        },
-                        {
-                            "const": "score",
-                            "title": "Score from 1 to 10",
-                            "type": "selection",
-                            "selections": [
-                                {
-                                    "const": "1",
-                                    "title": "1"
-                                },
-                                {
-                                    "const": "2",
-                                    "title": "2"
-                                },
-                                {
-                                    "const": "3",
-                                    "title": "3"
-                                },
-                                {
-                                    "const": "4",
-                                    "title": "4"
-                                },
-                                {
-                                    "const": "5",
-                                    "title": "5"
-                                },
-                                {
-                                    "const": "6",
-                                    "title": "6"
-                                },
-                                {
-                                    "const": "7",
-                                    "title": "7"
-                                },
-                                {
-                                    "const": "8",
-                                    "title": "8"
-                                },
-                                {
-                                    "const": "9",
-                                    "title": "9"
-                                },
-                                {
-                                    "const": "10",
-                                    "title": "10"
-                                }
-                            ],
-                            "required": true
-                        },
-                        {
-                            "const": "feedback",
-                            "title": "Feedback",
-                            "type": "inputField",
-                            "placeholder": "Please share your feedback...",
-                            "required": true
-                        }
-                    ]
-                }
-            },
-            "embeddedOnCrmPage": {
-                "welcomePage": {
-                    "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/pipedrive/",
-                    "videoLink": "https://youtu.be/Hu0qC13HDkQ"
-                }
-            }
-        },
-        "insightly": {
-            "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Insightly_logo.png",
-            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/insightly/",
-            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
-            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
-            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
-            "urlIdentifier": "insightly.com",
-            "name": "insightly",
-            "displayName": "Insightly",
-            "auth": {
-                "type": "apiKey",
                 "apiKey": {
                     "page": {
-                        "title": "Insightly",
-                        "warning": "To manually connect, please go to Insightly User Settings and then copy info in API section over.",
+                        "title": "test CRM",
                         "content": [
-                            {
-                                "const": "insightlyGetApiKey",
-                                "title": "Get API Key",
-                                "type": "string",
-                                "uiSchema": {
-                                    "ui:field": "button",
-                                    "ui:variant": "contained",
-                                    "ui:fullWidth": true
-                                }
-                            },
                             {
                                 "const": "apiKey",
                                 "title": "apiKey",
                                 "type": "string",
                                 "required": true
-                            },
-                            {
-                                "const": "apiUrl",
-                                "title": "apiUrl",
-                                "type": "string",
-                                "required": true
                             }
                         ]
                     }
-                }
-            },
-            "canOpenLogPage": true,
-            "contactPageUrl": "https://{hostname}/list/{contactType}/?blade=/details/{contactType}/{contactId}",
-            "logPageUrl": "https://{hostname}/list/{contactType}/?blade=/details/Event/{logId}",
-            "contactTypes": [
-                {
-                    "display": "Lead",
-                    "value": "lead"
                 },
-                {
-                    "display": "Contact",
-                    "value": "contact"
-                }
-            ],
-            "page": {
-                "callLog": {
-                    "additionalFields": [
-                        {
-                            "const": "organization",
-                            "title": "Organisation",
-                            "type": "selection",
-                            "contactDependent": true
-                        },
-                        {
-                            "const": "opportunity",
-                            "title": "Opportunity",
-                            "type": "selection",
-                            "contactDependent": true
-                        },
-                        {
-                            "const": "project",
-                            "title": "Project",
-                            "type": "selection",
-                            "contactDependent": true
-                        }
-                    ]
-                },
-                "messageLog": {
-                    "additionalFields": [
-                        {
-                            "const": "organization",
-                            "title": "Organisation",
-                            "type": "selection",
-                            "contactDependent": true
-                        },
-                        {
-                            "const": "opportunity",
-                            "title": "Opportunity",
-                            "type": "selection",
-                            "contactDependent": true
-                        },
-                        {
-                            "const": "project",
-                            "title": "Project",
-                            "type": "selection",
-                            "contactDependent": true
-                        }
-                    ]
-                },
-                "feedback": {
-                    "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}&entry.800026675={version}",
-                    "elements": [
-                        {
-                            "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
-                            "type": "string",
-                            "bold": false
-                        },
-                        {
-                            "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
-                            "type": "string",
-                            "bold": true
-                        },
-                        {
-                            "const": "score",
-                            "title": "Score from 1 to 10",
-                            "type": "selection",
-                            "selections": [
-                                {
-                                    "const": "1",
-                                    "title": "1"
-                                },
-                                {
-                                    "const": "2",
-                                    "title": "2"
-                                },
-                                {
-                                    "const": "3",
-                                    "title": "3"
-                                },
-                                {
-                                    "const": "4",
-                                    "title": "4"
-                                },
-                                {
-                                    "const": "5",
-                                    "title": "5"
-                                },
-                                {
-                                    "const": "6",
-                                    "title": "6"
-                                },
-                                {
-                                    "const": "7",
-                                    "title": "7"
-                                },
-                                {
-                                    "const": "8",
-                                    "title": "8"
-                                },
-                                {
-                                    "const": "9",
-                                    "title": "9"
-                                },
-                                {
-                                    "const": "10",
-                                    "title": "10"
-                                }
-                            ],
-                            "required": true
-                        },
-                        {
-                            "const": "feedback",
-                            "title": "Feedback",
-                            "type": "inputField",
-                            "placeholder": "Please share your feedback...",
-                            "required": true
-                        }
-                    ]
-                }
-            },
-            "embeddedOnCrmPage": {
-                "welcomePage": {
-                    "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/insightly/",
-                    "videoLink": "https://youtu.be/5hWvVI12UAc"
-                }
-            }
-        },
-        "clio": {
-            "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Clio_Logo.png",
-            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/clio/",
-            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
-            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
-            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
-            "urlIdentifier": "app.clio.com",
-            "name": "clio",
-            "displayName": "Clio",
-            "auth": {
-                "type": "oauth",
                 "oauth": {
-                    "authUrl": "https://app.clio.com/oauth/authorize",
-                    "clientId": "JxK4GglGRoZnWoKA4sSLoXa5PHA2E6Mjisv3iIMY",
-                    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html"
+                    "authUrl": "https://dev254249.service-now.com/oauth_auth.do",
+                    "clientId": "77a84277d15d1210909d516826f605b6",
+                    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
+                    "customState": "",
+                    "scope": ""
                 }
             },
-            "canOpenLogPage": false,
-            "contactPageUrl": "https://{hostname}/nc/#/contacts/{contactId}",
-            "page": {
-                "callLog": {
-                    "additionalFields": [
-                        {
-                            "const": "matters",
-                            "title": "Matter",
-                            "type": "selection",
-                            "contactDependent": true
-                        },
-                        {
-                            "const": "logTimeEntry",
-                            "title": "Log time entry",
-                            "type": "checkbox",
-                            "contactDependent": false,
-                            "defaultValue": true
-                        }
-                    ]
-                },
-                "messageLog": {
-                    "additionalFields": [
-                        {
-                            "const": "matters",
-                            "title": "Matter",
-                            "type": "selection",
-                            "contactDependent": true
-                        }
-                    ]
-                },
-                "feedback": {
-                    "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}&entry.800026675={version}",
-                    "elements": [
-                        {
-                            "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
-                            "type": "string",
-                            "bold": false
-                        },
-                        {
-                            "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
-                            "type": "string",
-                            "bold": true
-                        },
-                        {
-                            "const": "score",
-                            "title": "Score from 1 to 10",
-                            "type": "selection",
-                            "selections": [
-                                {
-                                    "const": "1",
-                                    "title": "1"
-                                },
-                                {
-                                    "const": "2",
-                                    "title": "2"
-                                },
-                                {
-                                    "const": "3",
-                                    "title": "3"
-                                },
-                                {
-                                    "const": "4",
-                                    "title": "4"
-                                },
-                                {
-                                    "const": "5",
-                                    "title": "5"
-                                },
-                                {
-                                    "const": "6",
-                                    "title": "6"
-                                },
-                                {
-                                    "const": "7",
-                                    "title": "7"
-                                },
-                                {
-                                    "const": "8",
-                                    "title": "8"
-                                },
-                                {
-                                    "const": "9",
-                                    "title": "9"
-                                },
-                                {
-                                    "const": "10",
-                                    "title": "10"
-                                }
-                            ],
-                            "required": true
-                        },
-                        {
-                            "const": "feedback",
-                            "title": "Feedback",
-                            "type": "inputField",
-                            "placeholder": "Please share your feedback...",
-                            "required": true
-                        }
-                    ]
-                }
-            },
+            "customState": "",
+            "scope": "",
+            "canOpenLogPage": true,
+            "contactPageUrl":"https://dev254249.service-now.com/customer_contact.do?sys_id={contactId}",
+            "logPageUrl":"https://dev254249.service-now.com/interaction.do?sys_id={logId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
-                    "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/clio/",
+                    "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
                     "videoLink": "https://youtu.be/pQgdsAR1UCI"
                 }
-            }
-        },
-        "redtail": {
-            "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Redtail_Logo.png",
-            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/redtail/",
-            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
-            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
-            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
-            "urlIdentifier": "crm.redtailtechnology.com",
-            "name": "redtail",
-            "auth": {
-                "type": "apiKey",
-                "apiKey": {
-                    "page": {
-                        "title": "Redtail",
-                        "content": [
-                            {
-                                "const": "description",
-                                "description": "Please enter your Redtail CRM credentials below",
-                                "type": "string",
-                                "uiSchema": {
-                                    "ui:field": "typography",
-                                    "ui:variant": "body2",
-                                    "ui:align": "center"
-                                }
-                            },
-                            {
-                                "const": "username",
-                                "title": "username",
-                                "type": "string",
-                                "required": true
-                            },
-                            {
-                                "const": "password",
-                                "title": "password",
-                                "type": "string",
-                                "required": true,
-                                "uiSchema": {
-                                    "ui:widget": "password"
-                                }
-                            }
-                        ]
-                    }
-                }
             },
-            "page": {
-                "feedback": {
-                    "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}&entry.800026675={version}",
-                    "elements": [
-                        {
-                            "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
-                            "type": "string",
-                            "bold": false
-                        },
-                        {
-                            "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
-                            "type": "string",
-                            "bold": true
-                        },
-                        {
-                            "const": "score",
-                            "title": "Score from 1 to 10",
-                            "type": "selection",
-                            "selections": [
-                                {
-                                    "const": "1",
-                                    "title": "1"
-                                },
-                                {
-                                    "const": "2",
-                                    "title": "2"
-                                },
-                                {
-                                    "const": "3",
-                                    "title": "3"
-                                },
-                                {
-                                    "const": "4",
-                                    "title": "4"
-                                },
-                                {
-                                    "const": "5",
-                                    "title": "5"
-                                },
-                                {
-                                    "const": "6",
-                                    "title": "6"
-                                },
-                                {
-                                    "const": "7",
-                                    "title": "7"
-                                },
-                                {
-                                    "const": "8",
-                                    "title": "8"
-                                },
-                                {
-                                    "const": "9",
-                                    "title": "9"
-                                },
-                                {
-                                    "const": "10",
-                                    "title": "10"
-                                }
-                            ],
-                            "required": true
-                        },
-                        {
-                            "const": "feedback",
-                            "title": "Feedback",
-                            "type": "inputField",
-                            "placeholder": "Please share your feedback...",
-                            "required": true
-                        }
-                    ]
-                }
-            },
-            "canOpenLogPage": true,
-            "contactPageUrl": "https://{hostname}/contacts/{contactId}",
-            "logPageUrl": "https://{hostname}/activities/{logId}",
-            "embeddedOnCrmPage": {
-                "welcomePage": {
-                    "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/redtail/",
-                    "videoLink": "https://youtu.be/1pbpbEvp5uQ"
-                }
-            }
-        },
-        "bullhorn": {
-            "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Bullhorn_Logo.png",
-            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/bullhorn/",
-            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
-            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
-            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
-            "urlIdentifier": "app.bullhornstaffing.com",
-            "name": "bullhorn",
-            "displayName": "Bullhorn",
-            "auth": {
-                "type": "oauth",
-                "oauth": {
-                    "authUrl": "https://auth.bullhornstaffing.com/oauth/authorize",
-                    "clientId": "5a1ff851-6b1c-454d-8501-826502e6fc76",
-                    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html"
-                }
-            },
-            "canOpenLogPage": false,
-            "contactTypes": [
-                {
-                    "display": "Candidate",
-                    "value": "Candidate"
-                },
-                {
-                    "display": "Contact",
-                    "value": "Contact"
-                }
-            ],
             "settings": [
                 {
-                    "id": "bullhornDefaultNoteAction",
+                    "id": "serviceNowState",
                     "type": "section",
-                    "name": "Bullhorn options",
+                    "name": "serviceNow Interaction State Options",
                     "items": [
                         {
-                            "id": "noteActionMatchWarning",
+                            "id": "stateMatchWarning",
                             "name": "Info: note action matching warning",
                             "type": "warning",
                             "value": "Note action value match ignores cases and spaces"
                         },
                         {
-                            "id": "bullhornInboundCallNoteAction",
+                            "id": "serviceNowInboundCallState",
                             "type": "inputField",
                             "name": "Default action for inbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
-                            "id": "bullhornOutboundCallNoteAction",
+                            "id": "serviceNowOutboundCallState",
                             "type": "inputField",
                             "name": "Default action for outbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
-                            "id": "bullhornMessageNoteAction",
+                            "id": "serviceNowMessageState",
                             "type": "inputField",
                             "name": "Default action for SMS",
                             "placeholder": "Enter action value"
                         },
                         {
-                            "id": "bullhornVoicemailNoteAction",
+                            "id": "serviceNowVoicemailState",
+                            "type": "inputField",
+                            "name": "Default action for voicemails",
+                            "placeholder": "Enter action value"
+                        }
+                    ]
+                },
+                {
+                    "id": "serviceNowType",
+                    "type": "section",
+                    "name": "serviceNow Interaction Type options",
+                    "items": [
+                        {
+                            "id": "typeMatchWarning",
+                            "name": "Info: note action matching warning",
+                            "type": "warning",
+                            "value": "Note action value match ignores cases and spaces"
+                        },
+                        {
+                            "id": "serviceNowInboundCallType",
+                            "type": "inputField",
+                            "name": "Default action for inbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowOutboundCallType",
+                            "type": "inputField",
+                            "name": "Default action for outbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowMessageType",
+                            "type": "inputField",
+                            "name": "Default action for SMS",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowVoicemailType",
                             "type": "inputField",
                             "name": "Default action for voicemails",
                             "placeholder": "Enter action value"
@@ -632,17 +133,34 @@
                 "callLog": {
                     "additionalFields": [
                         {
-                            "const": "noteActions",
-                            "title": "Note action",
+                            "const": "state",
+                            "title": "State",
                             "type": "selection",
-                            "contactDependent": false,
-                            "defaultSettingId": "bullhornDefaultNoteAction",
+                            "contactDependent": true,
+                            "allowCustomValue": true,
+                            "defaultSettingId": "serviceNowState",
                             "defaultSettingValues": {
                                 "inboundCall": {
-                                    "settingId": "bullhornInboundCallNoteAction"
+                                    "settingId": "serviceNowInboundCallState"
                                 },
                                 "outboundCall": {
-                                    "settingId": "bullhornOutboundCallNoteAction"
+                                    "settingId": "serviceNowOutboundCallState"
+                                }
+                            }
+                        },
+                        {
+                            "const": "type",
+                            "title": "Type",
+                            "type": "selection",
+                            "contactDependent": true,
+                            "allowCustomValue": true,
+                            "defaultSettingId": "serviceNowType",
+                            "defaultSettingValues": {
+                                "inboundCall": {
+                                    "settingId": "serviceNowInboundCallType"
+                                },
+                                "outboundCall": {
+                                    "settingId": "serviceNowOutboundCallType"
                                 }
                             }
                         }
@@ -651,24 +169,27 @@
                 "messageLog": {
                     "additionalFields": [
                         {
-                            "const": "noteActions",
-                            "title": "Note action",
+                            "const": "matters",
+                            "title": "Matter",
                             "type": "selection",
-                            "contactDependent": false,
-                            "defaultSettingId": "bullhornDefaultNoteAction",
-                            "defaultSettingValues": {
-                                "message": {
-                                    "settingId": "bullhornMessageNoteAction"
-                                },
-                                "voicemail": {
-                                    "settingId": "bullhornVoicemailNoteAction"
-                                }
-                            }
+                            "contactDependent": true
+                        },
+                        {
+                            "const": "state",
+                            "title": "State",
+                            "type": "selection",
+                            "contactDependent": true
+                        },
+                        {
+                            "const": "type",
+                            "title": "Type",
+                            "type": "selection",
+                            "contactDependent": true
                         }
                     ]
-                },
-                "feedback": {
-                    "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}&entry.800026675={version}",
+            },
+            "feedback": {
+                    "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}",
                     "elements": [
                         {
                             "const": "pageDescription",
@@ -738,135 +259,8 @@
                             "required": true
                         }
                     ]
-                }
-            },
-            "embeddedOnCrmPage": {
-                "welcomePage": {
-                    "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/bullhorn/",
-                    "videoLink": "https://youtu.be/afbdQD0y4Yo"
-                }
+                }}
             }
-        },
-        "netsuite": {
-            "logoUrl": "https://raw.githubusercontent.com/ringcentral/rc-unified-crm-extension/main/docs/img/CRMLogos/Netsuite_Logo.png",
-            "documentationUrl": "https://ringcentral.github.io/rc-unified-crm-extension/crm/netsuite/",
-            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
-            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
-            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
-            "urlIdentifier": "*.app.netsuite.com/app*",
-            "name": "netsuite",
-            "displayName": "NetSuite",
-            "auth": {
-                "type": "oauth",
-                "oauth": {
-                    "authUrl": "https://system.netsuite.com/app/login/oauth2/authorize.nl",
-                    "clientId": "0bc4b1f329aefe9320d80ae080216faccd19c9cf11c19256d7440b25df6b1b5a",
-                    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
-                    "scope": "scope=restlets+rest_webservices",
-                    "customState": "fillerString,platform=netsuite"
-                }
-            },
-            "platform": "netsuite",
-            "contactPageUrl": "https://{hostname}/app/common/entity/{contactType}.nl?id={contactId}&source=ringcentral",
-            "logPageUrl": "https://{hostname}/app/crm/calendar/call.nl?id={logId}",
-            "canOpenLogPage": true,
-            "contactTypes": [
-                {
-                    "display": "Customer",
-                    "value": "custjob"
-                },
-                {
-                    "display": "Contact",
-                    "value": "contact"
-                }
-            ],
-            "embeddedOnCrmPage": {
-                "welcomePage": {
-                    "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
-                    "videoLink": "https://youtu.be/pQgdsAR1UCI"
-                }
-            },
-            "page": {
-                "callLog": {
-                    "additionalFields": []
-                },
-                "messageLog": {
-                    "additionalFields": []
-                },
-                "feedback": {
-                    "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}&entry.800026675={version}",
-                    "elements": [
-                        {
-                            "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
-                            "type": "string",
-                            "bold": false
-                        },
-                        {
-                            "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
-                            "type": "string",
-                            "bold": true
-                        },
-                        {
-                            "const": "score",
-                            "title": "Score from 1 to 10",
-                            "type": "selection",
-                            "selections": [
-                                {
-                                    "const": "1",
-                                    "title": "1"
-                                },
-                                {
-                                    "const": "2",
-                                    "title": "2"
-                                },
-                                {
-                                    "const": "3",
-                                    "title": "3"
-                                },
-                                {
-                                    "const": "4",
-                                    "title": "4"
-                                },
-                                {
-                                    "const": "5",
-                                    "title": "5"
-                                },
-                                {
-                                    "const": "6",
-                                    "title": "6"
-                                },
-                                {
-                                    "const": "7",
-                                    "title": "7"
-                                },
-                                {
-                                    "const": "8",
-                                    "title": "8"
-                                },
-                                {
-                                    "const": "9",
-                                    "title": "9"
-                                },
-                                {
-                                    "const": "10",
-                                    "title": "10"
-                                }
-                            ],
-                            "required": true
-                        },
-                        {
-                            "const": "feedback",
-                            "title": "Feedback",
-                            "type": "inputField",
-                            "placeholder": "Please share your feedback...",
-                            "required": true
-                        }
-                    ]
-                }
-            }
-        }
     },
-    "version": "1.1.0"
+    "version": "1.1.4"
 }
