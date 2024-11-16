@@ -387,14 +387,14 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
-    const count = await models.companies.count({
+    const companyData = await models.companies.findOne({
         where: {
             hostname: hostname,
             status: 1
         }
     });
 
-    if (count == 0) {
+    if (!(companyData?.status)) {
         return {
             successful: false,
             platformUserInfo: {
@@ -431,11 +431,12 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     // You can use parsePhoneNumber functions to further parse the phone number
     const matchedContactInfo = [];
+    const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact'
 
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
-            `https://${hostname}/api/now/table/sys_user?sysparm_query=phoneLIKE${numberToQuery}`,
+            `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}`,
             {
                 headers: { 'Authorization':  authHeader }
             });
@@ -745,6 +746,13 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
+
+    const companyData = await models.companies.findOne({
+        where: {
+            hostname: hostname,
+            status: 1
+        }
+    });
     
     // const account = await axios.get(`https://${hostname}/api/now/account`, {
     //     headers: {
@@ -758,9 +766,10 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
         type: newContactType,
         // account: account.data.result[0].sys_id
     }
+    const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact'
 
     const contactInfoRes = await axios.post(
-        `https://${hostname}/api/now/table/sys_user`,
+        `https://${hostname}/api/now/${contactTable}`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
