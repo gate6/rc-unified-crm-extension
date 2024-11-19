@@ -753,12 +753,6 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             status: 1
         }
     });
-    
-    // const account = await axios.get(`https://${hostname}/api/now/account`, {
-    //     headers: {
-    //         'Authorization': authHeader
-    //     }
-    // });
 
     const postBody = {
         user_name: newContactName?.toLowerCase(),
@@ -766,15 +760,33 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
         type: newContactType,
         // account: account.data.result[0].sys_id
     }
-    const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact'
 
-    const contactInfoRes = await axios.post(
-        `https://${hostname}/api/now/${contactTable}`,
-        postBody,
-        {
-            headers: { 'Authorization': authHeader }
-        }
-    );
+    let contactInfoRes;
+
+    if (companyData?.contactTable == 'contact') {
+        const account = await axios.get(`https://${hostname}/api/now/account`, {
+            headers: {
+                'Authorization': authHeader
+            }
+        });
+
+        postBody.account = account.data.result[0].sys_id;
+        contactInfoRes = await axios.post(
+            `https://${hostname}/api/now/contact`,
+            postBody,
+            {
+                headers: { 'Authorization': authHeader }
+            }
+        );
+    } else {
+        contactInfoRes = await axios.post(
+            `https://${hostname}/api/now/table/sys_user`,
+            postBody,
+            {
+                headers: { 'Authorization': authHeader }
+            }
+        );
+    }
 
     //--------------------------------------------------------------------------------
     //---CHECK.9: In extension, try create a new contact against an unknown number ---
