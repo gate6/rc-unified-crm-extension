@@ -16,7 +16,7 @@ const typeMapping = {
     "chat": "chat"
 };
 
-async function findStateValueByName(instanceId, authHeader, inputValue){
+async function findStateValueByName(hostname, authHeader, inputValue){
     
     const normalizedInputValue = inputValue.toLowerCase();
     const normalizedValue = stateMapping[normalizedInputValue] || null;
@@ -27,7 +27,7 @@ async function findStateValueByName(instanceId, authHeader, inputValue){
     }
     
     const stateSelection = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^label=${normalizedInputValue}&sysparm_fields=sys_id,label,value`,
+        `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^label=${normalizedInputValue}&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
@@ -39,14 +39,14 @@ async function findStateValueByName(instanceId, authHeader, inputValue){
     }
 } 
 
-async function findStateValueById(instanceId, authHeader, inputId){
+async function findStateValueById(hostname, authHeader, inputId){
 
     if (!inputId) {
         console.log("Invalid state id provided.");
     }
     
     const stateSelection = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${inputId}&sysparm_fields=sys_id,label,value`,
+        `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${inputId}&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
@@ -58,7 +58,7 @@ async function findStateValueById(instanceId, authHeader, inputId){
     }
 } 
 
-async function findTypeValueByName(instanceId, authHeader, inputValue) {
+async function findTypeValueByName(hostname, authHeader, inputValue) {
     const normalizedInputValue = inputValue.toLowerCase();
     const normalizedValue = typeMapping[normalizedInputValue] || null;
 
@@ -68,7 +68,7 @@ async function findTypeValueByName(instanceId, authHeader, inputValue) {
     }
     
     const typeSelection = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^label=${normalizedInputValue}&sysparm_fields=sys_id,label,value`,
+        `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^label=${normalizedInputValue}&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization': authHeader }
         });
@@ -80,13 +80,13 @@ async function findTypeValueByName(instanceId, authHeader, inputValue) {
     }
 }
 
-async function findTypeValueById(instanceId, authHeader, inputId) {
+async function findTypeValueById(hostname, authHeader, inputId) {
     if (!inputId) {
         console.log("Invalid type id provided.");
     }
     
     const typeSelection = await axios.get(
-        `https://${instanceId}.service-now.com/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${inputId}&sysparm_fields=sys_id,label,value`,
+        `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${inputId}&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization': authHeader }
         });

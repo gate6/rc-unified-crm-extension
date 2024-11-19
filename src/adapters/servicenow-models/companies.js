@@ -62,7 +62,12 @@ module.exports = function(sequelize, DataTypes) {
     rcAccountId: {
       type: DataTypes.STRING(100),
       allowNull: true
-    }
+    },
+    contactTable: {
+      type: DataTypes.ENUM('user', 'contact'),
+      allowNull: false,
+      defaultValue: 'contact'
+    } 
   }, {
     sequelize,
     tableName: 'companies',
