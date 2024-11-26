@@ -431,7 +431,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     // You can use parsePhoneNumber functions to further parse the phone number
     const matchedContactInfo = [];
-    const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact'
+    const contactTable = (companyData?.contactTable == 'user' || isExtension) ? 'table/sys_user' : 'contact';
 
 
     for (var numberToQuery of numberToQueryArray) {
@@ -762,8 +762,9 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 
     let contactInfoRes;
+    const isExtensionNumber = phoneNumber.toString().length <= 8;
 
-    if (companyData?.contactTable == 'contact') {
+    if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
         const account = await axios.get(`https://${hostname}/api/now/account`, {
             headers: {
                 'Authorization': authHeader
