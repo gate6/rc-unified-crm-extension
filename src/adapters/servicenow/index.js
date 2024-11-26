@@ -762,7 +762,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 
     let contactInfoRes;
-    const isExtensionNumber = phoneNumber.toString().length <= 8;
+    const isExtensionNumber = phoneNumber.toString().length <= 8 && phoneNumber.toString().length >= 3;
 
     if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
         const account = await axios.get(`https://${hostname}/api/now/account`, {
