@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "serverUrl": "http://localhost:6066",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6",
@@ -35,8 +35,8 @@
                     }
                 },
                 "oauth": {
-                    "authUrl": "https://dev254249.service-now.com/oauth_auth.do",
-                    "clientId": "77a84277d15d1210909d516826f605b6",
+                    "authUrl": "https://dev247623.service-now.com/oauth_auth.do",
+                    "clientId": "767112199ebc48258b1d73f89ccf7d1a",
                     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
                     "customState": "",
                     "scope": ""
@@ -45,8 +45,8 @@
             "customState": "",
             "scope": "",
             "canOpenLogPage": true,
-            "contactPageUrl":"https://dev254249.service-now.com/now/nav/ui/classic/params/target/sys_user.do?sys_id={contactId}",
-            "logPageUrl":"https://dev254249.service-now.com/interaction.do?sys_id={logId}",
+            "contactPageUrl":"https://dev247623.service-now.com/now/nav/ui/classic/params/target/sys_user.do?sys_id={contactId}",
+            "logPageUrl":"https://dev247623.service-now.com/interaction_list.do?sysparm_query=opened_for={contactId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
                     "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
