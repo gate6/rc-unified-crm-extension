@@ -1,18 +1,21 @@
 const path = require('path');
 const express = require('express');
-const crypto = require('crypto');
 const bodyParser = require('body-parser')
 const { UserModel } = require('./models/userModel');
 const { CallLogModel } = require('./models/callLogModel');
 const { MessageLogModel } = require('./models/messageLogModel');
+const { AdminConfigModel } = require('./models/adminConfigModel');
 const cors = require('cors')
 const jwt = require('./lib/jwt');
 const logCore = require('./core/log');
 const contactCore = require('./core/contact');
 const authCore = require('./core/auth');
+const adminCore = require('./core/admin');
+const userCore = require('./core/user');
 const releaseNotes = require('./releaseNotes.json');
 const axios = require('axios');
 const analytics = require('./lib/analytics');
+const util = require('./lib/util');
 let packageJson = null;
 try {
     packageJson = require('./package.json');
@@ -28,14 +31,10 @@ async function initDB() {
     await UserModel.sync();
     await CallLogModel.sync();
     await MessageLogModel.sync();
+    await AdminConfigModel.sync();
     console.log('db tables created');
 }
 
-function getHashValue(string, secretKey) {
-    return crypto.createHash('sha256').update(
-        `${string}:${secretKey}`
-    ).digest('hex');
-}
 initDB();
 analytics.init();
 const app = express();
@@ -110,6 +109,248 @@ app.delete('/pipedrive-redirect', async function (req, res) {
         res.status(500).send(e);
     }
 })
+
+app.post('/admin/settings', async function (req, res) {
+    const requestStartTime = new Date().getTime();
+    let platformName = null;
+    let success = false;
+    const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+    try {
+        const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+        const hashedRcAccountId = util.getHashValue(rcAccountId, process.env.HASH_KEY);
+        if (isValidated) {
+            await adminCore.upsertAdminSettings({ hashedRcAccountId, adminSettings: req.body.adminSettings });
+            res.status(200).send('Admin settings updated');
+            success = true;
+        }
+        else {
+            res.status(401).send('Admin validation failed');
+            success = false;
+        }
+    }
+    catch (e) {
+        console.log(`${e.stack}`);
+        res.status(400).send(e);
+    }
+    const requestEndTime = new Date().getTime();
+    analytics.track({
+        eventName: 'Set admin settings',
+        interfaceName: 'setAdminSettings',
+        adapterName: platformName,
+        accountId: hashedAccountId,
+        extensionId: hashedExtensionId,
+        success,
+        requestDuration: (requestEndTime - requestStartTime) / 1000,
+        userAgent,
+        ip,
+        author
+    });
+});
+
+app.get('/admin/settings', async function (req, res) {
+    const requestStartTime = new Date().getTime();
+    let platformName = null;
+    let success = false;
+    const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+    try {
+        const jwtToken = req.query.jwtToken;
+        if (!!jwtToken) {
+            const unAuthData = jwt.decodeJwt(jwtToken);
+            platformName = unAuthData.platform;
+            const user = await UserModel.findOne({
+                where: {
+                    id: unAuthData.id,
+                    platform: unAuthData.platform
+                }
+            });
+            if (!!!user) {
+                res.status(400).send('Unknown user');
+            }
+            const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+            const hashedRcAccountId = util.getHashValue(rcAccountId, process.env.HASH_KEY);
+            if (isValidated) {
+                const adminSettings = await adminCore.getAdminSettings({ hashedRcAccountId });
+                if (!!adminSettings) {
+                    res.status(200).send(adminSettings);
+                }
+                else {
+                    res.status(200).send({
+                        customAdapter: null,
+                        userSettings: {}
+                    });
+                }
+                success = true;
+            }
+            else {
+                res.status(401).send('Admin validation failed');
+                success = false;
+            }
+        }
+        else {
+            res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
+        }
+    }
+    catch (e) {
+        console.log(`platform: ${platformName} \n${e.stack}`);
+        res.status(400).send(e);
+    }
+    const requestEndTime = new Date().getTime();
+    analytics.track({
+        eventName: 'Get admin settings',
+        interfaceName: 'getAdminSettings',
+        adapterName: platformName,
+        accountId: hashedAccountId,
+        extensionId: hashedExtensionId,
+        success,
+        requestDuration: (requestEndTime - requestStartTime) / 1000,
+        userAgent,
+        ip,
+        author
+    });
+});
+
+app.get('/user/preloadSettings', async function (req, res) {
+    try {
+        const rcAccessToken = req.query.rcAccessToken;
+        if (!!rcAccessToken) {
+            const userSettings = await userCore.userSettingsByAdmin({ rcAccessToken });
+            res.status(200).send(userSettings);
+        }
+        else {
+            res.status(400).send('Cannot find rc user login');
+        }
+    }
+    catch (e) {
+        console.log(`${e.stack}`);
+        res.status(400).send(e);
+    }
+}
+);
+app.get('/user/settings', async function (req, res) {
+    const requestStartTime = new Date().getTime();
+    let platformName = null;
+    let success = false;
+    const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+    try {
+        const jwtToken = req.query.jwtToken;
+        if (!!jwtToken) {
+            const unAuthData = jwt.decodeJwt(jwtToken);
+            platformName = unAuthData.platform;
+            const user = await UserModel.findOne({
+                where: {
+                    id: unAuthData.id,
+                    platform: unAuthData.platform
+                }
+            });
+            if (!!!user) {
+                res.status(400).send('Unknown user');
+            }
+            const rcAccessToken = req.query.rcAccessToken;
+            let userSettingsByAdmin = [];
+            if (!!rcAccessToken) {
+                userSettingsByAdmin = await userCore.userSettingsByAdmin({ rcAccessToken });
+            }
+
+            // For non-readonly admin settings, user use its own setting
+            let userSettings = await user.userSettings;
+            let result = {};
+            if (!!!userSettingsByAdmin?.userSettings) {
+                result = userSettings;
+            }
+            else {
+                if (!!userSettingsByAdmin?.userSettings && !!userSettings) {
+                    const keys = Object.keys(userSettingsByAdmin.userSettings).concat(Object.keys(userSettings));
+                    // distinct keys
+                    for (const key of new Set(keys)) {
+                        // from user's own settings
+                        if ((userSettingsByAdmin.userSettings[key] === undefined || userSettingsByAdmin.userSettings[key].customizable) && userSettings[key] !== undefined) {
+                            result[key] = {
+                                customizable: true,
+                                value: userSettings[key].value
+                            };
+                        }
+                        // from admin settings
+                        else {
+                            result[key] = userSettingsByAdmin.userSettings[key];
+                        }
+                    }
+                }
+            }
+            success = true;
+            res.status(200).send(result);
+        }
+        else {
+            success = false;
+            res.status(400).send('Please go to Settings and authorize CRM platform');
+        }
+    }
+    catch (e) {
+        console.log(`platform: ${platformName} \n${e.stack}`);
+        res.status(400).send(e);
+    }
+    const requestEndTime = new Date().getTime();
+    analytics.track({
+        eventName: 'Get user settings',
+        interfaceName: 'getUserSettings',
+        adapterName: platformName,
+        accountId: hashedAccountId,
+        extensionId: hashedExtensionId,
+        success,
+        requestDuration: (requestEndTime - requestStartTime) / 1000,
+        userAgent,
+        ip,
+        author
+    });
+});
+
+app.post('/user/settings', async function (req, res) {
+    const requestStartTime = new Date().getTime();
+    let platformName = null;
+    let success = false;
+    const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+    try {
+        const jwtToken = req.query.jwtToken;
+        if (!!jwtToken) {
+            const unAuthData = jwt.decodeJwt(jwtToken);
+            platformName = unAuthData.platform;
+            const user = await UserModel.findOne({
+                where: {
+                    id: unAuthData.id,
+                    platform: unAuthData.platform
+                }
+            });
+            if (!!!user) {
+                res.status(400).send('Unknown user');
+            }
+            await userCore.updateUserSettings({ user, userSettings: req.body.userSettings });
+            res.status(200).send('User settings updated');
+            success = true;
+        }
+        else {
+            res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
+        }
+    }
+    catch (e) {
+        console.log(`platform: ${platformName} \n${e.stack}`);
+        res.status(400).send(e);
+    }
+    const requestEndTime = new Date().getTime();
+    analytics.track({
+        eventName: 'Set user settings',
+        interfaceName: 'setUserSettings',
+        adapterName: platformName,
+        accountId: hashedAccountId,
+        extensionId: hashedExtensionId,
+        success,
+        requestDuration: (requestEndTime - requestStartTime) / 1000,
+        userAgent,
+        ip,
+        author
+    });
+});
+
 app.get('/hostname', async function (req, res) {
     try {
         const jwtToken = req.query.jwtToken;
@@ -133,35 +374,6 @@ app.get('/hostname', async function (req, res) {
     catch (e) {
         console.log(`${e.stack}`);
         res.status(500).send(e);
-    }
-})
-
-app.get('/temp-bullhorn-migrate-userId', async function (req, res) {
-    try {
-        const jwtToken = req.query.jwtToken;
-        if (!!jwtToken) {
-            const { id: userId, platform } = jwt.decodeJwt(jwtToken);
-            const userInfo = await authCore.tempMigrateBullhornUserId({ oldUserId: userId });
-            if (!!userInfo) {
-                const jwtToken = jwt.generateJwt({
-                    id: userInfo.id.toString(),
-                    platform: platform
-                });
-                res.status(200).send({ jwtToken, name: userInfo.name });
-            }
-            else {
-                res.status(200).send();
-            }
-        }
-        else {
-            res.status(400).send('Please go to Settings and authorize CRM platform');
-            success = false;
-        }
-        console.log('Event: bullhorn user id migrate')
-    }
-    catch (e) {
-        console.log(`platform: bullhorn \n${e.stack}`);
-        res.status(400).send(e);
     }
 })
 
@@ -328,8 +540,8 @@ app.post('/unAuthorize', async function (req, res) {
 });
 app.get('/userInfoHash', async function (req, res) {
     try {
-        const extensionId = getHashValue(req.query.extensionId, process.env.HASH_KEY);
-        const accountId = getHashValue(req.query.accountId, process.env.HASH_KEY);
+        const extensionId = util.getHashValue(req.query.extensionId, process.env.HASH_KEY);
+        const accountId = util.getHashValue(req.query.accountId, process.env.HASH_KEY);
         res.status(200).send({ extensionId, accountId });
     }
     catch (e) {

@@ -297,7 +297,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             startTime: startTimeSLot,
             endTime: endTimeSlot,
             timedEvent: true,
-            message: `\nCall Start Time: ${formatedStartTime}\n Duration In Second: ${callLog.duration}Sec.\n Call End Time : ${formatedEndTime}\nContact Number: ${contactInfo.phoneNumber}\nNote: ${note}${callLog.recording ? `\nCall recording link ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`,
+            message: `Note: ${note}${callLog.recording ? `\nCall recording link ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`,
         };
         if (contactInfo.type?.toUpperCase() === 'CONTACT') {
             const contactInfoRes = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/contact/${contactInfo.id}`, {
@@ -645,17 +645,19 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                             name: newContactName
                         },
                         returnMessage: {
-                            message: `Error in creating Contact.`,
+                            message: netSuiteErrorDetails(error, "Error in Creating Contact"),
                             messageType: 'danger',
                             ttl: 5000
                         }
                     }
                 }
             case 'custjob':
+                const lastName = nameParts.lastName.length > 0 ? nameParts.lastName : nameParts.firstName;
                 const customerPayLoad = {
                     firstName: nameParts.firstName,
                     middleName: nameParts.middleName,
-                    lastName: nameParts.lastName.length > 0 ? nameParts.lastName : nameParts.firstName,
+                    lastName: lastName,
+                    entityId: nameParts.firstName + " " + lastName,
                     phone: phoneNumber || '',
                     isPerson: true
 
@@ -680,7 +682,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                             name: newContactName
                         },
                         returnMessage: {
-                            message: `Error in creating Customer.`,
+                            message: netSuiteErrorDetails(error, "Error in Creating Customer"),
                             messageType: 'danger',
                             ttl: 5000
                         }
