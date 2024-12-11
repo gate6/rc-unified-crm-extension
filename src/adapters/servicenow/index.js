@@ -445,7 +445,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
             for (var result of personInfo.data.result) {
                 matchedContactInfo.push({
                     id: result.sys_id,
-                    name: result.name,
+                    name: (contactTable == 'table/sys_user') ? result.user_name : result.name,
                     phone: numberToQuery,
                     additionalInfo: {state: states, type: interactionType}
                 })
@@ -508,6 +508,32 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
+    const companyData = await models.companies.findOne({
+        where: {
+            hostname: hostname,
+            status: 1
+        }
+    });
+
+    if (!(companyData?.status)) {
+        return {
+            successful: false,
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
+
+    const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact';
     
     const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
@@ -525,6 +551,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
         postBody.state =  returnedState ? returnedState : await findStateValueByName(hostname, authHeader, additionalSubmission.state);
         postBody.assigned_to = caller_id.data.result.id;
+        postBody.opened_for = contactInfo.id;
 
         if (additionalSubmission.type) {
             const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
