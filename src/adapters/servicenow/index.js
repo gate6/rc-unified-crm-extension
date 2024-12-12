@@ -431,7 +431,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     // You can use parsePhoneNumber functions to further parse the phone number
     const matchedContactInfo = [];
-    const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact'
+    const contactTable = (companyData?.contactTable == 'user' || isExtension) ? 'table/sys_user' : 'contact';
 
 
     for (var numberToQuery of numberToQueryArray) {
@@ -445,7 +445,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
             for (var result of personInfo.data.result) {
                 matchedContactInfo.push({
                     id: result.sys_id,
-                    name: result.name,
+                    name: (contactTable == 'table/sys_user') ? result.user_name : result.name,
                     phone: numberToQuery,
                     additionalInfo: {state: states, type: interactionType}
                 })
@@ -508,6 +508,32 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
+    const companyData = await models.companies.findOne({
+        where: {
+            hostname: hostname,
+            status: 1
+        }
+    });
+
+    if (!(companyData?.status)) {
+        return {
+            successful: false,
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
+            returnMessage: {
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
+                ttl: 3000
+            }
+        };
+    }
+
+    const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact';
     
     const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
@@ -525,6 +551,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
         postBody.state =  returnedState ? returnedState : await findStateValueByName(hostname, authHeader, additionalSubmission.state);
         postBody.assigned_to = caller_id.data.result.id;
+        postBody.opened_for = contactInfo.id;
 
         if (additionalSubmission.type) {
             const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
@@ -762,8 +789,9 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 
     let contactInfoRes;
+    const isExtensionNumber = phoneNumber.toString().length <= 8 && phoneNumber.toString().length >= 3;
 
-    if (companyData?.contactTable == 'contact') {
+    if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
         const account = await axios.get(`https://${hostname}/api/now/account`, {
             headers: {
                 'Authorization': authHeader
