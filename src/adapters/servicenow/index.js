@@ -782,7 +782,6 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     });
 
     const postBody = {
-        user_name: newContactName?.toLowerCase(),
         phone: phoneNumber,
         type: newContactType,
         // account: account.data.result[0].sys_id
@@ -799,6 +798,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
         });
 
         postBody.account = account.data.result[0].sys_id;
+        postBody.name = newContactName?.toLowerCase();
         contactInfoRes = await axios.post(
             `https://${hostname}/api/now/contact`,
             postBody,
@@ -807,6 +807,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             }
         );
     } else {
+        postBody.user_name = newContactName?.toLowerCase();
         contactInfoRes = await axios.post(
             `https://${hostname}/api/now/table/sys_user`,
             postBody,
@@ -822,7 +823,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     return {
         contactInfo: {
             id: contactInfoRes.id,
-            name: contactInfoRes.name
+            name: contactInfoRes?.user_name ? contactInfoRes.user_name : contactInfoRes.name
         },
         returnMessage: {
             message: `New contact created.`,
