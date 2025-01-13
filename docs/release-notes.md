@@ -1,5 +1,29 @@
 # Release notes
 
+## 1.3.4
+
+- Upgrade: More accurate call info, including better tracking on call recording link save status
+- New: Call info details can be selectively logged based on new toggles in user settings
+- New: (RingCentral AI license only) Smart Notes to be enabled in user advanced settings
+- Bullhorn(Beta): Server side logging (not to be used with client side auto logging)
+- Bullhorn: Heartbeat mechanism for auth check. It reminds you if auth becomes invalid
+- Bullhron: Lead support
+- Fix: Admin users can see admin tab on first login now
+
+## 1.3.3
+
+- Update: This extension's name is now changed to RingCentral App Connect
+- Fix: (for Clio and Insightly user only) Overriding phone number format missing issue
+- Fix: Admin icon in dark theme
+- Fix: Auto pop up log page after call setting not working
+- Fix: Inbound call contact pop not working
+
+## 1.3.2
+
+- New: User setting inside call pop to control behavior of multiple matched contacts (disabled, all open, prompt to select)
+- Fix: SMS logging issue
+- Fix: Auto open extension now only opens when main page is opened
+
 ## 1.3.1
 
 - New: (Only for admin users) Admin tools. Admins have an extra tab in the extension to control end users' settings

@@ -74,6 +74,51 @@ app.get('/crmManifest', (req, res) => {
 app.get('/is-alive', (req, res) => {
     res.send(`OK`);
 });
+
+app.get('/authValidation', async (req, res) => {
+    const requestStartTime = new Date().getTime();
+    let platformName = null;
+    let success = false;
+    let validationPass = false;
+    const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+    try {
+        const jwtToken = req.query.jwtToken;
+        if (!!jwtToken) {
+            const { id: userId, platform } = jwt.decodeJwt(jwtToken);
+            platformName = platform;
+            const { successful, returnMessage } = await authCore.authValidation({ platform, userId });
+            success = true;
+            validationPass = successful;
+            res.status(200).send({ successful, returnMessage });
+        }
+        else {
+            res.status(400).send('Please go to Settings and authorize CRM platform');
+            success = false;
+        }
+    }
+    catch (e) {
+        console.log(`platform: ${platformName} \n${e.stack}`);
+        res.status(400).send(e);
+        success = false;
+    }
+    const requestEndTime = new Date().getTime();
+    analytics.track({
+        eventName: 'Auth validation',
+        interfaceName: 'authValidation',
+        adapterName: platformName,
+        accountId: hashedAccountId,
+        extensionId: hashedExtensionId,
+        success,
+        requestDuration: (requestEndTime - requestStartTime) / 1000,
+        userAgent,
+        ip,
+        author,
+        extras: {
+            validationPass
+        }
+    });
+});
+
 app.get('/serverVersionInfo', (req, res) => {
     const defaultCrmManifest = require('./adapters/manifest.json');
     res.send({ version: defaultCrmManifest.version });
@@ -112,7 +157,6 @@ app.delete('/pipedrive-redirect', async function (req, res) {
 
 app.post('/admin/settings', async function (req, res) {
     const requestStartTime = new Date().getTime();
-    let platformName = null;
     let success = false;
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
@@ -136,7 +180,6 @@ app.post('/admin/settings', async function (req, res) {
     analytics.track({
         eventName: 'Set admin settings',
         interfaceName: 'setAdminSettings',
-        adapterName: platformName,
         accountId: hashedAccountId,
         extensionId: hashedExtensionId,
         success,
@@ -554,18 +597,22 @@ app.get('/contact', async function (req, res) {
     let platformName = null;
     let success = false;
     let resultCount = 0;
+    let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
         const jwtToken = req.query.jwtToken;
         if (!!jwtToken) {
             const { id: userId, platform } = jwt.decodeJwt(jwtToken);
             platformName = platform;
-            const { successful, returnMessage, contact } = await contactCore.findContact({ platform, userId, phoneNumber: req.query.phoneNumber, overridingFormat: req.query.overridingFormat, isExtension: req.query?.isExtension ?? false });
+            const { successful, returnMessage, contact, extraDataTracking } = await contactCore.findContact({ platform, userId, phoneNumber: req.query.phoneNumber, overridingFormat: req.query.overridingFormat, isExtension: req.query?.isExtension ?? false });
             res.status(200).send({ successful, returnMessage, contact });
             if (successful) {
                 const nonNewContact = contact.filter(c => !c.isNewContact);
                 resultCount = nonNewContact.length;
                 success = true;
+                if (!!extraDataTracking) {
+                    extraData = extraDataTracking;
+                }
             }
         }
         else {
@@ -591,23 +638,28 @@ app.get('/contact', async function (req, res) {
         ip,
         author,
         extras: {
-            resultCount
-        }
+            resultCount,
+            ...extraData
+        },
     });
 });
 app.post('/contact', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
         const jwtToken = req.query.jwtToken;
         if (!!jwtToken) {
             const { id: userId, platform } = jwt.decodeJwt(jwtToken);
             platformName = platform;
-            const { successful, returnMessage, contact } = await contactCore.createContact({ platform, userId, phoneNumber: req.body.phoneNumber, newContactName: req.body.newContactName, newContactType: req.body.newContactType });
+            const { successful, returnMessage, contact, extraDataTracking } = await contactCore.createContact({ platform, userId, phoneNumber: req.body.phoneNumber, newContactName: req.body.newContactName, newContactType: req.body.newContactType });
             res.status(200).send({ successful, returnMessage, contact });
             success = true;
+            if (!!extraDataTracking) {
+                extraData = extraDataTracking;
+            }
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
@@ -630,22 +682,29 @@ app.post('/contact', async function (req, res) {
         requestDuration: (requestEndTime - requestStartTime) / 1000,
         userAgent,
         ip,
-        author
+        author,
+        extras: {
+            ...extraData
+        }
     });
 });
 app.get('/callLog', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
         const jwtToken = req.query.jwtToken;
         if (!!jwtToken) {
             const { id: userId, platform } = jwt.decodeJwt(jwtToken);
             platformName = platform;
-            const { successful, logs, returnMessage } = await logCore.getCallLog({ userId, sessionIds: req.query.sessionIds, platform, requireDetails: req.query.requireDetails === 'true' });
+            const { successful, logs, returnMessage, extraDataTracking } = await logCore.getCallLog({ userId, sessionIds: req.query.sessionIds, platform, requireDetails: req.query.requireDetails === 'true' });
             res.status(200).send({ successful, logs, returnMessage });
             success = true;
+            if (!!extraDataTracking) {
+                extraData = extraDataTracking;
+            }
         }
         else {
             res.status(400).send('Please go to Settings and authorize CRM platform');
@@ -668,19 +727,26 @@ app.get('/callLog', async function (req, res) {
         requestDuration: (requestEndTime - requestStartTime) / 1000,
         userAgent,
         ip,
-        author
+        author,
+        extras: {
+            ...extraData
+        }
     });
 });
 app.post('/callLog', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
         const jwtToken = req.query.jwtToken;
         if (!!jwtToken) {
             const { id: userId, platform } = jwt.decodeJwt(jwtToken);
-            const { successful, logId, returnMessage } = await logCore.createCallLog({ platform, userId, incomingData: req.body });
+            const { successful, logId, returnMessage, extraDataTracking } = await logCore.createCallLog({ platform, userId, incomingData: req.body });
+            if (!!extraDataTracking) {
+                extraData = extraDataTracking;
+            }
             res.status(200).send({ successful, logId, returnMessage });
             success = true;
         }
@@ -705,20 +771,27 @@ app.post('/callLog', async function (req, res) {
         requestDuration: (requestEndTime - requestStartTime) / 1000,
         userAgent,
         ip,
-        author
+        author,
+        extras: {
+            ...extraData
+        }
     });
 });
 app.patch('/callLog', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
         const jwtToken = req.query.jwtToken;
         if (!!jwtToken) {
             const { id: userId, platform } = jwt.decodeJwt(jwtToken);
             platformName = platform;
-            const { successful, logId, updatedNote, returnMessage } = await logCore.updateCallLog({ platform, userId, incomingData: req.body });
+            const { successful, logId, updatedNote, returnMessage, extraDataTracking } = await logCore.updateCallLog({ platform, userId, incomingData: req.body });
+            if (!!extraDataTracking) {
+                extraData = extraDataTracking;
+            }
             res.status(200).send({ successful, logId, updatedNote, returnMessage });
             success = true;
         }
@@ -743,20 +816,27 @@ app.patch('/callLog', async function (req, res) {
         requestDuration: (requestEndTime - requestStartTime) / 1000,
         userAgent,
         ip,
-        author
+        author,
+        extras: {
+            ...extraData
+        }
     });
 });
 app.post('/messageLog', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
         const jwtToken = req.query.jwtToken;
         if (!!jwtToken) {
             const { id: userId, platform } = jwt.decodeJwt(jwtToken);
             platformName = platform;
-            const { successful, returnMessage, logIds } = await logCore.createMessageLog({ platform, userId, incomingData: req.body });
+            const { successful, returnMessage, logIds, extraDataTracking } = await logCore.createMessageLog({ platform, userId, incomingData: req.body });
+            if (!!extraDataTracking) {
+                extraData = extraDataTracking;
+            }
             res.status(200).send({ successful, returnMessage, logIds });
             success = true;
         }
@@ -781,7 +861,10 @@ app.post('/messageLog', async function (req, res) {
         requestDuration: (requestEndTime - requestStartTime) / 1000,
         userAgent,
         ip,
-        author
+        author,
+        extras: {
+            ...extraData
+        }
     });
 });
 
