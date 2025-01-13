@@ -611,7 +611,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     }
 }
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note }) {
+async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result }) {
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------

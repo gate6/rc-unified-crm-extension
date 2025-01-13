@@ -1,6 +1,7 @@
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
+const { secondsToHoursMinutesSeconds } = require('../../lib/util');
 
 function getAuthType() {
     return 'apiKey';
@@ -130,14 +131,26 @@ async function createContact({ user, phoneNumber, newContactName }) {
     }
 }
 
-async function createCallLog({ user, contactInfo, callLog, note }) {
+async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript }) {
     const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
-    const linkedNotes = note ?? '';
-    const descriptionNotes = `\n\nAgent notes: ${note ?? ''}`;
-    const callRecordingDetail = callLog.recording ? `\nCall recording link: <a target="_blank" href=${callLog.recording.link}>open</a>` : "";
+
+    let description = '<b>Agent notes</b>';
+    if (user.userSettings?.addCallLogNote?.value ?? true) { description = upsertCallAgentNote({ body: description, note }); }
+    description += '<b>Call details</b><ul>';
+    const subject = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+    if (user.userSettings?.addCallLogSubject?.value ?? true) { description = upsertCallSubject({ body: description, subject }); }
+    if (user.userSettings?.addCallLogContactNumber?.value ?? true) { description = upsertContactPhoneNumber({ body: description, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
+    if (user.userSettings?.addCallLogDateTime?.value ?? true) { description = upsertCallDateTime({ body: description, startTime: callLog.startTime, timezoneOffset: user.timezoneOffset }); }
+    if (user.userSettings?.addCallLogDuration?.value ?? true) { description = upsertCallDuration({ body: description, duration: callLog.duration }); }
+    if (user.userSettings?.addCallLogResult?.value ?? true) { description = upsertCallResult({ body: description, result: callLog.result }); }
+    if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { description = upsertCallRecording({ body: description, recordingLink: callLog.recording.link }); }
+    description += '</ul>';
+    if (!!aiNote && (user.userSettings?.addAiNote?.value ?? true)) { description = upsertAiNote({ body: description, aiNote }); }
+    if (!!transcript && (user.userSettings?.addTranscript?.value ?? true)) { description = upsertTranscript({ body: description, transcript }); }
+
     const postBody = {
-        subject: callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`,
-        description: `This was a ${callLog.duration} seconds call ${callLog.direction === 'Outbound' ? `to ${contactInfo.name}(${callLog.to.phoneNumber})` : `from ${contactInfo.name}(${callLog.from.phoneNumber})`}.<br>${descriptionNotes}<br>${callRecordingDetail}<br><em> Created via: <a href="https://chrome.google.com/webstore/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh?hl=en">RingCentral CRM Extension</a></span></em>`,
+        subject,
+        description,
         start_date: moment(callLog.startTime).utc().toISOString(),
         end_date: moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString(),
         activity_code_id: 3,
@@ -154,13 +167,13 @@ async function createCallLog({ user, contactInfo, callLog, note }) {
         {
             headers: { 'Authorization': overrideAuthHeader }
         });
-    if (!!linkedNotes) {
+    if (!!note) {
         const addNoteRes = await axios.post(
             `${process.env.REDTAIL_API_SERVER}/activities/${addLogRes.data.activity.id}/notes`,
             {
                 category_id: 2,
                 note_type: 1,
-                body: linkedNotes
+                body: note
             },
             {
                 headers: { 'Authorization': overrideAuthHeader }
@@ -184,7 +197,7 @@ async function createCallLog({ user, contactInfo, callLog, note }) {
     };
 }
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note }) {
+async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript }) {
     const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
     const existingRedtailLogId = existingCallLog.thirdPartyLogId;
     const getLogRes = await axios.get(
@@ -193,33 +206,24 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             headers: { 'Authorization': overrideAuthHeader }
         });
     let logBody = getLogRes.data.activity.description;
-    let logSubject = getLogRes.data.activity.subject;
-    if (!!recordingLink) {
-        if (logBody.includes('<em> Created via:')) {
-            logBody = logBody.replace('<em> Created via:', `Call recording link: <a target="_blank" href=${recordingLink}>open</a><br/><em> Created via:`);
-        }
-        else {
-            logBody += `Call recording link: <a target="_blank" href=${recordingLink}>open</a>`;
-        }
-    }
-    else {
-        let originalNote = '';
-        if (logBody.includes('Call recording link:')) {
-            originalNote = logBody.split('Agent notes: ')[1].split('<br><br>Call recording link:')[0];
-        }
-        else {
-            originalNote = logBody.split('Agent notes: ')[1].split('<br><br><em> Created via:')[0];
-        }
+    if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
+    if (!!subject && (user.userSettings?.addCallLogSubject?.value ?? true)) { logBody = upsertCallSubject({ body: logBody, subject }); }
+    if (!!startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) { logBody = upsertCallDateTime({ body: logBody, startTime, timezoneOffset: user.timezoneOffset }); }
+    if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
+    if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
+    if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink }); }
+    if (!!aiNote && (user.userSettings?.addAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
+    if (!!transcript && (user.userSettings?.addTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
+    let putBody = {};
 
-        logBody = logBody.replace(`Agent notes: ${originalNote}`, `Agent notes: ${note}`);
-        logSubject = subject ?? '';
+    if (!!subject) {
+        putBody.subject = subject;
     }
+    putBody.description = logBody;
+    putBody.start_date = moment(startTime).utc().toISOString();
+    putBody.end_date = moment(startTime).utc().add(duration, 'seconds').toISOString();
 
-    const putBody = {
-        subject: logSubject,
-        description: logBody
-    }
-    const putLogRes = await axios.patch(
+    const putLogRes = await axios.put(
         `${process.env.REDTAIL_API_SERVER}/activities/${existingRedtailLogId}`,
         putBody,
         {
@@ -260,15 +264,15 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
                 '</ul>' +
                 '------------<br>' +
                 'END<br><br>' +
-                '--- Created via RingCentral CRM Extension';
+                '--- Created via RingCentral App Connect';
             break;
         case 'Voicemail':
             subject = `Voicemail left by ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
-            description = `<br><b>${subject}</b><br>Voicemail recording link: ${recordingLink} <br><br>--- Created via RingCentral CRM Extension`;
+            description = `<br><b>${subject}</b><br>Voicemail recording link: ${recordingLink} <br><br>--- Created via RingCentral App Connect`;
             break;
         case 'Fax':
             subject = `Fax document sent from ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
-            description = `<br><b>${subject}</b><br>Fax document link: ${faxDocLink} <br><br>--- Created via RingCentral CRM Extension`;
+            description = `<br><b>${subject}</b><br>Fax document link: ${faxDocLink} <br><br>--- Created via RingCentral App Connect`;
             break;
     }
 
@@ -349,9 +353,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
             headers: { 'Authorization': overrideAuthHeader, 'include': 'linked_contacts' }
         });
     const logBody = getLogRes.data.activity.description;
-    const note = logBody.includes('Call recording link:') ?
-        logBody?.split('Agent notes: ')[1]?.split('<br><br>Call recording link:')[0] :
-        logBody?.split('Agent notes: ')[1]?.split('<br><br><em> Created via:')[0];
+    const note = logBody.match(/<br>(.+?)<br><br>/)[1];
     return {
         callLogInfo: {
             subject: getLogRes.data.activity.subject,
@@ -368,6 +370,123 @@ function formatContact(rawContactInfo) {
         phone: rawContactInfo.phoneNumber,
         title: rawContactInfo.job_title ?? ""
     }
+}
+
+function upsertCallAgentNote({ body, note }) {
+    if (!!!note) {
+        return body;
+    }
+    const noteRegex = RegExp('<b>Agent notes</b><br>([\\s\\S]+?)<br><br>');
+    if (noteRegex.test(body)) {
+        body = body.replace(noteRegex, `<b>Agent notes</b><br>${note}<br><br>`);
+    }
+    else {
+        body += `<br>${note}<br><br>`;
+    }
+    return body;
+}
+function upsertCallSubject({ body, subject }) {
+    const subjectRegex = RegExp('<li><b>Summary</b>: (.+?)(?:</li>|</ul>)');
+    if (subjectRegex.test(body)) {
+        body = body.replace(subjectRegex, (match, p1) => `<li><b>Summary</b>: ${subject}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
+    } else {
+        body += `<li><b>Summary</b>: ${subject}</li>`;
+    }
+    return body;
+}
+
+function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
+    const phoneNumberRegex = RegExp(`<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: (.+?)(?:</li>|</ul>)`);
+    if (phoneNumberRegex.test(body)) {
+        body = body.replace(phoneNumberRegex, (match, p1) => `<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: ${phoneNumber}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
+    } else {
+        body += `<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: ${phoneNumber}</li>`;
+    }
+    return body;
+}
+
+function upsertCallDateTime({ body, startTime, timezoneOffset }) {
+    const dateTimeRegex = RegExp('<li><b>Date/time</b>: (.+?)(?:</li>|</ul>)');
+    if (dateTimeRegex.test(body)) {
+        const updatedDateTime = moment(startTime).utcOffset(Number(timezoneOffset)).format('YYYY-MM-DD hh:mm:ss A');
+        body = body.replace(dateTimeRegex, (match, p1) => `<li><b>Date/time</b>: ${updatedDateTime}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
+    } else {
+        body += `<li><b>Date/time</b>: ${moment(startTime).utcOffset(Number(timezoneOffset)).format('YYYY-MM-DD hh:mm:ss A')}</li>`;
+    }
+    return body;
+}
+
+function upsertCallDuration({ body, duration }) {
+    const durationRegex = RegExp('<li><b>Duration</b>: (.+?)(?:</li>|</ul>)');
+    if (durationRegex.test(body)) {
+        body = body.replace(durationRegex, (match, p1) => `<li><b>Duration</b>: ${secondsToHoursMinutesSeconds(duration)}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
+    } else {
+        body += `<li><b>Duration</b>: ${secondsToHoursMinutesSeconds(duration)}</li>`;
+    }
+    return body;
+}
+
+function upsertCallResult({ body, result }) {
+    const resultRegex = RegExp('<li><b>Result</b>: (.+?)(?:</li>|</ul>)');
+    if (resultRegex.test(body)) {
+        body = body.replace(resultRegex, (match, p1) => `<li><b>Result</b>: ${result}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
+    } else {
+        body += `<li><b>Result</b>: ${result}</li>`;
+    }
+    return body;
+}
+
+function upsertCallRecording({ body, recordingLink }) {
+    const recordingLinkRegex = RegExp('<li><b>Call recording link</b>: (.+?)(?:</li>|</ul>)');
+    if (!!recordingLink) {
+        if (recordingLinkRegex.test(body)) {
+            body = body.replace(recordingLinkRegex, (match, p1) => `<li><b>Call recording link</b>: <a target="_blank" href=${recordingLink}>open</a>${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
+        }
+        else {
+            let text = '';
+            // a real link
+            if (recordingLink.startsWith('http')) {
+                text = `<li><b>Call recording link</b>: <a target="_blank" href=${recordingLink}>open</a></li>`;
+            } else {
+                // placeholder
+                text = '<li><b>Call recording link</b>: (pending...)</li>';
+            }
+            if (body.indexOf('</ul>') === -1) {
+                body += text;
+            } else {
+                body = body.replace('</ul>', `${text}</ul>`);
+            }
+        }
+    }
+    return body;
+}
+
+function upsertAiNote({ body, aiNote }) {
+    if (!!!aiNote) {
+        return body;
+    }
+    const formattedAiNote = aiNote.replace(/\n+$/, '').replace(/(?:\r\n|\r|\n)/g, '<br>');
+    const aiNoteRegex = RegExp('<div><b>AI Note</b><br>(.+?)</div>');
+    if (aiNoteRegex.test(body)) {
+        body = body.replace(aiNoteRegex, `<div><b>AI Note</b><br>${formattedAiNote}</div>`);
+    } else {
+        body += `<div><b>AI Note</b><br>${formattedAiNote}</div><br>`;
+    }
+    return body;
+}
+
+function upsertTranscript({ body, transcript }) {
+    if (!!!transcript) {
+        return body;
+    }
+    const formattedTranscript = transcript.replace(/(?:\r\n|\r|\n)/g, '<br>');
+    const transcriptRegex = RegExp('<div><b>Transcript</b><br>(.+?)</div>');
+    if (transcriptRegex.test(body)) {
+        body = body.replace(transcriptRegex, `<div><b>Transcript</b><br>${formattedTranscript}</div>`);
+    } else {
+        body += `<div><b>Transcript</b><br>${formattedTranscript}</div><br>`;
+    }
+    return body;
 }
 
 exports.getAuthType = getAuthType;
