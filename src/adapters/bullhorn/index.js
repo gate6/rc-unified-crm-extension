@@ -1,10 +1,60 @@
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
-const { UserModel } = require('../../models/userModel');
+const { secondsToHoursMinutesSeconds } = require('../../lib/util');
 
 function getAuthType() {
     return 'oauth';
+}
+
+async function authValidation({ user }) {
+    let commentActionListResponse;
+    try {
+        commentActionListResponse = await axios.get(
+            `${user.platformAdditionalInfo.restUrl}settings/commentActionList`,
+            {
+                headers: {
+                    BhRestToken: user.platformAdditionalInfo.bhRestToken
+                }
+            });
+        return {
+            successful: true
+        }
+    }
+    catch (e) {
+        if (isAuthError(e.response.status)) {
+            user = await refreshSessionToken(user);
+            try {
+                commentActionListResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}settings/commentActionList`,
+                    {
+                        headers: {
+                            BhRestToken: user.platformAdditionalInfo.bhRestToken
+                        }
+                    });
+                return {
+                    successful: true
+                }
+            }
+            catch (e) {
+                return {
+                    successful: false,
+                    returnMessage: {
+                        messageType: 'warning',
+                        message: 'It seems like your Bullhorn session has expired. Please re-authenticate.',
+                        ttl: 3000
+                    }
+                }
+            }
+        }
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: 'It seems like your Bullhorn session has expired. Please re-authenticate.',
+                ttl: 3000
+            }
+        }
+    }
 }
 
 async function getOauthInfo({ tokenUrl }) {
@@ -13,41 +63,6 @@ async function getOauthInfo({ tokenUrl }) {
         clientSecret: process.env.BULLHORN_CLIENT_SECRET,
         accessTokenUri: tokenUrl,
         redirectUri: process.env.BULLHORN_REDIRECT_URI
-    }
-}
-
-async function tempMigrateUserId({ existingUser }) {
-    const bhRestToken = existingUser.platformAdditionalInfo.bhRestToken;
-    const existingUserId = existingUser.id.replace('-bullhorn', '');
-    let userInfoResponse
-    try {
-        userInfoResponse = await axios.get(`${existingUser.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,masterUserID&BhRestToken=${bhRestToken}&where=id=${existingUserId}`);
-    }
-    catch (e) {
-        if (isAuthError(e.response.status)) {
-            existingUser = await refreshSessionToken(existingUser);
-            userInfoResponse = await axios.get(`${existingUser.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,masterUserID&BhRestToken=${bhRestToken}&where=id=${existingUserId}`);
-        }
-    }
-    const newUserId = userInfoResponse.data.data[0]?.masterUserID;
-    if(!!!newUserId){
-        return null;
-    }
-    const newUser = await UserModel.create({
-        id: `${newUserId}-bullhorn`,
-        hostname: existingUser.hostname,
-        timezoneName: existingUser.timezoneName,
-        timezoneOffset: existingUser.timezoneOffset,
-        platform: existingUser.platform,
-        accessToken: existingUser.accessToken,
-        refreshToken: existingUser.refreshToken,
-        tokenExpiry: existingUser.tokenExpiry,
-        platformAdditionalInfo: existingUser.platformAdditionalInfo
-    });
-    await existingUser.destroy();
-    return {
-        id: newUser.id,
-        name: userInfoResponse.data.name
     }
 }
 
@@ -125,6 +140,7 @@ async function unAuthorize({ user }) {
 
 async function findContact({ user, phoneNumber }) {
     let commentActionListResponse;
+    let extraDataTracking;
     try {
         commentActionListResponse = await axios.get(
             `${user.platformAdditionalInfo.restUrl}settings/commentActionList`,
@@ -189,6 +205,32 @@ async function findContact({ user, phoneNumber }) {
             additionalInfo: commentActionList?.length > 0 ? { noteActions: commentActionList } : null
         });
     }
+    // check for Lead
+    const leadPersonInfo = await axios.post(
+        `${user.platformAdditionalInfo.restUrl}search/Lead?fields=id,name,email,phone'`,
+        {
+            query: `(phone:${phoneNumberWithoutCountryCode} OR mobile:${phoneNumberWithoutCountryCode} OR phone2:${phoneNumberWithoutCountryCode} OR phone3:${phoneNumberWithoutCountryCode}) AND isDeleted:false`
+        },
+        {
+            headers: {
+                BhRestToken: user.platformAdditionalInfo.bhRestToken
+            }
+        });
+    for (const result of leadPersonInfo.data.data) {
+        matchedContactInfo.push({
+            id: result.id,
+            name: result.name,
+            phone: result.phone,
+            type: 'Lead',
+            additionalInfo: commentActionList?.length > 0 ? { noteActions: commentActionList } : null
+        });
+    }
+    extraDataTracking = {
+        ratelimitRemaining: candidatePersonInfo.headers['ratelimit-remaining'],
+        ratelimitAmount: candidatePersonInfo.headers['ratelimit-limit'],
+        ratelimitReset: candidatePersonInfo.headers['ratelimit-reset']
+    };
+
     matchedContactInfo.push({
         id: 'createNewContact',
         name: 'Create new contact...',
@@ -196,12 +238,48 @@ async function findContact({ user, phoneNumber }) {
         isNewContact: true
     });
     return {
-        matchedContactInfo
+        matchedContactInfo,
+        extraDataTracking
     };
 }
 
 async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType }) {
+    let extraDataTracking;
     switch (newContactType) {
+        case 'Lead':
+            const leadPostBody = {
+                name: newContactName,
+                firstName: newContactName.split(' ')[0],
+                lastName: newContactName.split(' ').length > 1 ? newContactName.split(' ')[1] : '',
+                phone: phoneNumber.replace(' ', '+')
+            }
+            const leadInfoResp = await axios.put(
+                `${user.platformAdditionalInfo.restUrl}entity/Lead`,
+                leadPostBody,
+                {
+                    headers: {
+                        BhRestToken: user.platformAdditionalInfo.bhRestToken
+                    }
+                }
+            );
+            extraDataTracking = {
+                ratelimitRemaining: leadInfoResp.headers['ratelimit-remaining'],
+                ratelimitAmount: leadInfoResp.headers['ratelimit-limit'],
+                ratelimitReset: leadInfoResp.headers['ratelimit-reset']
+            }
+
+            return {
+                contactInfo: {
+                    id: leadInfoResp.data.changedEntityId,
+                    name: newContactName
+                },
+                returnMessage: {
+                    message: `New ${newContactType} created.`,
+                    messageType: 'success',
+                    ttl: 3000
+                },
+                extraDataTracking
+            }
         case 'Candidate':
             const candidatePostBody = {
                 name: newContactName,
@@ -218,6 +296,12 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     }
                 }
             );
+            extraDataTracking = {
+                ratelimitRemaining: candidateInfoResp.headers['ratelimit-remaining'],
+                ratelimitAmount: candidateInfoResp.headers['ratelimit-limit'],
+                ratelimitReset: candidateInfoResp.headers['ratelimit-reset']
+            }
+
             return {
                 contactInfo: {
                     id: candidateInfoResp.data.changedEntityId,
@@ -227,7 +311,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     message: `New ${newContactType} created.`,
                     messageType: 'success',
                     ttl: 3000
-                }
+                },
+                extraDataTracking
             }
         case 'Contact':
             let companyId = 0;
@@ -250,7 +335,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     `${user.platformAdditionalInfo.restUrl}entity/ClientCorporation`,
                     {
                         name: "RingCentral_CRM_Extension_Placeholder_Company",
-                        companyDescription: "<strong><span style=\"color: rgb(231,76,60);\">This company was created automatically by the RingCentral Unified CRM Extension. Feel free to edit, or associate this company's contacts to more appropriate records. </span></strong>"
+                        companyDescription: "<strong><span style=\"color: rgb(231,76,60);\">This company was created automatically by the RingCentral App Connect. Feel free to edit, or associate this company's contacts to more appropriate records. </span></strong>"
                     },
                     {
                         headers: {
@@ -278,6 +363,13 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     }
                 }
             );
+
+            extraDataTracking = {
+                ratelimitRemaining: contactInfoResp.headers['ratelimit-remaining'],
+                ratelimitAmount: contactInfoResp.headers['ratelimit-limit'],
+                ratelimitReset: contactInfoResp.headers['ratelimit-reset']
+            }
+
             return {
                 contactInfo: {
                     id: contactInfoResp.data.changedEntityId,
@@ -287,16 +379,29 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     message: `New ${newContactType} created.`,
                     messageType: 'success',
                     ttl: 3000
-                }
+                },
+                extraDataTracking
             }
     }
 }
 
-async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission }) {
+async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript }) {
     const noteActions = additionalSubmission.noteActions ?? '';
     const subject = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? `to ${contactInfo.name}` : `from ${contactInfo.name}`}`;
+    let comments = '<b>Agent notes</b>';;
+    if (user.userSettings?.addCallLogNote?.value ?? true) { comments = upsertCallAgentNote({ body: comments, note }); }
+    comments += '<b>Call details</b><ul>';
+    if (user.userSettings?.addCallLogSubject?.value ?? true) { comments = upsertCallSubject({ body: comments, subject }); }
+    if (user.userSettings?.addCallLogContactNumber?.value ?? true) { comments = upsertContactPhoneNumber({ body: comments, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
+    if (user.userSettings?.addCallLogDateTime?.value ?? true) { comments = upsertCallDateTime({ body: comments, startTime: callLog.startTime, timezoneOffset: user.timezoneOffset }); }
+    if (user.userSettings?.addCallLogDuration?.value ?? true) { comments = upsertCallDuration({ body: comments, duration: callLog.duration }); }
+    if (user.userSettings?.addCallLogResult?.value ?? true) { comments = upsertCallResult({ body: comments, result: callLog.result }); }
+    if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { comments = upsertCallRecording({ body: comments, recordingLink: callLog.recording.link }); }
+    comments += '</ul>';
+    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { comments = upsertAiNote({ body: comments, aiNote }); }
+    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { comments = upsertTranscript({ body: comments, transcript }); }
     const putBody = {
-        comments: `${!!note ? `<br>${note}<br><br>` : ''}<b>Call details</b><br><ul><li><b>Summary</b>: ${subject}</li><li><b>${callLog.direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: ${contactInfo.phoneNumber}</li><li><b>${callLog.direction === 'Outbound' ? `Caller phone number</b>: ${callLog.from.phoneNumber ?? ''}` : `Recipient phone number</b>: ${callLog.to.phoneNumber ?? ''}`} </li><li><b>Date/time</b>: ${moment(callLog.startTime).utcOffset(Number(user.timezoneOffset)).format('YYYY-MM-DD hh:mm:ss A')}</li><li><b>Duration</b>: ${callLog.duration} seconds</li><li><b>Result</b>: ${callLog.result}</li>${callLog.recording ? `<li><b>Call recording link</b>: <a target="_blank" href=${callLog.recording.link}>open</a></li>` : ''}</ul>`,
+        comments,
         action: noteActions,
         personReference: {
             id: contactInfo.id
@@ -306,6 +411,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         minutesSpent: callLog.duration / 60
     }
     let addLogRes;
+    let extraDataTracking;
     try {
         addLogRes = await axios.put(
             `${user.platformAdditionalInfo.restUrl}entity/Note`,
@@ -316,6 +422,11 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
                 }
             }
         );
+        extraDataTracking = {
+            ratelimitRemaining: addLogRes.headers['ratelimit-remaining'],
+            ratelimitAmount: addLogRes.headers['ratelimit-limit'],
+            ratelimitReset: addLogRes.headers['ratelimit-reset']
+        }
     }
     catch (e) {
         if (isAuthError(e.response.status)) {
@@ -337,13 +448,15 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             message: 'Call log added.',
             messageType: 'success',
             ttl: 3000
-        }
+        },
+        extraDataTracking
     };
 }
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note }) {
+async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript }) {
     const existingBullhornLogId = existingCallLog.thirdPartyLogId;
     let getLogRes
+    let extraDataTracking;
     try {
         getLogRes = await axios.get(
             `${user.platformAdditionalInfo.restUrl}entity/Note/${existingBullhornLogId}?fields=comments`,
@@ -365,26 +478,22 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
                 });
         }
     }
-    let logBody = getLogRes.data.data.comments;
-    // case: recording link update
-    if (!!recordingLink) {
-        if (logBody.includes('</ul>')) {
-            logBody = logBody.replace('</ul>', `<li><b>Call recording link</b>: <a target="_blank" href=${recordingLink}>open</a></ul>`);
-        }
-        else {
-            logBody += `<b>Call recording link</b>: <a target="_blank" src=${recordingLink}>open</a>`;
-        }
-    }
-    // case: normal update
-    else {
-        // replace note
-        logBody = logBody.replace(logBody.split('<b>Call details</b>')[0], `<br>${note}<br><br>`)
-        // replace subject
-        logBody = logBody.replace(logBody.split('<li><b>Summary</b>: ')[1].split('<li><b>Recipient phone')[0], subject ?? '');
-    }
+    let comments = getLogRes.data.data.comments;
+
+    if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { comments = upsertCallAgentNote({ body: comments, note }); }
+    if (!!subject && (user.userSettings?.addCallLogSubject?.value ?? true)) { comments = upsertCallSubject({ body: comments, subject }); }
+    if (!!startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) { comments = upsertCallDateTime({ body: comments, startTime, timezoneOffset: user.timezoneOffset }); }
+    if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { comments = upsertCallDuration({ body: comments, duration }); }
+    if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { comments = upsertCallResult({ body: comments, result }); }
+    if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { comments = upsertCallRecording({ body: comments, recordingLink }); }
+    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { comments = upsertAiNote({ body: comments, aiNote }); }
+    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { comments = upsertTranscript({ body: comments, transcript }); }
+
     // I dunno, Bullhorn just uses POST as PATCH
     const postBody = {
-        comments: logBody
+        comments,
+        dateAdded: startTime,
+        minutesSpent: duration / 60
     }
     const postLogRes = await axios.post(
         `${user.platformAdditionalInfo.restUrl}entity/Note/${existingBullhornLogId}`,
@@ -394,19 +503,26 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
                 BhRestToken: user.platformAdditionalInfo.bhRestToken
             }
         });
+    extraDataTracking = {
+        ratelimitRemaining: postLogRes.headers['ratelimit-remaining'],
+        ratelimitAmount: postLogRes.headers['ratelimit-limit'],
+        ratelimitReset: postLogRes.headers['ratelimit-reset']
+    }
     return {
         updatedNote: postBody.comments,
         returnMessage: {
             message: 'Call log updated.',
             messageType: 'success',
             ttl: 3000
-        }
+        },
+        extraDataTracking
     };
 }
 
 async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
     const noteActions = additionalSubmission.noteActions ?? '';
     let userInfoResponse;
+    let extraDataTracking;
     try {
         userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=masterUserID=${user.id.replace('-bullhorn', '')}`,
             {
@@ -450,15 +566,15 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
                 '</ul>' +
                 '------------<br>' +
                 'END<br><br>' +
-                '--- Created via RingCentral CRM Extension';
+                '--- Created via RingCentral App Connect';
             break;
         case 'Voicemail':
             subject = `Voicemail left by ${contactInfo.name} - ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('YY/MM/DD')}`;
-            comments = `<br><b>${subject}</b><br>Voicemail recording link: ${recordingLink} <br><br>--- Created via RingCentral CRM Extension`;
+            comments = `<br><b>${subject}</b><br>Voicemail recording link: ${recordingLink} <br><br>--- Created via RingCentral App Connect`;
             break;
         case 'Fax':
             subject = `Fax document sent from ${contactInfo.name} - ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('YY/MM/DD')}`;
-            comments = `<br><b>${subject}</b><br>Fax document link: ${faxDocLink} <br><br>--- Created via RingCentral CRM Extension`;
+            comments = `<br><b>${subject}</b><br>Fax document link: ${faxDocLink} <br><br>--- Created via RingCentral App Connect`;
             break;
     }
 
@@ -479,19 +595,26 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             }
         }
     );
+    extraDataTracking = {
+        ratelimitRemaining: addLogRes.headers['ratelimit-remaining'],
+        ratelimitAmount: addLogRes.headers['ratelimit-limit'],
+        ratelimitReset: addLogRes.headers['ratelimit-reset']
+    }
     return {
         logId: addLogRes.data.changedEntityId,
         returnMessage: {
             message: 'Message log added.',
             messageType: 'success',
             ttl: 3000
-        }
+        },
+        extraDataTracking
     }
 }
 
 async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader }) {
     const existingLogId = existingMessageLog.thirdPartyLogId;
     let userInfoResponse;
+    let extraDataTracking;
     try {
         userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=masterUserID=${user.id.replace('-bullhorn', '')}`,
             {
@@ -545,10 +668,19 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
                 BhRestToken: user.platformAdditionalInfo.bhRestToken
             }
         });
+    extraDataTracking = {
+        ratelimitRemaining: patchLogRes.headers['ratelimit-remaining'],
+        ratelimitAmount: patchLogRes.headers['ratelimit-limit'],
+        ratelimitReset: patchLogRes.headers['ratelimit-reset']
+    }
+    return {
+        extraDataTracking
+    }
 }
 
 async function getCallLog({ user, callLogId, authHeader }) {
     let getLogRes;
+    let extraDataTracking;
     try {
         getLogRes = await axios.get(
             `${user.platformAdditionalInfo.restUrl}entity/Note/${callLogId}?fields=comments,candidates,clientContacts`,
@@ -557,6 +689,11 @@ async function getCallLog({ user, callLogId, authHeader }) {
                     BhRestToken: user.platformAdditionalInfo.bhRestToken
                 }
             });
+        extraDataTracking = {
+            ratelimitRemaining: getLogRes.headers['ratelimit-remaining'],
+            ratelimitAmount: getLogRes.headers['ratelimit-limit'],
+            ratelimitReset: getLogRes.headers['ratelimit-reset']
+        }
     }
     catch (e) {
         if (isAuthError(e.response.status)) {
@@ -571,7 +708,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
         }
     }
     const logBody = getLogRes.data.data.comments;
-    const note = logBody.split('<b>Call details</b>')[0].replaceAll('<br>', '');
+    const note = logBody.split('<b>Agent notes</b>')[1]?.split('<b>Call details</b>')[0]?.replaceAll('<br>', '') ?? '';
+    const subject = logBody.split('</ul>')[0]?.split('<li><b>Summary</b>: ')[1]?.split('<li><b>')[0] ?? '';
     const totalContactCount = getLogRes.data.data.clientContacts.total + getLogRes.data.data.candidates.total;
     let contact = {
         firstName: '',
@@ -582,10 +720,11 @@ async function getCallLog({ user, callLogId, authHeader }) {
     }
     return {
         callLogInfo: {
-            subject: getLogRes.data.data.comments.split('<li><b>Summary</b>: ')[1].split('<li><b>')[0],
+            subject,
             note,
             contactName: `${contact.firstName} ${contact.lastName}`
-        }
+        },
+        extraDataTracking
     }
 }
 
@@ -606,7 +745,125 @@ function isAuthError(statusCode) {
     return statusCode >= 400 && statusCode < 500;
 }
 
+function upsertCallAgentNote({ body, note }) {
+    if (!!!note) {
+        return body;
+    }
+    const noteRegex = RegExp('<b>Agent notes</b>([\\s\\S]+?)Call details</b>');
+    if (noteRegex.test(body)) {
+        body = body.replace(noteRegex, `<b>Agent notes</b><br>${note}<br><br><b>Call details</b>`);
+    }
+    else {
+        body += `<br>${note}<br><br>`;
+    }
+    return body;
+}
+function upsertCallSubject({ body, subject }) {
+    const subjectRegex = RegExp('<li><b>Summary</b>: (.+?)(?:<li>|</ul>)');
+    if (subjectRegex.test(body)) {
+        body = body.replace(subjectRegex, (match, p1) => `<li><b>Summary</b>: ${subject}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>Summary</b>: ${subject}<li>`;
+    }
+    return body;
+}
+
+function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
+    const phoneNumberRegex = RegExp(`<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: (.+?)(?:<li>|</ul>)`);
+    if (phoneNumberRegex.test(body)) {
+        body = body.replace(phoneNumberRegex, (match, p1) => `<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: ${phoneNumber}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: ${phoneNumber}<li>`;
+    }
+    return body;
+}
+
+function upsertCallDateTime({ body, startTime, timezoneOffset }) {
+    const dateTimeRegex = RegExp('<li><b>Date/time</b>: (.+?)(?:<li>|</ul>)');
+    if (dateTimeRegex.test(body)) {
+        const updatedDateTime = moment(startTime).utcOffset(Number(timezoneOffset)).format('YYYY-MM-DD hh:mm:ss A');
+        body = body.replace(dateTimeRegex, (match, p1) => `<li><b>Date/time</b>: ${updatedDateTime}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>Date/time</b>: ${moment(startTime).utcOffset(Number(timezoneOffset)).format('YYYY-MM-DD hh:mm:ss A')}<li>`;
+    }
+    return body;
+}
+
+function upsertCallDuration({ body, duration }) {
+    const durationRegex = RegExp('<li><b>Duration</b>: (.+?)(?:<li>|</ul>)');
+    if (durationRegex.test(body)) {
+        body = body.replace(durationRegex, (match, p1) => `<li><b>Duration</b>: ${secondsToHoursMinutesSeconds(duration)}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>Duration</b>: ${secondsToHoursMinutesSeconds(duration)}<li>`;
+    }
+    return body;
+}
+
+function upsertCallResult({ body, result }) {
+    const resultRegex = RegExp('<li><b>Result</b>: (.+?)(?:<li>|</ul>)');
+    if (resultRegex.test(body)) {
+        body = body.replace(resultRegex, (match, p1) => `<li><b>Result</b>: ${result}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>Result</b>: ${result}<li>`;
+    }
+    return body;
+}
+
+function upsertCallRecording({ body, recordingLink }) {
+    const recordingLinkRegex = RegExp('<li><b>Call recording link</b>: (.+?)(?:<li>|</ul>)');
+    if (!!recordingLink) {
+        if (recordingLinkRegex.test(body)) {
+            body = body.replace(recordingLinkRegex, (match, p1) => `<li><b>Call recording link</b>: <a target="_blank" href=${recordingLink}>open</a>${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+        }
+        else {
+            let text = '';
+            // a real link
+            if (recordingLink.startsWith('http')) {
+                text = `<li><b>Call recording link</b>: <a target="_blank" href=${recordingLink}>open</a><li>`;
+            } else {
+                // placeholder
+                text = '<li><b>Call recording link</b>: (pending...)<li>';
+            }
+            if (body.indexOf('</ul>') === -1) {
+                body += text;
+            } else {
+                body = body.replace('</ul>', `${text}</ul>`);
+            }
+        }
+    }
+    return body;
+}
+
+function upsertAiNote({ body, aiNote }) {
+    if (!!!aiNote) {
+        return body;
+    }
+    const formattedAiNote = aiNote.replace(/\n+$/, '').replace(/(?:\r\n|\r|\n)/g, '<br>');
+    const aiNoteRegex = RegExp('<div><b>AI Note</b><br>(.+?)</div>');
+    if (aiNoteRegex.test(body)) {
+        body = body.replace(aiNoteRegex, `<div><b>AI Note</b><br>${formattedAiNote}</div>`);
+    } else {
+        body += `<div><b>AI Note</b><br>${formattedAiNote}</div><br>`;
+    }
+    return body;
+}
+
+function upsertTranscript({ body, transcript }) {
+    if (!!!transcript) {
+        return body;
+    }
+    const formattedTranscript = transcript.replace(/(?:\r\n|\r|\n)/g, '<br>');
+    const transcriptRegex = RegExp('<div><b>Transcript</b><br>(.+?)</div>');
+    if (transcriptRegex.test(body)) {
+        body = body.replace(transcriptRegex, `<div><b>Transcript</b><br>${formattedTranscript}</div>`);
+    } else {
+        body += `<div><b>Transcript</b><br>${formattedTranscript}</div><br>`;
+    }
+    return body;
+}
+
 exports.getAuthType = getAuthType;
+exports.authValidation = authValidation;
 exports.getOauthInfo = getOauthInfo;
 exports.getOverridingOAuthOption = getOverridingOAuthOption;
 exports.getUserInfo = getUserInfo;
@@ -618,4 +875,3 @@ exports.getCallLog = getCallLog;
 exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
-exports.tempMigrateUserId = tempMigrateUserId;

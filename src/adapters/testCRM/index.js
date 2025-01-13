@@ -151,11 +151,10 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     console.log(`phone number: ${phoneNumber}`)
     console.log(`is extesnion number? ${isExtension}`)
     const numberToQueryArray = [];
-    if(isExtension)
-    {
+    if (isExtension) {
         numberToQueryArray.push(phoneNumber);
     }
-    else{
+    else {
         numberToQueryArray.push(phoneNumber.replace(' ', '+'));
     }
     // You can use parsePhoneNumber functions to further parse the phone number
@@ -214,7 +213,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     // const postBody = {
     //     subject: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phone}]`,
-    //     body: `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`,
+    //     body: `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral App Connect`,
     //     type: 'PhoneCommunication',
     //     received_at: moment(callLog.startTime).toISOString()
     // }
@@ -285,8 +284,11 @@ async function getCallLog({ user, callLogId, authHeader }) {
 
 // - note: note submitted by user
 // - subject: subject submitted by user
+// - startTime: more accurate startTime will be patched to this update function shortly after the call ends
+// - duration: more accurate duration will be patched to this update function shortly after the call ends
+// - result: final result will be patched to this update function shortly after the call ends
 // - recordingLink: recordingLink updated from RingCentral. It's separated from createCallLog because recordings are not generated right after a call. It needs to be updated into existing call log
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note }) {
+async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result }) {
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
@@ -344,7 +346,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // const postBody = {
     //     data: {
     //         subject: `[SMS] ${message.direction} SMS - ${message.from.name ?? ''}(${message.from.phoneNumber}) to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`,
-    //         body: `${message.direction} SMS - ${message.direction == 'Inbound' ? `from ${message.from.name ?? ''}(${message.from.phoneNumber})` : `to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`} \n${!!message.subject ? `[Message] ${message.subject}` : ''} ${!!recordingLink ? `\n[Recording link] ${recordingLink}` : ''}\n\n--- Created via RingCentral CRM Extension`,
+    //         body: `${message.direction} SMS - ${message.direction == 'Inbound' ? `from ${message.from.name ?? ''}(${message.from.phoneNumber})` : `to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`} \n${!!message.subject ? `[Message] ${message.subject}` : ''} ${!!recordingLink ? `\n[Recording link] ${recordingLink}` : ''}\n\n--- Created via RingCentral App Connect`,
     //         type: 'Message'
     //     }
     // }

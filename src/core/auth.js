@@ -53,7 +53,7 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, callbackUri, apiU
 async function onApiKeyLogin({ platform, hostname, apiKey, additionalInfo }) {
     const platformModule = require(`../adapters/${platform}`);
     const basicAuth = platformModule.getBasicAuth({ apiKey });
-    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader: `Basic ${basicAuth}`, hostname, additionalInfo });
+    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader: `Basic ${basicAuth}`, hostname, additionalInfo, apiKey });
     if (successful) {
         const userInfo = await saveUserInfo({
             platformUserInfo,
@@ -122,5 +122,32 @@ async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken,
     };
 }
 
+async function authValidation({ platform, userId }) {
+    const existingUser = await UserModel.findOne({
+        where: {
+            [Op.and]: [
+                {
+                    id: userId,
+                    platform
+                }
+            ]
+        }
+    });
+    if (!!existingUser) {
+        const platformModule = require(`../adapters/${platform}`);
+        const { successful, returnMessage } = await platformModule.authValidation({ user: existingUser });
+        return {
+            successful,
+            returnMessage
+        }
+    }
+    else {
+        return {
+            successful: false
+        }
+    }
+}
+
 exports.onOAuthCallback = onOAuthCallback;
 exports.onApiKeyLogin = onApiKeyLogin;
+exports.authValidation = authValidation;
