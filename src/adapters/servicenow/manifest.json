@@ -16,7 +16,7 @@
             "name": "servicenow",
             "displayName": "servicenow",
             "enableExtensionNumberLoggingSetting": true,
-            "clickToDialMatchAllNumbers": true,
+            "clickToDialMatchAllNumbers": false,
             "requestConfig": {
                 "timeout": 30
             },
