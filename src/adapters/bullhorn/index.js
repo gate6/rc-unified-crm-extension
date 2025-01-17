@@ -94,8 +94,8 @@ async function getUserInfo({ authHeader, tokenUrl, apiUrl, username }) {
             },
             returnMessage: {
                 messageType: 'success',
-                message: 'Successfully connected to Bullhorn.',
-                ttl: 3000
+                message: 'Connected to Bullhorn.',
+                ttl: 1000
             }
         };
 
@@ -105,8 +105,20 @@ async function getUserInfo({ authHeader, tokenUrl, apiUrl, username }) {
             successful: false,
             returnMessage: {
                 messageType: 'warning',
-                message: 'Failed to get user info.',
-                ttl: 3000
+                message: 'Could not load user information',
+                details: [
+                    {
+                        title: 'Details',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: `Bullhorn was unable to fetch information for the currently logged in user. Please check your permissions in Bullhorn and make sure you have permission to access and read user information.`
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
             }
         }
     }
@@ -132,8 +144,8 @@ async function unAuthorize({ user }) {
     return {
         returnMessage: {
             messageType: 'success',
-            message: 'Successfully logged out from Bullhorn account.',
-            ttl: 3000
+            message: 'Logged out of Bullhorn',
+            ttl: 1000
         }
     }
 }
@@ -160,6 +172,7 @@ async function findContact({ user, phoneNumber }) {
                     }
                 });
         }
+        extraDataTracking['statusCode'] = e.response.status;
     }
     const commentActionList = commentActionListResponse.data.commentActionList.map(a => { return { const: a, title: a } });
     const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
@@ -274,9 +287,9 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     name: newContactName
                 },
                 returnMessage: {
-                    message: `New ${newContactType} created.`,
+                    message: `${newContactType} created.`,
                     messageType: 'success',
-                    ttl: 3000
+                    ttl: 2000
                 },
                 extraDataTracking
             }
@@ -308,9 +321,9 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     name: newContactName
                 },
                 returnMessage: {
-                    message: `New ${newContactType} created.`,
+                    message: `${newContactType} created.`,
                     messageType: 'success',
-                    ttl: 3000
+                    ttl: 2000
                 },
                 extraDataTracking
             }
@@ -376,9 +389,9 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                     name: newContactName
                 },
                 returnMessage: {
-                    message: `New ${newContactType} created.`,
+                    message: `${newContactType} created.`,
                     messageType: 'success',
-                    ttl: 3000
+                    ttl: 2000
                 },
                 extraDataTracking
             }
@@ -445,9 +458,9 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     return {
         logId: addLogRes.data.changedEntityId,
         returnMessage: {
-            message: 'Call log added.',
+            message: 'Call logged',
             messageType: 'success',
-            ttl: 3000
+            ttl: 2000
         },
         extraDataTracking
     };
@@ -477,6 +490,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
                     }
                 });
         }
+        extraDataTracking['statusCode'] = e.response.status;
     }
     let comments = getLogRes.data.data.comments;
 
@@ -513,7 +527,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         returnMessage: {
             message: 'Call log updated.',
             messageType: 'success',
-            ttl: 3000
+            ttl: 2000
         },
         extraDataTracking
     };
@@ -603,9 +617,9 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     return {
         logId: addLogRes.data.changedEntityId,
         returnMessage: {
-            message: 'Message log added.',
+            message: 'Message logged',
             messageType: 'success',
-            ttl: 3000
+            ttl: 1000
         },
         extraDataTracking
     }
@@ -705,6 +719,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
                         BhRestToken: user.platformAdditionalInfo.bhRestToken
                     }
                 });
+            extraDataTracking['statusCode'] = e.response.status;
         }
     }
     const logBody = getLogRes.data.data.comments;

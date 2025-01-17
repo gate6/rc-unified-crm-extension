@@ -75,7 +75,7 @@ describe('contact tests', () => {
 
                 // Assert
                 expect(res.status).toEqual(200);
-                expect(res.body.returnMessage.message).toEqual(`Cannot find user with id: ${unknownUserId}`);
+                expect(res.body.returnMessage.message).toEqual(`Contact not found`);
                 expect(res.body.successful).toEqual(false);
             }
         });
@@ -106,24 +106,6 @@ describe('contact tests', () => {
 
                 // Clean up
                 platformFindContactScope.done();
-            }
-        });
-        test('contact with just extension number - unsuccessful', async () => {
-            for (const platform of platforms) {
-                // Arrange
-                const jwtToken = jwt.generateJwt({
-                    id: userId,
-                    rcUserNumber,
-                    platform: platform.name
-                });
-
-                // Act
-                const res = await request(server).get(`/contact?jwtToken=${jwtToken}&phoneNumber=${extensionNumber}`);
-
-                // Assert
-                expect(res.status).toEqual(200);
-                expect(res.body.successful).toEqual(false);
-                expect(res.body.returnMessage.message).toEqual(`Logging against internal extension number is not supported.`);
             }
         });
         test('known contact - successful', async () => {
@@ -174,6 +156,58 @@ describe('contact tests', () => {
                 platformGetDealScope.done();
             }
         });
+        test('429 rate limit exceeded', async () => {
+            for (const platform of platforms) {
+                // Arrange
+                const jwtToken = jwt.generateJwt({
+                    id: userId,
+                    rcUserNumber,
+                    platform: platform.name
+                });
+                const platformFindContactScope = nock(platform.domain)
+                    .get(`${platform.contactPath}/search?term=${phoneNumber.replace('+1', '')}&fields=phone`)
+                    .once()
+                    .reply(429, {
+                        message: 'Rate limit exceeded'
+                    });
+
+                // Act
+                const res = await request(server).get(`/contact?jwtToken=${jwtToken}&phoneNumber=${phoneNumber}`);
+
+                // Assert
+                expect(res.status).toEqual(200);
+                expect(res.body.successful).toEqual(false);
+
+                // Clean up
+                platformFindContactScope.done();
+            }
+        });
+        test('500 internal server error', async () => {
+            for (const platform of platforms) {
+                // Arrange
+                const jwtToken = jwt.generateJwt({
+                    id: userId,
+                    rcUserNumber,
+                    platform: platform.name
+                });
+                const platformFindContactScope = nock(platform.domain)
+                    .get(`${platform.contactPath}/search?term=${phoneNumber.replace('+1', '')}&fields=phone`)
+                    .once()
+                    .reply(500, {
+                        message: 'Internal server error'
+                    });
+
+                // Act
+                const res = await request(server).get(`/contact?jwtToken=${jwtToken}&phoneNumber=${phoneNumber}`);
+
+                // Assert
+                expect(res.status).toEqual(200);
+                expect(res.body.successful).toEqual(false);
+
+                // Clean up
+                platformFindContactScope.done();
+            }
+        });
     });
     describe('create contact', () => {
         describe('get jwt validation', () => {
@@ -193,7 +227,7 @@ describe('contact tests', () => {
                 expect(res.error.text).toEqual('Please go to Settings and authorize CRM platform');
             });
         });
-        test('new contact - successful', async ()=>{
+        test('new contact - successful', async () => {
             for (const platform of platforms) {
                 // Arrange
                 const jwtToken = jwt.generateJwt({
@@ -222,5 +256,57 @@ describe('contact tests', () => {
                 platformCreateContactScope.done();
             }
         })
+        test('429 rate limit exceeded', async () => {
+            for (const platform of platforms) {
+                // Arrange
+                const jwtToken = jwt.generateJwt({
+                    id: userId,
+                    rcUserNumber,
+                    platform: platform.name
+                });
+                const platformCreateContactScope = nock(platform.domain)
+                    .post(platform.contactPath)
+                    .once()
+                    .reply(429, {
+                        message: 'Rate limit exceeded'
+                    });
+
+                // Act
+                const res = await request(server).post(`/contact?jwtToken=${jwtToken}&phoneNumber=${phoneNumber}&newContactName${newContactName}}`);
+
+                // Assert
+                expect(res.status).toEqual(200);
+                expect(res.body.successful).toEqual(false);
+
+                // Clean up
+                platformCreateContactScope.done();
+            }
+        });
+        test('500 internal server error', async () => {
+            for (const platform of platforms) {
+                // Arrange
+                const jwtToken = jwt.generateJwt({
+                    id: userId,
+                    rcUserNumber,
+                    platform: platform.name
+                });
+                const platformCreateContactScope = nock(platform.domain)
+                    .post(platform.contactPath)
+                    .once()
+                    .reply(500, {
+                        message: 'Internal server error'
+                    });
+
+                // Act
+                const res = await request(server).post(`/contact?jwtToken=${jwtToken}&phoneNumber=${phoneNumber}&newContactName${newContactName}}`);
+
+                // Assert
+                expect(res.status).toEqual(200);
+                expect(res.body.successful).toEqual(false);
+
+                // Clean up
+                platformCreateContactScope.done();
+            }
+        });
     })
 });
