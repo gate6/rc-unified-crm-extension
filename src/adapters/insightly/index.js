@@ -36,8 +36,8 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             },
             returnMessage: {
                 messageType: 'success',
-                message: 'Successfully connected to Insightly.',
-                ttl: 3000
+                message: 'Connected to Insightly.',
+                ttl: 1000
             }
         };
     }
@@ -46,7 +46,19 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             successful: false,
             returnMessage: {
                 messageType: 'warning',
-                message: 'Failed to get user info. Please check your API key and try again.',
+                message: 'Could not load user information Please check your API key and try again.',
+                details:[
+                    {
+                        title: 'Details',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: `Insightly was unable to fetch information for the currently logged in user. Please check your permissions in Insightly and make sure you have permission to access and read user information.`
+                            }
+                        ]
+                    }
+                ],
                 ttl: 3000
             }
         }
@@ -58,8 +70,8 @@ async function unAuthorize({ user }) {
     return {
         returnMessage: {
             messageType: 'success',
-            message: 'Successfully logged out from Insightly account.',
-            ttl: 3000
+            message: 'Logged out of Insightly',
+            ttl: 1000
         }
     }
 }
@@ -252,9 +264,9 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             name: `${personInfo.data.FIRST_NAME} ${personInfo.data.LAST_NAME}`
         },
         returnMessage: {
-            message: `New contact created.`,
+            message: `Contact created.`,
             messageType: 'success',
-            ttl: 3000
+            ttl: 2000
         }
     }
 }
@@ -345,9 +357,9 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     return {
         logId: addLogRes.data.EVENT_ID,
         returnMessage: {
-            message: 'Call log added.',
+            message: 'Call logged',
             messageType: 'success',
-            ttl: 3000
+            ttl: 2000
         }
     };
 }
@@ -387,7 +399,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         returnMessage: {
             message: 'Call log updated.',
             messageType: 'success',
-            ttl: 3000
+            ttl: 2000
         }
     };
 }
@@ -490,9 +502,9 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     return {
         logId: addLogRes.data.EVENT_ID,
         returnMessage: {
-            message: 'Message log added.',
+            message: 'Message logged',
             messageType: 'success',
-            ttl: 3000
+            ttl: 1000
         }
     };
 }
