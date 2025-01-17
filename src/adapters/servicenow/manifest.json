@@ -48,6 +48,7 @@
             "canOpenLogPage": true,
             "contactPageUrl":"https://dev265071.service-now.com/now/nav/ui/classic/params/target/sys_user.do?sys_id={contactId}",
             "logPageUrl":"https://dev265071.service-now.com/interaction_list.do?sysparm_query=opened_for={contactId}",
+            "callPopUrl": "https://dev265071.service-now.com/interaction_list.do?sysparm_query=opened_for={contactId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
                     "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
