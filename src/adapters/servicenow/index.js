@@ -711,7 +711,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const originalNote = getLogRes?.data?.result?.work_notes;
     let patchBody = {};
 
-    let body = originalNote;
+    let logBody = originalNote;
     if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
     if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
     if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
@@ -721,7 +721,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
     patchBody = {
             short_description: subject,
-            work_notes: recordingLink ? body + `\nCall Recording Link: \n${recordingLink}` : body
+            work_notes: recordingLink ? logBody + `\nCall Recording Link: \n${recordingLink}` : logBody
     }
 
     const patchLog = await axios.patch(
