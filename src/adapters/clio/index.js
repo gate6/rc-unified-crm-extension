@@ -50,7 +50,7 @@ async function getUserInfo({ authHeader }) {
             returnMessage: {
                 messageType: 'warning',
                 message: 'Could not load user information',
-                details:[
+                details: [
                     {
                         title: 'Details',
                         items: [
@@ -136,7 +136,15 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
                     title: result.title ?? "",
                     company: result.company?.name ?? "",
                     phone: numberToQuery,
-                    additionalInfo: returnedMatters.length > 0 ? { matters: returnedMatters, logTimeEntry: user.userSettings?.clioDefaultTimeEntryTick ?? true } : { logTimeEntry: user.userSettings?.clioDefaultTimeEntryTick ?? true }
+                    additionalInfo: returnedMatters.length > 0 ?
+                        {
+                            matters: returnedMatters,
+                            logTimeEntry: user.userSettings?.clioDefaultTimeEntryTick ?? true,
+                            nonBillable: user.userSettings?.clioDefaultNonBillableTick ?? false
+                        } :
+                        {
+                            logTimeEntry: user.userSettings?.clioDefaultTimeEntryTick ?? true
+                        }
                 })
             }
         }
@@ -212,6 +220,10 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { body = upsertAiNote({ body, aiNote }); }
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { body = upsertTranscript({ body, transcript }); }
 
+    let extraDataTracking = {
+        withSmartNoteLog: !!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true),
+        withTranscript: !!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)
+    };
     const postBody = {
         data: {
             subject: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phone}]`,
@@ -237,31 +249,32 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             headers: { 'Authorization': authHeader }
         });
     const communicationId = addLogRes.data.data.id;
-    if (additionalSubmission?.logTimeEntry === undefined || additionalSubmission.logTimeEntry) {
-        const addTimerBody = {
-            data: {
-                communication: {
-                    id: communicationId
-                },
-                quantity: callLog.duration,
-                date: moment(callLog.startTime).toISOString(),
-                type: 'TimeEntry'
-            }
+    const addTimerBody = {
+        data: {
+            communication: {
+                id: communicationId
+            },
+            quantity: callLog.duration,
+            date: moment(callLog.startTime).toISOString(),
+            type: 'TimeEntry',
+            non_billable: additionalSubmission.nonBillable,
+            note: body
         }
-        const addTimerRes = await axios.post(
-            `https://${user.hostname}/api/v4/activities.json`,
-            addTimerBody,
-            {
-                headers: { 'Authorization': authHeader }
-            });
     }
+    const addTimerRes = await axios.post(
+        `https://${user.hostname}/api/v4/activities.json`,
+        addTimerBody,
+        {
+            headers: { 'Authorization': authHeader }
+        });
     return {
         logId: communicationId,
         returnMessage: {
             message: 'Call logged',
             messageType: 'success',
             ttl: 2000
-        }
+        },
+        extraDataTracking
     };
 }
 
@@ -452,7 +465,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
         {
             headers: { 'Authorization': authHeader }
         });
-    const note = getLogRes.data.data.body.split('- Note: ')[1].split('\n')[0];
+    const note = getLogRes.data.data.body.split('- Note: ')[1]?.split('\n')[0];
     const contactId = getLogRes.data.data.senders[0].type == 'Person' ?
         getLogRes.data.data.senders[0].id :
         getLogRes.data.data.receivers[0].id;

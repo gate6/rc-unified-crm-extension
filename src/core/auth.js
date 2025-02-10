@@ -113,7 +113,8 @@ async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken,
             accessToken,
             refreshToken,
             tokenExpiry,
-            platformAdditionalInfo
+            platformAdditionalInfo,
+            userSettings: {}
         });
     }
     return {
@@ -122,8 +123,9 @@ async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken,
     };
 }
 
+// Just for oauth ATM
 async function authValidation({ platform, userId }) {
-    const existingUser = await UserModel.findOne({
+    let existingUser = await UserModel.findOne({
         where: {
             [Op.and]: [
                 {
@@ -135,15 +137,21 @@ async function authValidation({ platform, userId }) {
     });
     if (!!existingUser) {
         const platformModule = require(`../adapters/${platform}`);
-        const { successful, returnMessage } = await platformModule.authValidation({ user: existingUser });
+        const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: existingUser?.platformAdditionalInfo?.tokenUrl, hostname: existingUser?.hostname })));
+        existingUser = await oauth.checkAndRefreshAccessToken(oauthApp, existingUser);
+        const { successful, returnMessage, status } = await platformModule.authValidation({ user: existingUser });
         return {
             successful,
-            returnMessage
+            returnMessage,
+            status,
+            failReason: successful ? '' : 'CRM. API failed'
         }
     }
     else {
         return {
-            successful: false
+            successful: false,
+            status: 404,
+            failReason: 'App Connect. User not found in database'
         }
     }
 }

@@ -5,6 +5,7 @@ const { UserModel } = require('./models/userModel');
 const { CallLogModel } = require('./models/callLogModel');
 const { MessageLogModel } = require('./models/messageLogModel');
 const { AdminConfigModel } = require('./models/adminConfigModel');
+const { CacheModel } = require('./models/cacheModel');
 const cors = require('cors')
 const jwt = require('./lib/jwt');
 const logCore = require('./core/log');
@@ -32,6 +33,7 @@ async function initDB() {
     await CallLogModel.sync();
     await MessageLogModel.sync();
     await AdminConfigModel.sync();
+    await CacheModel.sync();
     console.log('db tables created');
 }
 
@@ -80,15 +82,19 @@ app.get('/authValidation', async (req, res) => {
     let platformName = null;
     let success = false;
     let validationPass = false;
+    let reason = '';
+    let statusCode = 200;
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
         const jwtToken = req.query.jwtToken;
         if (!!jwtToken) {
             const { id: userId, platform } = jwt.decodeJwt(jwtToken);
             platformName = platform;
-            const { successful, returnMessage } = await authCore.authValidation({ platform, userId });
+            const { successful, returnMessage, failReason, status } = await authCore.authValidation({ platform, userId });
             success = true;
             validationPass = successful;
+            reason = failReason;
+            statusCode = status;
             res.status(200).send({ successful, returnMessage });
         }
         else {
@@ -98,6 +104,7 @@ app.get('/authValidation', async (req, res) => {
     }
     catch (e) {
         console.log(`platform: ${platformName} \n${e.stack}`);
+        statusCode = e.response?.status ?? 'unknown';
         res.status(400).send(e);
         success = false;
     }
@@ -114,7 +121,9 @@ app.get('/authValidation', async (req, res) => {
         ip,
         author,
         extras: {
-            validationPass
+            validationPass,
+            reason,
+            statusCode
         }
     });
 });
@@ -226,7 +235,7 @@ app.get('/admin/settings', async function (req, res) {
             }
             else {
                 res.status(401).send('Admin validation failed');
-                success = false;
+                success = true;
             }
         }
         else {
@@ -597,6 +606,7 @@ app.get('/contact', async function (req, res) {
     let platformName = null;
     let success = false;
     let resultCount = 0;
+    let statusCode = 200;
     let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
@@ -607,7 +617,7 @@ app.get('/contact', async function (req, res) {
             const { successful, returnMessage, contact, extraDataTracking } = await contactCore.findContact({ platform, userId, phoneNumber: req.query.phoneNumber, overridingFormat: req.query.overridingFormat, isExtension: req.query?.isExtension ?? false });
             res.status(200).send({ successful, returnMessage, contact });
             if (successful) {
-                const nonNewContact = contact.filter(c => !c.isNewContact);
+                const nonNewContact = contact?.filter(c => !c.isNewContact) ?? [];
                 resultCount = nonNewContact.length;
                 success = true;
                 if (!!extraDataTracking) {
@@ -622,6 +632,7 @@ app.get('/contact', async function (req, res) {
     }
     catch (e) {
         console.log(`platform: ${platformName} \n${e.stack}`);
+        statusCode = e.response?.status ?? 'unknown';
         res.status(400).send(e);
         success = false;
     }
@@ -639,6 +650,7 @@ app.get('/contact', async function (req, res) {
         author,
         extras: {
             resultCount,
+            statusCode,
             ...extraData
         },
     });
@@ -647,6 +659,7 @@ app.post('/contact', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let statusCode = 200;
     let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
@@ -668,6 +681,7 @@ app.post('/contact', async function (req, res) {
     }
     catch (e) {
         console.log(`platform: ${platformName} \n${e.stack}`);
+        statusCode = e.response?.status ?? 'unknown';
         res.status(400).send(e);
         success = false;
     }
@@ -684,6 +698,7 @@ app.post('/contact', async function (req, res) {
         ip,
         author,
         extras: {
+            statusCode,
             ...extraData
         }
     });
@@ -692,6 +707,7 @@ app.get('/callLog', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let statusCode = 200;
     let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
@@ -729,6 +745,7 @@ app.get('/callLog', async function (req, res) {
         ip,
         author,
         extras: {
+            statusCode,
             ...extraData
         }
     });
@@ -737,12 +754,14 @@ app.post('/callLog', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let statusCode = 200;
     let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
         const jwtToken = req.query.jwtToken;
         if (!!jwtToken) {
             const { id: userId, platform } = jwt.decodeJwt(jwtToken);
+            platformName = platform;
             const { successful, logId, returnMessage, extraDataTracking } = await logCore.createCallLog({ platform, userId, incomingData: req.body });
             if (!!extraDataTracking) {
                 extraData = extraDataTracking;
@@ -757,6 +776,7 @@ app.post('/callLog', async function (req, res) {
     }
     catch (e) {
         console.log(`platform: ${platformName} \n${e.stack}`);
+        statusCode = e.response?.status ?? 'unknown';
         res.status(400).send(e);
         success = false;
     }
@@ -773,6 +793,7 @@ app.post('/callLog', async function (req, res) {
         ip,
         author,
         extras: {
+            statusCode,
             ...extraData
         }
     });
@@ -781,6 +802,7 @@ app.patch('/callLog', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let statusCode = 200;
     let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
@@ -802,6 +824,7 @@ app.patch('/callLog', async function (req, res) {
     }
     catch (e) {
         console.log(`platform: ${platformName} \n${e.stack}`);
+        statusCode = e.response?.status ?? 'unknown';
         res.status(400).send(e);
         success = false;
     }
@@ -818,6 +841,7 @@ app.patch('/callLog', async function (req, res) {
         ip,
         author,
         extras: {
+            statusCode,
             ...extraData
         }
     });
@@ -826,6 +850,7 @@ app.post('/messageLog', async function (req, res) {
     const requestStartTime = new Date().getTime();
     let platformName = null;
     let success = false;
+    let statusCode = 200;
     let extraData = {};
     const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
     try {
@@ -847,6 +872,7 @@ app.post('/messageLog', async function (req, res) {
     }
     catch (e) {
         console.log(`platform: ${platformName} \n${e.stack}`);
+        statusCode = e.response?.status ?? 'unknown';
         res.status(400).send(e);
         success = false;
     }
@@ -863,6 +889,7 @@ app.post('/messageLog', async function (req, res) {
         ip,
         author,
         extras: {
+            statusCode,
             ...extraData
         }
     });
