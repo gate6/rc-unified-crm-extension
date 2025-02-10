@@ -281,6 +281,10 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { body = upsertAiNote({ body, aiNote }); }
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { body = upsertTranscript({ body, transcript }); }
 
+    let extraDataTracking = {
+        withSmartNoteLog: !!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true),
+        withTranscript: !!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)
+    };
     const postBody = {
         TITLE: callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`,
         DETAILS: body,
@@ -360,7 +364,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             message: 'Call logged',
             messageType: 'success',
             ttl: 2000
-        }
+        },
+        extraDataTracking
     };
 }
 
@@ -410,7 +415,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
         {
             headers: { 'Authorization': authHeader }
         });
-    const note = getLogRes.data.DETAILS.split('- Agent note: ')[1].split('\n')[0];
+    const note = getLogRes.data.DETAILS.split('- Agent note: ')[1]?.split('\n')[0];
     const contactRes = await axios.get(
         `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/${getLogRes.data.LINKS[0].LINK_OBJECT_NAME}s/${getLogRes.data.LINKS[0].LINK_OBJECT_ID}`,
         {

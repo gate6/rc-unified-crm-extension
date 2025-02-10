@@ -260,7 +260,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     try {
         const title = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
         const oneWorldEnabled = user?.platformAdditionalInfo?.oneWorldEnabled;
-        let callStartTime = moment(moment(callLog.startTime).toISOString());
+        let callStartTime = moment(callLog.startTime).toISOString();
         let startTimeSLot = moment(callLog.startTime).format('HH:mm');
         try {
             const getTimeZoneUrl = `https://${user.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_gettimezone&deploy=customdeploy_gettimezone`;
@@ -280,7 +280,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             //If Start Time and End Time are same, then add 1 minute to End Time because endTime can not be less or equal to startTime
             endTimeSlot = callEndTime.add(1, 'minutes').format('HH:mm');
         }
-        let comments = '';;
+        let comments = '';
         if (user.userSettings?.addCallLogNote?.value ?? true) { comments = upsertCallAgentNote({ body: comments, note }); }
         if (user.userSettings?.addCallLogSubject?.value ?? true) { comments = upsertCallSubject({ body: comments, title }); }
         if (user.userSettings?.addCallLogContactNumber?.value ?? true) { comments = upsertContactPhoneNumber({ body: comments, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
@@ -290,17 +290,22 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { comments = upsertCallRecording({ body: comments, recordingLink: callLog.recording.link }); }
         if (!!aiNote && (user.userSettings?.addCallLogAINote?.value ?? true)) { comments = upsertAiNote({ body: comments, aiNote }); }
         if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { comments = upsertTranscript({ body: comments, transcript }); }
+
+        let extraDataTracking = {
+            withSmartNoteLog: !!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true),
+            withTranscript: !!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)
+        };
         let postBody = {
             title: title,
             phone: contactInfo?.phoneNumber || '',
             priority: "MEDIUM",
             status: "COMPLETE",
-            startDate: moment(callLog.startTime).toISOString(),
+            startDate: callStartTime.format('YYYY-MM-DD'),
             startTime: startTimeSLot,
             endTime: endTimeSlot,
             timedEvent: true,
             message: comments,
-            completedDate: callEndTime
+            completedDate: callEndTime.format('YYYY-MM-DD')
         };
         if (contactInfo.type?.toUpperCase() === 'CONTACT') {
             const contactInfoRes = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/contact/${contactInfo.id}`, {
@@ -325,7 +330,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
                 const postBody = {
                     salesOrderId: additionalSubmission.salesorder,
                     noteTitle: title,
-                    noteText: note
+                    noteText: note ?? 'empty'
                 };
                 const createUserNotesResponse = await axios.post(createUserNotesUrl, postBody, {
                     headers: { 'Authorization': authHeader }
@@ -340,7 +345,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
                 message: 'Call logged',
                 messageType: 'success',
                 ttl: 2000
-            }
+            },
+            extraDataTracking
         };
     } catch (error) {
         let errorMessage = netSuiteErrorDetails(error, "Error in Creating Call Log");
