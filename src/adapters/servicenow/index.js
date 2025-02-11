@@ -10,13 +10,10 @@ const Sequelize = require('sequelize');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { raw } = require('mysql2');
 const models = initModels(sequelize);
-
-// -----------------------------------------------------------------------------------------------
-// ---TODO: Delete below mock entities and other relevant code, they are just for test purposes---
-// -----------------------------------------------------------------------------------------------
-let mockContact = null;
-let mockCallLog = null;
-let mockMessageLog = null;
+const { secondsToHoursMinutesSeconds } = require('../../lib/util');
+const fs = require("fs");
+const path = require("path");
+const FormData = require("form-data");
 
 //function to generate aplhanumeric string for admin login sysid
 function generateAlphanumericString(length) {
@@ -129,26 +126,6 @@ async function getOauthInfo(requestData) {
     // }
 
 }
-
-
-// // CASE: If using OAuth and Auth server requires CLIENT_ID in token exchange request
-// function getOverridingOAuthOption({ code }) {
-//     console.log("code ", code)
-//     return {
-//         query: {
-//             grant_type: 'authorization_code',
-//             code,
-//             client_id: process.env.SERVICE_NOW_CLIENT_ID,
-//             client_secret: process.env.SERVICE_NOW_CLIENT_SECRET,
-//             redirect_uri: process.env.SERVICE_NOW_CRM_REDIRECT_URI,
-//         },
-//         headers: {
-//             Authorization: ''
-//         }
-//     }
-// }
-// exports.getOverridingOAuthOption = getOverridingOAuthOption;
-
 
 // For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
 async function getUserInfo({ authHeader, additionalInfo, hostname}) {
@@ -473,10 +450,19 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     };  //[{id, name, phone, additionalInfo}]
 }
 
-async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, timezoneOffset }) {
+async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript }) {
     // ------------------------------------
     // ---TODO.4: Implement call logging---
     // ------------------------------------
+
+    let body = '';
+    if (user.userSettings?.addCallLogNote?.value ?? true) { body = upsertCallAgentNote({ body, note }); }
+    if (user.userSettings?.addCallLogContactNumber?.value ?? true) { body = upsertContactPhoneNumber({ body, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
+    if (user.userSettings?.addCallLogResult?.value ?? true) { body = upsertCallResult({ body, result: callLog.result }); }
+    if (user.userSettings?.addCallLogDuration?.value ?? true) { body = upsertCallDuration({ body, duration: callLog.duration }); }
+    if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { body = upsertCallRecording({ body, recordingLink: callLog.recording.link }); }
+    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { body = upsertAiNote({ body, aiNote }); }
+    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { body = upsertTranscript({ body, transcript }); }
 
     const userInfo = await getHostname(user.dataValues.hostname);
 
@@ -541,9 +527,19 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         }
     });
 
+    const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
+
+    if (callLog?.recording?.downloadUrl) {
+        const timestamp = moment().format("DD-MM-YYYY_HH:MM:SS");
+        const fileName = `downloaded_audio_${timestamp}`;
+        const filePath = path.join(__dirname, `downloads/${fileName}.mp3`);
+        await downloadAudioFile(callLog?.recording?.downloadUrl, filePath);
+        await uploadToServiceNow(filePath, instanceId, authHeader, existingLogId, fileName)
+    }
+
     const postBody = {
         short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phoneNumber}]`,
-        work_notes: `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`
+        work_notes: body ? `${workNotes} ${body}` : workNotes
     }
 
     if (additionalSubmission && additionalSubmission.state){
@@ -580,6 +576,81 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     };
 }
 
+function upsertCallAgentNote({ body, note }) {
+    if (!!!note) {
+        return body;
+    }
+    const noteRegex = RegExp('- Agent note: ([\\s\\S]+?)\n');
+    if (noteRegex.test(body)) {
+        body = body.replace(noteRegex, `- Agent note: ${note}\n`);
+    }
+    else {
+        body += `- Agent note: ${note}\n`;
+    }
+    return body;
+}
+
+function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
+    const phoneNumberRegex = RegExp('- Contact Number: (.+?)\n');
+    if (phoneNumberRegex.test(body)) {
+        body = body.replace(phoneNumberRegex, `- Contact Number: ${phoneNumber}\n`);
+    } else {
+        body += `- Contact Number: ${phoneNumber}\n`;
+    }
+    return body;
+}
+
+function upsertCallResult({ body, result }) {
+    const resultRegex = RegExp('- Result: (.+?)\n');
+    if (resultRegex.test(body)) {
+        body = body.replace(resultRegex, `- Result: ${result}\n`);
+    } else {
+        body += `- Result: ${result}\n`;
+    }
+    return body;
+}
+
+function upsertCallDuration({ body, duration }) {
+    const durationRegex = RegExp('- Duration: (.+?)\n');
+    if (durationRegex.test(body)) {
+        body = body.replace(durationRegex, `- Duration: ${secondsToHoursMinutesSeconds(duration)}\n`);
+    } else {
+        body += `- Duration: ${secondsToHoursMinutesSeconds(duration)}\n`;
+    }
+    return body;
+}
+
+function upsertCallRecording({ body, recordingLink }) {
+    const recordingLinkRegex = RegExp('- Call recording link: (.+?)\n');
+    if (!!recordingLink && recordingLinkRegex.test(body)) {
+        body = body.replace(recordingLinkRegex, `- Call recording link: ${recordingLink}\n`);
+    } else if (!!recordingLink) {
+        body += `- Call recording link: ${recordingLink}\n`;
+    }
+    return body;
+}
+
+function upsertAiNote({ body, aiNote }) {
+    const aiNoteRegex = RegExp('- AI Note:([\\s\\S]*?)--- END');
+    const clearedAiNote = aiNote.replace(/\n+$/, '');
+    if (aiNoteRegex.test(body)) {
+        body = body.replace(aiNoteRegex, `- AI Note:\n${clearedAiNote}\n--- END`);
+    } else {
+        body += `- AI Note:\n${clearedAiNote}\n--- END\n`;
+    }
+    return body;
+}
+
+function upsertTranscript({ body, transcript }) {
+    const transcriptRegex = RegExp('- Transcript:([\\s\\S]*?)--- END');
+    if (transcriptRegex.test(body)) {
+        body = body.replace(transcriptRegex, `- Transcript:\n${transcript}\n--- END`);
+    } else {
+        body += `- Transcript:\n${transcript}\n--- END\n`;
+    }
+    return body;
+}
+
 async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
     // ---TODO.5: Implement call log fetching---
@@ -611,7 +682,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     }
 }
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note }) {
+async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, recordingDownloadLink, subject, note, startTime, duration, result, aiNote, transcript }) {
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
@@ -626,12 +697,20 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         {
             headers: { 'Authorization': authHeader }
         });
-    const originalNote = getLogRes.data.result.work_notes;
+    const originalNote = getLogRes?.data?.result?.work_notes;
     let patchBody = {};
+
+    let logBody = originalNote;
+    if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
+    if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
+    if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
+    if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink: decodeURIComponent(recordingLink) }); }
+    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
+    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
 
     patchBody = {
             short_description: subject,
-            work_notes: recordingLink ? note + `\nCall Recording Link: \n${recordingLink}` : note
+            work_notes: recordingLink ? logBody + `\nCall Recording Link: \n${recordingLink}` : logBody
     }
 
     const patchLog = await axios.patch(
@@ -639,8 +718,17 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
-        });
-    
+        }
+    );
+
+    if (recordingDownloadLink) {
+        const timestamp = moment().format("DD-MM-YYYY_HH:MM:SS");
+        const fileName = `downloaded_audio_${timestamp}`;
+        const filePath = path.join(__dirname, `downloads/${fileName}.mp3`);
+        await downloadAudioFile(recordingDownloadLink, filePath);
+        await uploadToServiceNow(filePath, instanceId, authHeader, existingLogId, fileName)
+    }
+
     const patchLogRes = {
         data: {
             id: patchLog.data.result.sys_id
@@ -833,6 +921,71 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 }
 
+async function downloadAudioFile(url, filePath) {
+    const urlObj = new URL(url);
+    const accessToken = urlObj.searchParams.get("accessToken");
+
+    try {
+
+        const response = await axios.get(url, {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+            },
+            responseType: "stream",
+        });
+
+        console.log("Downloading audio file...");
+
+        // Pipe the response stream to a file
+        const writer = fs.createWriteStream(filePath);
+        response.data.pipe(writer);
+
+        return new Promise((resolve, reject) => {
+            writer.on("finish", () => resolve(filePath));
+            writer.on("error", reject);
+        });
+
+    } catch (error) {
+        console.error("Error downloading audio:", error.response ? error.response.data : error.message);
+    }
+}
+
+async function uploadToServiceNow(filePath, instanceId, accessToken, sys_id, fileName) {
+    const serviceNowURL = `https://${instanceId}.service-now.com/api/now/attachment/file`;
+    const interactionSysId = sys_id;
+
+    try {
+        const formData = new FormData();
+        formData.append("file", fs.createReadStream(filePath), {
+            filename: fileName,
+            contentType: "*/*",
+        });
+
+        const response = await axios.post(
+            `${serviceNowURL}?table_name=interaction&table_sys_id=${interactionSysId}&file_name=${fileName}`,
+            formData,
+            {
+                headers: {
+                    "Authorization": accessToken,
+                    ...formData.getHeaders(),
+                },
+            }
+        );
+
+        console.log("File uploaded to ServiceNow:", response.data);
+
+        fs.unlink(filePath, (err) => {
+            if (err) {
+                console.log("Error deleting file:", err);
+            } else {
+                console.log("File deleted from local system:", filePath);
+            }
+        });
+
+    } catch (error) {
+        console.error("Error uploading file:", error.response ? error.response.data : error.message);
+    }
+}
 
 exports.getAuthType = getAuthType;
 exports.getBasicAuth = getBasicAuth;

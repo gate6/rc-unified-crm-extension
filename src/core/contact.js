@@ -13,9 +13,9 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
             return {
                 successful: false,
                 returnMessage: {
-                    message: `Cannot find user with id: ${userId}`,
+                    message: `Contact not found`,
                     messageType: 'warning',
-                    ttl: 3000
+                    ttl: 5000
                 }
             };
         }
@@ -33,19 +33,109 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
                 authHeader = `Basic ${basicAuth}`;
                 break;
         }
-        const { matchedContactInfo, returnMessage } = await platformModule.findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension });
-        if (matchedContactInfo != null && matchedContactInfo.length > 0) {
-            return { successful: true, returnMessage, contact: matchedContactInfo };
+        const { matchedContactInfo, returnMessage, extraDataTracking } = await platformModule.findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension });
+        if (matchedContactInfo != null && matchedContactInfo?.filter(c => !c.isNewContact)?.length > 0) {
+            return { successful: true, returnMessage, contact: matchedContactInfo, extraDataTracking };
         }
         else {
-            return { successful: false, returnMessage };
+            return {
+                successful: true,
+                returnMessage:
+                {
+                    message: `Contact not found`,
+                    messageType: 'warning',
+                    details: [{
+                        title: 'Details',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: `A contact with the phone number ${phoneNumber} could not be found in your ${platform} account.`
+                            }
+                        ]
+                    }],
+                    ttl: 5000
+                },
+                contact: matchedContactInfo,
+                extraDataTracking
+            };
         }
     } catch (e) {
         console.log(`platform: ${platform} \n${e.stack}`);
         if (e.response?.status === 429) {
-            return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
+            return {
+                successful: false,
+                returnMessage: {
+                    message: `Rate limit exceeded`,
+                    messageType: 'warning',
+                    details: [
+                        {
+                            title: 'Details',
+                            items: [
+                                {
+                                    id: '1',
+                                    type: 'text',
+                                    text: `You have exceeded the maximum number of requests allowed by ${platform}. Please try again in the next minute. If the problem persists please contact support.`
+                                }
+                            ]
+                        }
+                    ],
+                    ttl: 5000
+                },
+                extraDataTracking: {
+                    statusCode: e.response?.status,
+                }
+            };
         }
-        return { successful: false, returnMessage: { message: `Failed to find contact.`, messageType: 'warning' } };
+        else if (e.response?.status >= 400 && e.response?.status < 410) {
+            return {
+                successful: false,
+                returnMessage: {
+                    message: `Authorization error`,
+                    messageType: 'warning',
+                    details: [
+                        {
+                            title: 'Details',
+                            items: [
+                                {
+                                    id: '1',
+                                    type: 'text',
+                                    text: `It seems like there's something wrong with your authorization of ${platform}. Please Logout and then Connect your ${platform} account within this extension.`
+                                }
+                            ]
+                        }
+                    ],
+                    ttl: 5000
+                },
+                extraDataTracking: {
+                    statusCode: e.response?.status,
+                }
+            };
+        }
+        return {
+            successful: false,
+            returnMessage:
+            {
+                message: `Error finding contacts`,
+                messageType: 'warning',
+                details: [
+                    {
+                        title: 'Details',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: `Please check if your account has permission to VIEW and LIST contacts`
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            },
+            extraDataTracking: {
+                statusCode: e.response?.status,
+            }
+        };
     }
 }
 
@@ -58,7 +148,7 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
             }
         });
         if (!user || !user.accessToken) {
-            return { successful: false, message: `Cannot find user with id: ${userId}` };
+            return { successful: false, message: `Contact not found` };
         }
         const platformModule = require(`../adapters/${platform}`);
         const authType = platformModule.getAuthType();
@@ -74,9 +164,9 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
                 authHeader = `Basic ${basicAuth}`;
                 break;
         }
-        const { contactInfo, returnMessage } = await platformModule.createContact({ user, authHeader, phoneNumber, newContactName, newContactType });
+        const { contactInfo, returnMessage, extraDataTracking } = await platformModule.createContact({ user, authHeader, phoneNumber, newContactName, newContactType });
         if (contactInfo != null) {
-            return { successful: true, returnMessage, contact: contactInfo };
+            return { successful: true, returnMessage, contact: contactInfo, extraDataTracking };
         }
         else {
             return { successful: false, returnMessage };
@@ -84,9 +174,74 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
     } catch (e) {
         console.log(`platform: ${platform} \n${e.stack}`);
         if (e.response?.status === 429) {
-            return { successful: false, returnMessage: { message: `${platform} rate limit reached. Please try again the next minute.`, messageType: 'warning', ttl: 5000 } };
+            return {
+                successful: false,
+                returnMessage:
+                {
+                    message: `Rate limit exceeded`,
+                    messageType: 'warning',
+                    details: [
+                        {
+                            title: 'Details',
+                            items: [
+                                {
+                                    id: '1',
+                                    type: 'text',
+                                    text: `You have exceeded the maximum number of requests allowed by ${platform}. Please try again in the next minute. If the problem persists please contact support.`
+                                }
+                            ]
+                        }
+                    ],
+                    ttl: 5000
+                }
+            };
         }
-        return { successful: false, returnMessage: { message: `Failed to create contact.`, messageType: 'warning' } };
+        else if (e.response?.status >= 400 && e.response?.status < 410) {
+            return {
+                successful: false,
+                returnMessage: {
+                    message: `Authorization error`,
+                    messageType: 'warning',
+                    details: [
+                        {
+                            title: 'Details',
+                            items: [
+                                {
+                                    id: '1',
+                                    type: 'text',
+                                    text: `It seems like there's something wrong with your authorization of ${platform}. Please Logout and then Connect your ${platform} account within this extension.`
+                                }
+                            ]
+                        }
+                    ],
+                    ttl: 5000
+                },
+                extraDataTracking: {
+                    statusCode: e.response?.status,
+                }
+            };
+        }
+        return {
+            successful: false,
+            returnMessage:
+            {
+                message: `Error creating contact`,
+                messageType: 'warning',
+                details: [
+                    {
+                        title: 'Details',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: `A contact with the phone number ${phoneNumber} could not be created. Make sure you have permission to create contacts in ${platform}.`
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
     }
 }
 

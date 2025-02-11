@@ -26,6 +26,81 @@
             "canOpenLogPage": false,
             "contactPageUrl": "https://{hostname}/person/{contactId}",
             "logPageUrl": "https://{hostname}/activities/{logId}",
+            "settings": [
+                {
+                    "id": "pipedriveCallLogDetails",
+                    "type": "section",
+                    "name": "Call log details",
+                    "group": "logging",
+                    "items": [
+                        {
+                            "id": "addCallLogNote",
+                            "type": "boolean",
+                            "name": "Agent-entered notes",
+                            "description": "Log the notes manually entered by yourself",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogSubject",
+                            "type": "boolean",
+                            "name": "Call subject",
+                            "description": "Log a short phrase to summarize call, e.g. 'Inbound call from...'",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogContactNumber",
+                            "type": "boolean",
+                            "name": "Contact's phone number",
+                            "description": "Log the contact information of the other participant",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogDateTime",
+                            "type": "boolean",
+                            "name": "Date and time",
+                            "description": "Log the call's explicit start and end date/times",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogDuration",
+                            "type": "boolean",
+                            "name": "Call duration",
+                            "description": "Log the call duration, noted in minutes and seconds",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogResult",
+                            "type": "boolean",
+                            "name": "Call result",
+                            "description": "Log the result of the call, e.g. Call connected",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogRecording",
+                            "type": "boolean",
+                            "name": "Link to the recording",
+                            "description": "Provide a link to the call's recording, if it exists",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogAiNote",
+                            "type": "boolean",
+                            "name": "Smart summary",
+                            "description": "Log the AI-generated summary of the call, if it exists",
+                            "defaultValue": false,
+                            "requiredPermission": "aiNote"
+                        },
+                        {
+                            "id": "addCallLogTranscript",
+                            "type": "boolean",
+                            "name": "Call transcript",
+                            "description": "Log the AI-generated transcript of the call, if it exists",
+                            "defaultValue": false,
+                            "requiredPermission": "aiNote"
+                        }
+                    ]
+                }
+            ],
             "page": {
                 "callLog": {
                     "additionalFields": [
@@ -52,13 +127,13 @@
                     "elements": [
                         {
                             "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
+                            "title": "RingCentral App Connect is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
                             "type": "string",
                             "bold": false
                         },
                         {
                             "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
+                            "title": "How likely are you to recommend the App Connect to a friend or colleague?",
                             "type": "string",
                             "bold": true
                         },
@@ -182,6 +257,67 @@
                     "value": "contact"
                 }
             ],
+            "settings": [
+                {
+                    "id": "insightlyCallLogDetails",
+                    "type": "section",
+                    "name": "Call log details",
+                    "group": "logging",
+                    "items": [
+                        {
+                            "id": "addCallLogNote",
+                            "type": "boolean",
+                            "name": "Agent-entered notes",
+                            "description": "Log the notes manually entered by yourself",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogContactNumber",
+                            "type": "boolean",
+                            "name": "Contact's phone number",
+                            "description": "Log the contact information of the other participant",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogDuration",
+                            "type": "boolean",
+                            "name": "Call duration",
+                            "description": "Log the call duration, noted in minutes and seconds",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogResult",
+                            "type": "boolean",
+                            "name": "Call result",
+                            "description": "Log the result of the call, e.g. Call connected",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogRecording",
+                            "type": "boolean",
+                            "name": "Link to the recording",
+                            "description": "Provide a link to the call's recording, if it exists",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogAiNote",
+                            "type": "boolean",
+                            "name": "Smart summary",
+                            "description": "Log the AI-generated summary of the call, if it exists",
+                            "defaultValue": false,
+                            "requiredPermission": "aiNote"
+                        },
+                        {
+                            "id": "addCallLogTranscript",
+                            "type": "boolean",
+                            "name": "Call transcript",
+                            "description": "Log the AI-generated transcript of the call, if it exists",
+                            "defaultValue": false,
+                            "requiredPermission": "aiNote"
+                        }
+                    ]
+                }
+            ],
             "page": {
                 "callLog": {
                     "additionalFields": [
@@ -232,13 +368,13 @@
                     "elements": [
                         {
                             "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
+                            "title": "RingCentral App Connect is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
                             "type": "string",
                             "bold": false
                         },
                         {
                             "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
+                            "title": "How likely are you to recommend the App Connect to a friend or colleague?",
                             "type": "string",
                             "bold": true
                         },
@@ -326,6 +462,80 @@
             },
             "canOpenLogPage": false,
             "contactPageUrl": "https://{hostname}/nc/#/contacts/{contactId}",
+            "settings": [
+                {
+                    "id": "clioDefaults",
+                    "type": "section",
+                    "name": "Clio options",
+                    "items": [
+                        {
+                            "id": "clioDefaultNonBillableTick",
+                            "type": "boolean",
+                            "name": "Non-billable",
+                            "defaultValue": false
+                        }
+                    ]
+                },
+                {
+                    "id": "clioCallLogDetails",
+                    "type": "section",
+                    "name": "Call log details",
+                    "group": "logging",
+                    "items": [
+                        {
+                            "id": "addCallLogNote",
+                            "type": "boolean",
+                            "name": "Agent-entered notes",
+                            "description": "Log the notes manually entered by yourself",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogContactNumber",
+                            "type": "boolean",
+                            "name": "Contact's phone number",
+                            "description": "Log the contact information of the other participant",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogDuration",
+                            "type": "boolean",
+                            "name": "Call duration",
+                            "description": "Log the call duration, noted in minutes and seconds",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogResult",
+                            "type": "boolean",
+                            "name": "Call result",
+                            "description": "Log the result of the call, e.g. Call connected",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogRecording",
+                            "type": "boolean",
+                            "name": "Link to the recording",
+                            "description": "Provide a link to the call's recording, if it exists",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogAiNote",
+                            "type": "boolean",
+                            "name": "Smart summary",
+                            "description": "Log the AI-generated summary of the call, if it exists",
+                            "defaultValue": false,
+                            "requiredPermission": "aiNote"
+                        },
+                        {
+                            "id": "addCallLogTranscript",
+                            "type": "boolean",
+                            "name": "Call transcript",
+                            "description": "Log the AI-generated transcript of the call, if it exists",
+                            "defaultValue": false,
+                            "requiredPermission": "aiNote"
+                        }
+                    ]
+                }
+            ],
             "page": {
                 "callLog": {
                     "additionalFields": [
@@ -336,11 +546,19 @@
                             "contactDependent": true
                         },
                         {
-                            "const": "logTimeEntry",
-                            "title": "Log time entry",
+                            "const": "nonBillable",
+                            "title": "Non-billable",
                             "type": "checkbox",
                             "contactDependent": false,
-                            "defaultValue": true
+                            "defaultSettingId": "clioDefaults",
+                            "defaultSettingValues": {
+                                "inboundCall": {
+                                    "settingId": "clioDefaultNonBillableTick"
+                                },
+                                "outboundCall": {
+                                    "settingId": "clioDefaultNonBillableTick"
+                                }
+                            }
                         }
                     ]
                 },
@@ -359,13 +577,13 @@
                     "elements": [
                         {
                             "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
+                            "title": "RingCentral App Connect is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
                             "type": "string",
                             "bold": false
                         },
                         {
                             "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
+                            "title": "How likely are you to recommend the App Connect to a friend or colleague?",
                             "type": "string",
                             "bold": true
                         },
@@ -472,24 +690,105 @@
                                 "uiSchema": {
                                     "ui:widget": "password"
                                 }
+                            },
+                            {
+                                "const": "timezone",
+                                "title": "timezone (number ONLY, eg. +2)",
+                                "type": "string",
+                                "required": true
                             }
                         ]
                     }
                 }
             },
+            "settings": [
+                {
+                    "id": "redtailCallLogDetails",
+                    "type": "section",
+                    "name": "Call log details",
+                    "group": "logging",
+                    "items": [
+                        {
+                            "id": "addCallLogNote",
+                            "type": "boolean",
+                            "name": "Agent-entered notes",
+                            "description": "Log the notes manually entered by yourself",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogSubject",
+                            "type": "boolean",
+                            "name": "Call subject",
+                            "description": "Log a short phrase to summarize call, e.g. 'Inbound call from...'",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogContactNumber",
+                            "type": "boolean",
+                            "name": "Contact's phone number",
+                            "description": "Log the contact information of the other participant",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogDateTime",
+                            "type": "boolean",
+                            "name": "Date and time",
+                            "description": "Log the call's explicit start and end date/times",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogDuration",
+                            "type": "boolean",
+                            "name": "Call duration",
+                            "description": "Log the call duration, noted in minutes and seconds",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogResult",
+                            "type": "boolean",
+                            "name": "Call result",
+                            "description": "Log the result of the call, e.g. Call connected",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogRecording",
+                            "type": "boolean",
+                            "name": "Link to the recording",
+                            "description": "Provide a link to the call's recording, if it exists",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogAiNote",
+                            "type": "boolean",
+                            "name": "Smart summary",
+                            "description": "Log the AI-generated summary of the call, if it exists",
+                            "defaultValue": false,
+                            "requiredPermission": "aiNote"
+                        },
+                        {
+                            "id": "addCallLogTranscript",
+                            "type": "boolean",
+                            "name": "Call transcript",
+                            "description": "Log the AI-generated transcript of the call, if it exists",
+                            "defaultValue": false,
+                            "requiredPermission": "aiNote"
+                        }
+                    ]
+                }
+            ],
             "page": {
                 "feedback": {
                     "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}&entry.800026675={version}",
                     "elements": [
                         {
                             "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
+                            "title": "RingCentral App Connect is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
                             "type": "string",
                             "bold": false
                         },
                         {
                             "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
+                            "title": "How likely are you to recommend the App Connect to a friend or colleague?",
                             "type": "string",
                             "bold": true
                         },
@@ -569,6 +868,10 @@
             "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
             "urlIdentifier": "app.bullhornstaffing.com",
             "name": "bullhorn",
+            "serverSideLogging": {
+                "url": "https://crm-logging.labs.ringcentral.com",
+                "rcClientId": "Y4m1YREFKbXdDoet5djv46"
+            },
             "displayName": "Bullhorn",
             "auth": {
                 "type": "oauth",
@@ -587,6 +890,10 @@
                 {
                     "display": "Contact",
                     "value": "Contact"
+                },
+                {
+                    "display": "Lead",
+                    "value": "Lead"
                 }
             ],
             "settings": [
@@ -634,6 +941,79 @@
                             "type": "boolean",
                             "name": "Allow custom note action",
                             "defaultValue": false
+                        }
+                    ]
+                },
+                {
+                    "id": "bullhornCallLogDetails",
+                    "type": "section",
+                    "name": "Call log details",
+                    "group": "logging",
+                    "items": [
+                        {
+                            "id": "addCallLogNote",
+                            "type": "boolean",
+                            "name": "Agent-entered notes",
+                            "description": "Log the notes manually entered by yourself",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogSubject",
+                            "type": "boolean",
+                            "name": "Call subject",
+                            "description": "Log a short phrase to summarize call, e.g. 'Inbound call from...'",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogContactNumber",
+                            "type": "boolean",
+                            "name": "Contact's phone number",
+                            "description": "Log the contact information of the other participant",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogDateTime",
+                            "type": "boolean",
+                            "name": "Date and time",
+                            "description": "Log the call's explicit start and end date/times",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogDuration",
+                            "type": "boolean",
+                            "name": "Call duration",
+                            "description": "Log the call duration, noted in minutes and seconds",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogResult",
+                            "type": "boolean",
+                            "name": "Call result",
+                            "description": "Log the result of the call, e.g. Call connected",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogRecording",
+                            "type": "boolean",
+                            "name": "Link to the recording",
+                            "description": "Provide a link to the call's recording, if it exists",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogAiNote",
+                            "type": "boolean",
+                            "name": "Smart summary",
+                            "description": "Log the AI-generated summary of the call, if it exists",
+                            "defaultValue": false,
+                            "requiredPermission": "aiNote"
+                        },
+                        {
+                            "id": "addCallLogTranscript",
+                            "type": "boolean",
+                            "name": "Call transcript",
+                            "description": "Log the AI-generated transcript of the call, if it exists",
+                            "defaultValue": false,
+                            "requiredPermission": "aiNote"
                         }
                     ]
                 }
@@ -684,13 +1064,13 @@
                     "elements": [
                         {
                             "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
+                            "title": "RingCentral App Connect is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
                             "type": "string",
                             "bold": false
                         },
                         {
                             "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
+                            "title": "How likely are you to recommend the App Connect to a friend or colleague?",
                             "type": "string",
                             "bold": true
                         },
@@ -778,6 +1158,81 @@
                     "customState": "fillerString,platform=netsuite"
                 }
             },
+            "settings": [
+                {
+                    "id": "netsuiteCallLogDetails",
+                    "type": "section",
+                    "name": "Call log details",
+                    "group": "logging",
+                    "items": [
+                        {
+                            "id": "addCallLogNote",
+                            "type": "boolean",
+                            "name": "Agent-entered notes",
+                            "description": "Log the notes manually entered by yourself",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogSubject",
+                            "type": "boolean",
+                            "name": "Call subject",
+                            "description": "Log a short phrase to summarize call, e.g. 'Inbound call from...'",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogContactNumber",
+                            "type": "boolean",
+                            "name": "Contact's phone number",
+                            "description": "Log the contact information of the other participant",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogDateTime",
+                            "type": "boolean",
+                            "name": "Date and time",
+                            "description": "Log the call's explicit start and end date/times",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogDuration",
+                            "type": "boolean",
+                            "name": "Call duration",
+                            "description": "Log the call duration, noted in minutes and seconds",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogResult",
+                            "type": "boolean",
+                            "name": "Call result",
+                            "description": "Log the result of the call, e.g. Call connected",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogRecording",
+                            "type": "boolean",
+                            "name": "Link to the recording",
+                            "description": "Provide a link to the call's recording, if it exists",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "addCallLogAiNote",
+                            "type": "boolean",
+                            "name": "Smart summary",
+                            "description": "Log the AI-generated summary of the call, if it exists",
+                            "defaultValue": true,
+                            "requiredPermission": "aiNote"
+                        },
+                        {
+                            "id": "addCallLogTranscript",
+                            "type": "boolean",
+                            "name": "Call transcript",
+                            "description": "Log the AI-generated transcript of the call, if it exists",
+                            "defaultValue": true,
+                            "requiredPermission": "aiNote"
+                        }
+                    ]
+                }
+            ],
             "platform": "netsuite",
             "contactPageUrl": "https://{hostname}/app/common/entity/{contactType}.nl?id={contactId}&source=ringcentral",
             "logPageUrl": "https://{hostname}/app/crm/calendar/call.nl?id={logId}",
@@ -800,23 +1255,37 @@
             },
             "page": {
                 "callLog": {
-                    "additionalFields": []
+                    "additionalFields": [
+                        {
+                            "const": "salesorder",
+                            "title": "SalesOrder",
+                            "type": "selection",
+                            "contactDependent": true
+                        }
+                    ]
                 },
                 "messageLog": {
-                    "additionalFields": []
+                    "additionalFields": [
+                        {
+                            "const": "salesorder",
+                            "title": "SalesOrder",
+                            "type": "selection",
+                            "contactDependent": true
+                        }
+                    ]
                 },
                 "feedback": {
                     "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}&entry.800026675={version}",
                     "elements": [
                         {
                             "const": "pageDescription",
-                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
+                            "title": "RingCentral App Connect is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
                             "type": "string",
                             "bold": false
                         },
                         {
                             "const": "scoreDescription",
-                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
+                            "title": "How likely are you to recommend the App Connect to a friend or colleague?",
                             "type": "string",
                             "bold": true
                         },
@@ -880,5 +1349,5 @@
             }
         }
     },
-    "version": "1.3.1"
+    "version": "1.3.6"
 }

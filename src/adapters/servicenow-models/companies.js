@@ -67,7 +67,12 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.ENUM('user', 'contact'),
       allowNull: false,
       defaultValue: 'contact'
-    } 
+    },
+    subscriptionEndDate: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      defaultValue: Sequelize.literal("CURRENT_DATE + INTERVAL 15 DAY") 
+    }
   }, {
     sequelize,
     tableName: 'companies',

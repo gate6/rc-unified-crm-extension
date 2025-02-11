@@ -19,6 +19,7 @@ const thirdPartyLogId = 'thirdPartyLogId';
 const unknownThirdPartyLogId = 'unknownThirdPartyLogId';
 const sessionId = 'sessionId';
 const unknownSessionId = 'unknownSessionId';
+const unknownTelephonySessionId = 'unknownTelephonySessionId';
 const accessToken = 'accessToken';
 const phoneNumber = '+17206789819';
 const messageLogId = 'messageLogId';
@@ -234,7 +235,7 @@ describe('call&message log tests', () => {
 
                     // Assert
                     expect(res.status).toEqual(200);
-                    expect(res.body.returnMessage.message).toEqual(`Cannot find user with id: ${unknownUserId}`);
+                    expect(res.body.returnMessage.message).toEqual(`Contact not found`);
                     expect(res.body.successful).toEqual(false);
                 }
             });
@@ -250,6 +251,7 @@ describe('call&message log tests', () => {
                         logInfo: {
                             id: unknownCallId,
                             sessionId: unknownSessionId,
+                            telephonySessionId: unknownTelephonySessionId,
                             platform: platform.name,
                             direction: 'Inbound',
                             from: {
@@ -289,7 +291,7 @@ describe('call&message log tests', () => {
                     expect(res.status).toEqual(200);
                     expect(res.body.successful).toEqual(true);
                     expect(res.body.logId).toEqual(unknownThirdPartyLogId);
-                    const newLog = await CallLogModel.findByPk(unknownCallId);
+                    const newLog = await CallLogModel.findByPk(unknownTelephonySessionId);
                     expect(newLog).not.toBeNull();
 
                     // Clean up
@@ -471,7 +473,7 @@ describe('call&message log tests', () => {
 
                     // Assert
                     expect(res.status).toEqual(200);
-                    expect(res.body.returnMessage.message).toEqual(`Cannot find user with id: ${unknownUserId}`);
+                    expect(res.body.returnMessage.message).toEqual(`Contact not found`);
                     expect(res.body.successful).toEqual(false);
                 }
             });

@@ -53,7 +53,7 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, callbackUri, apiU
 async function onApiKeyLogin({ platform, hostname, apiKey, additionalInfo }) {
     const platformModule = require(`../adapters/${platform}`);
     const basicAuth = platformModule.getBasicAuth({ apiKey });
-    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader: `Basic ${basicAuth}`, hostname, additionalInfo });
+    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader: `Basic ${basicAuth}`, hostname, additionalInfo, apiKey });
     if (successful) {
         const userInfo = await saveUserInfo({
             platformUserInfo,
@@ -113,7 +113,8 @@ async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken,
             accessToken,
             refreshToken,
             tokenExpiry,
-            platformAdditionalInfo
+            platformAdditionalInfo,
+            userSettings: {}
         });
     }
     return {
@@ -122,5 +123,39 @@ async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken,
     };
 }
 
+// Just for oauth ATM
+async function authValidation({ platform, userId }) {
+    let existingUser = await UserModel.findOne({
+        where: {
+            [Op.and]: [
+                {
+                    id: userId,
+                    platform
+                }
+            ]
+        }
+    });
+    if (!!existingUser) {
+        const platformModule = require(`../adapters/${platform}`);
+        const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: existingUser?.platformAdditionalInfo?.tokenUrl, hostname: existingUser?.hostname })));
+        existingUser = await oauth.checkAndRefreshAccessToken(oauthApp, existingUser);
+        const { successful, returnMessage, status } = await platformModule.authValidation({ user: existingUser });
+        return {
+            successful,
+            returnMessage,
+            status,
+            failReason: successful ? '' : 'CRM. API failed'
+        }
+    }
+    else {
+        return {
+            successful: false,
+            status: 404,
+            failReason: 'App Connect. User not found in database'
+        }
+    }
+}
+
 exports.onOAuthCallback = onOAuthCallback;
 exports.onApiKeyLogin = onApiKeyLogin;
+exports.authValidation = authValidation;

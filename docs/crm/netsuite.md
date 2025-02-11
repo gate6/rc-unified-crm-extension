@@ -16,7 +16,7 @@ To begin using the NetSuite integration, users will first need to do the followi
 * Login to NetSuite, then visit the [RingCentral Suite App](https://www.suiteapp.com/RingCentral-Unified-CRM-Extension) page, or:
   * Click on the "SuiteApps" tab if your role gives you access to it
   * Search for "RingCentral" in the directory
-  * Click "RingCentral Unified CRM Extension" in the search results
+  * Click "RingCentral App Connect" in the search results
 * Click the "Install" button found in the upper right hand corner of the page
 
 If you see, "Not compatible" in place of an "Install" button, then you must be running an older version of NetSuite. You will need to upgrade to 2024.2 or later. 
@@ -25,13 +25,13 @@ Installing the app from the SuiteApp marketplace is a necessary step prior to in
 
 ## Setup roles and permissions in NetSuite
 
-Upon installation of the SuiteApp, a role will be created automatically within your account called "RingCentral CRM Extension." This role has been specially tuned to contain the bare minimum number access level to fully operate the Chrome extension. You can see a detailed list of permissions below if you would like to incorporate these permissions into a custom role of your own. 
+Upon installation of the SuiteApp, a role will be created automatically within your account called "RingCentral App Connect." This role has been specially tuned to contain the bare minimum number access level to fully operate the Chrome extension. You can see a detailed list of permissions below if you would like to incorporate these permissions into a custom role of your own. 
 
 ### NetSuite OneWorld instructions
 
-Upon installing the SuiteApp from the Marketplace, a new custom role named **"RingCentral CRM Extension"** will be automatically created in your account. If you are a OneWorld license holder, you will need to take these additional steps.
+Upon installing the SuiteApp from the Marketplace, a new custom role named **"RingCentral App Connect"** will be automatically created in your account. If you are a OneWorld license holder, you will need to take these additional steps.
 
-1. Clone the "RingCentral CRM Extension" role by selecting the "Customize" option.
+1. Clone the "RingCentral App Connect" role by selecting the "Customize" option.
 2. While cloning, add the permission **"List -> Subsidiaries"** to the cloned role.
 
 Use this cloned role when logging into and connecting App Connect to NetSuite.
@@ -48,7 +48,7 @@ REST Web Services is default to be invisible. We'll need to turn on the feature 
 
 ### Create role with required permissions
 
-We recommend using the "RingCentral CRM Extension" role created for you when you install the SuiteApp. However, if you would like to create a custom role that includes the permissions necessary to allow this extension to operate fully, consult the table below. 
+We recommend using the "RingCentral App Connect" role created for you when you install the SuiteApp. However, if you would like to create a custom role that includes the permissions necessary to allow this extension to operate fully, consult the table below. 
 
 | Category     | Permission                           | Level                       |
 | ------------ | ------------------------------------ | -----                       |
@@ -96,3 +96,12 @@ NetSuite requires that every contact be associated with a company. When logging 
 2. Edit the contact to associate it with a more appropriate company stored in NetSuite. 
 
 In this way, App Connect ensures that all contacts created by it conform to the requirements of NetSuite so that all contact records are complete. 
+
+## Concurrency limits
+
+If you receive an error indicating, "concurrency limit exceeded," then you may need to purchase SuiteCloud Plus add-on module. This is what NetSuite support shared:
+
+> Depending on the customers’ service tier level, the concurrency limit is from 5 (shared and tier 3) to 20 (tier 0).
+If additional processor/concurrency is required, the customer could purchase the SuiteCloud Plus add on module, which will include an additional 10 units per SuiteCloud plus license.
+> 
+> Please refer to the [Concurrency Governance Cheat Sheet](https://nlcorp.app.netsuite.com/core/media/media.nl?id=127925362&c=NLCORP&h=8742ad8b887aa6881f85&_xt=.pdf) found in the SDN SAFE Guide for more details.
