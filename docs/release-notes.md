@@ -1,5 +1,47 @@
 # Release notes
 
+## 1.3.6
+
+- Fix: Retro call logging now has recording link if applicable, instead of showing "(pending...)"
+- Better: User settings are synced more frequently and stably
+- Better: Some settings now have additional explanations of how it works
+- Change: "Call log details" setting is now under "Call and SMS logging" 
+- New: Server side logging (BETA) has a trial mode now which only works for admin user's extension only instead of across the whole account
+- Clio: "Time entry" is now always TRUE, only "non-billable" is tickable
+- Redtail: You can now define your timezone offset value in authorization page. Re-auth if you already logged in
+- Bullhorn: Authorization checker is updated to be more reliable and check if user's current session is valid
+- Bullhorn: Appointment draft page now won't attach unintended logo
+- NetSuite: Fix empty note won't create sales order issue
+
+## 1.3.5
+
+- Upgrade: Error messages are more accurate
+- Clio: Support user setting customization with logging time entry and non-billable default values
+
+## 1.3.4
+
+- Upgrade: More accurate call info, including better tracking on call recording link save status
+- New: Call info details can be selectively logged based on new toggles in user settings
+- New: (RingCentral AI license only) Smart Notes to be enabled in user advanced settings
+- Bullhorn(Beta): Server side logging (not to be used with client side auto logging)
+- Bullhorn: Heartbeat mechanism for auth check. It reminds you if auth becomes invalid
+- Bullhron: Lead support
+- Fix: Admin users can see admin tab on first login now
+
+## 1.3.3
+
+- Update: This extension's name is now changed to RingCentral App Connect
+- Fix: (for Clio and Insightly user only) Overriding phone number format missing issue
+- Fix: Admin icon in dark theme
+- Fix: Auto pop up log page after call setting not working
+- Fix: Inbound call contact pop not working
+
+## 1.3.2
+
+- New: User setting inside call pop to control behavior of multiple matched contacts (disabled, all open, prompt to select)
+- Fix: SMS logging issue
+- Fix: Auto open extension now only opens when main page is opened
+
 ## 1.3.1
 
 - New: (Only for admin users) Admin tools. Admins have an extra tab in the extension to control end users' settings

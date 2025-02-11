@@ -2,6 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const url = require('url');
 const { parsePhoneNumber } = require('awesome-phonenumber');
+const { secondsToHoursMinutesSeconds } = require('../../lib/util');
 
 function getAuthType() {
     return 'oauth';
@@ -43,8 +44,8 @@ async function getUserInfo({ authHeader, hostname }) {
             },
             returnMessage: {
                 messageType: 'success',
-                message: 'Successfully connected to Pipedrive.',
-                ttl: 3000
+                message: 'Connected to Pipedrive.',
+                ttl: 1000
             }
         };
     }
@@ -53,7 +54,19 @@ async function getUserInfo({ authHeader, hostname }) {
             successful: false,
             returnMessage: {
                 messageType: 'warning',
-                message: 'Failed to get user info.',
+                message: 'Could not load user information',
+                details:[
+                    {
+                        title: 'Details',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: `Pipedrive was unable to fetch information for the currently logged in user. Please check your permissions in Pipedrive and make sure you have permission to access and read user information.`
+                            }
+                        ]
+                    }
+                ],
                 ttl: 3000
             }
         }
@@ -85,8 +98,8 @@ async function unAuthorize({ user }) {
     return {
         returnMessage: {
             messageType: 'success',
-            message: 'Successfully logged out from Pipedrive account.',
-            ttl: 3000
+            message: 'Logged out of Pipedrive',
+            ttl: 1000
         }
     }
 }
@@ -162,19 +175,35 @@ async function createContact({ user, authHeader, phoneNumber, newContactName }) 
             name: createContactRes.data.data.name
         },
         returnMessage: {
-            message: `New contact created.`,
+            message: `Contact created.`,
             messageType: 'success',
-            ttl: 3000
+            ttl: 2000
         }
     }
 }
 
-async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission }) {
+async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript }) {
     const dealId = additionalSubmission ? additionalSubmission.deals : '';
     const personResponse = await axios.get(`https://${user.hostname}/v1/persons/${contactInfo.id}`, { headers: { 'Authorization': authHeader } });
     const orgId = personResponse.data.data.org_id?.value ?? '';
     const timeUtc = moment(callLog.startTime).utcOffset(0).format('HH:mm')
     const dateUtc = moment(callLog.startTime).utcOffset(0).format('YYYY-MM-DD');
+    let noteBody = '<b>Agent notes</b>';;
+    if (user.userSettings?.addCallLogNote?.value ?? true) { noteBody = upsertCallAgentNote({ body: noteBody, note }); }
+    noteBody += '<b>Call details</b><ul>';
+    if (user.userSettings?.addCallLogContactNumber?.value ?? true) { noteBody = upsertContactPhoneNumber({ body: noteBody, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
+    if (user.userSettings?.addCallLogDateTime?.value ?? true) { noteBody = upsertCallDateTime({ body: noteBody, startTime: callLog.startTime, timezoneOffset: user.timezoneOffset }); }
+    if (user.userSettings?.addCallLogDuration?.value ?? true) { noteBody = upsertCallDuration({ body: noteBody, duration: callLog.duration }); }
+    if (user.userSettings?.addCallLogResult?.value ?? true) { noteBody = upsertCallResult({ body: noteBody, result: callLog.result }); }
+    if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { noteBody = upsertCallRecording({ body: noteBody, recordingLink: callLog.recording.link }); }
+    noteBody += '</ul>';
+    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { noteBody = upsertAiNote({ body: noteBody, aiNote }); }
+    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { noteBody = upsertTranscript({ body: noteBody, transcript }); }
+    
+    let extraDataTracking = {
+        withSmartNoteLog: !!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true),
+        withTranscript: !!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)
+    };
     const postBody = {
         user_id: user.id,
         subject: callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`,
@@ -182,7 +211,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         person_id: contactInfo.id,
         org_id: orgId,
         deal_id: dealId,
-        note: `<p>[Phone Number] ${contactInfo.phoneNumber}</p><p>[Time] ${moment(callLog.startTime).utcOffset(user.timezoneOffset).format('YYYY-MM-DD hh:mm:ss A')}</p><p>[Duration] ${callLog.duration} seconds</p><p>[Call result] ${callLog.result}</p><p>[Note]${note}</p>${callLog.recording ? `<p>[Call recording link] <a target="_blank" href=${callLog.recording.link}>open</a></p>` : ''}<p><span style="font-size:9px">[Created via] <em><a href="https://www.pipedrive.com/en/marketplace/app/ring-central-crm-extension/5d4736e322561f57">RingCentral CRM Extension</a></span></em></p>`,
+        note: noteBody,
         done: true,
         due_date: dateUtc,
         due_time: timeUtc
@@ -196,14 +225,15 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     return {
         logId: addLogRes.data.data.id,
         returnMessage: {
-            message: 'Call log added.',
+            message: 'Call logged',
             messageType: 'success',
-            ttl: 3000
-        }
+            ttl: 2000
+        },
+        extraDataTracking
     };
 }
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note }) {
+async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript }) {
     const existingPipedriveLogId = existingCallLog.thirdPartyLogId;
     const getLogRes = await axios.get(
         `https://${user.hostname}/v1/activities/${existingPipedriveLogId}`,
@@ -212,27 +242,20 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         });
     let putBody = {};
     let logBody = getLogRes.data.data.note;
-    // case: update recording
-    if (!!recordingLink) {
-        if (logBody.includes('<p><span>[Created via]')) {
-            logBody = logBody.replace('<p><span>[Created via]', `<p>[Call recording link] <a target="_blank" href=${recordingLink}>open</a></p><p><span>[Created via]`);
-        }
-        else {
-            logBody += `<p>[Call recording link] <a target="_blank" href=${recordingLink}>open</a></p>`;
-        }
-        putBody = {
-            note: logBody
-        }
+
+    if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
+    if (!!startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) { logBody = upsertCallDateTime({ body: logBody, startTime, timezoneOffset: user.timezoneOffset }); }
+    if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
+    if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
+    if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink }); }
+    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
+    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
+    putBody.note = logBody;
+
+    if (!!subject) {
+        putBody.subject = subject;
     }
-    // case: normal update
-    else {
-        const originalNote = logBody.split('</p><p>[Note]')[1].split('</p>')[0];
-        logBody = logBody.replace(`</p><p>[Note]${originalNote}</p>`, `</p><p>[Note]${note}</p>`);
-        putBody = {
-            note: logBody,
-            subject: subject ?? existingCallLog.subject,
-        }
-    }
+
     const putLogRes = await axios.put(
         `https://${user.hostname}/v1/activities/${existingPipedriveLogId}`,
         putBody,
@@ -244,7 +267,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         returnMessage: {
             message: 'Call log updated.',
             messageType: 'success',
-            ttl: 3000
+            ttl: 2000
         }
     };
 }
@@ -285,15 +308,15 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
                 '</ul>' +
                 '------------<br>' +
                 'END<br><br>' +
-                '--- Created via RingCentral CRM Extension';
+                '--- Created via RingCentral App Connect';
             break;
         case 'Voicemail':
             subject = `Voicemail left by ${contactInfo.name} - ${moment(message.creationTime).utcOffset(user.timezoneOffset).format('YY/MM/DD')}`;
-            note = `<br><b>${subject}</b><br>Voicemail recording link: ${recordingLink} <br><br>--- Created via RingCentral CRM Extension`;
+            note = `<br><b>${subject}</b><br>Voicemail recording link: ${recordingLink} <br><br>--- Created via RingCentral App Connect`;
             break;
         case 'Fax':
             subject = `Fax document sent from ${contactInfo.name} - ${moment(message.creationTime).utcOffset(user.timezoneOffset).format('YY/MM/DD')}`;
-            note = `<br><b>${subject}</b><br>Fax document link: ${faxDocLink} <br><br>--- Created via RingCentral CRM Extension`;
+            note = `<br><b>${subject}</b><br>Fax document link: ${faxDocLink} <br><br>--- Created via RingCentral App Connect`;
             break;
     }
     const postBody = {
@@ -317,9 +340,9 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     return {
         logId: addLogRes.data.data.id,
         returnMessage: {
-            message: 'Message log added.',
+            message: 'Message logged',
             messageType: 'success',
-            ttl: 3000
+            ttl: 1000
         }
     };
 }
@@ -367,7 +390,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
             headers: { 'Authorization': authHeader }
         });
     const logBody = getLogRes.data.data.note;
-    const note = logBody.split('<p>[Note]')[1].split('</p>')[0];
+    const note = logBody.split('<b>Agent notes</b>')[1]?.split('<b>Call details</b>')[0]?.replaceAll('<br>', '') ?? '';
     const relatedContact = getLogRes.data.related_objects?.person;
     let contactName = 'Unknown';
     if (!!relatedContact) {
@@ -381,6 +404,116 @@ async function getCallLog({ user, callLogId, authHeader }) {
             contactName
         }
     }
+}
+
+function upsertCallAgentNote({ body, note }) {
+    if (!!!note) {
+        return body;
+    }
+    const noteRegex = RegExp('<b>Agent notes</b>([\\s\\S]+?)Call details</b>');
+    if (noteRegex.test(body)) {
+        body = body.replace(noteRegex, `<b>Agent notes</b><br>${note}<br><br><b>Call details</b>`);
+    }
+    else {
+        body += `<br>${note}<br><br>`;
+    }
+    return body;
+}
+
+function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
+    const phoneNumberRegex = RegExp(`<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: (.+?)(?:<li>|</ul>)`);
+    if (phoneNumberRegex.test(body)) {
+        body = body.replace(phoneNumberRegex, (match, p1) => `<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: ${phoneNumber}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: ${phoneNumber}<li>`;
+    }
+    return body;
+}
+
+function upsertCallDateTime({ body, startTime, timezoneOffset }) {
+    const dateTimeRegex = RegExp('<li><b>Date/time</b>: (.+?)(?:<li>|</ul>)');
+    if (dateTimeRegex.test(body)) {
+        const updatedDateTime = moment(startTime).utcOffset(timezoneOffset).format('YYYY-MM-DD hh:mm:ss A');
+        body = body.replace(dateTimeRegex, (match, p1) => `<li><b>Date/time</b>: ${updatedDateTime}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>Date/time</b>: ${moment(startTime).utcOffset(timezoneOffset).format('YYYY-MM-DD hh:mm:ss A')}<li>`;
+    }
+    return body;
+}
+
+function upsertCallDuration({ body, duration }) {
+    const durationRegex = RegExp('<li><b>Duration</b>: (.+?)(?:<li>|</ul>)');
+    if (durationRegex.test(body)) {
+        body = body.replace(durationRegex, (match, p1) => `<li><b>Duration</b>: ${secondsToHoursMinutesSeconds(duration)}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>Duration</b>: ${secondsToHoursMinutesSeconds(duration)}<li>`;
+    }
+    return body;
+}
+
+function upsertCallResult({ body, result }) {
+    const resultRegex = RegExp('<li><b>Result</b>: (.+?)(?:<li>|</ul>)');
+    if (resultRegex.test(body)) {
+        body = body.replace(resultRegex, (match, p1) => `<li><b>Result</b>: ${result}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>Result</b>: ${result}<li>`;
+    }
+    return body;
+}
+
+function upsertCallRecording({ body, recordingLink }) {
+    const recordingLinkRegex = RegExp('<li><b>Call recording link</b>: (.+?)(?:<li>|</ul>)');
+    if (!!recordingLink) {
+        if (recordingLinkRegex.test(body)) {
+            body = body.replace(recordingLinkRegex, (match, p1) => `<li><b>Call recording link</b>: <a target="_blank" href=${recordingLink}>open</a>${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+        }
+        else {
+            let text = '';
+            // a real link
+            if (recordingLink.startsWith('http')) {
+                text = `<li><b>Call recording link</b>: <a target="_blank" href=${recordingLink}>open</a><li>`;
+            } else {
+                // placeholder
+                text = '<li><b>Call recording link</b>: (pending...)<li>';
+            }
+            if (body.indexOf('</ul>') === -1) {
+                body += text;
+            } else {
+                body = body.replace('</ul>', `${text}</ul>`);
+            }
+        }
+    }
+    return body;
+}
+
+function upsertAiNote({ body, aiNote }) {
+    if (!!!aiNote) {
+        return body;
+    }
+    const formattedAiNote = aiNote.replace(/\n+$/, '').replace(/(?:\r\n|\r|\n)/g, '<br>');
+    const aiNoteRegex = RegExp('<div><b>AI note</b><br>(.+?)</div>');
+    if (aiNoteRegex.test(body)) {
+        body = body.replace(aiNoteRegex, `<div><b>AI note</b><br>${formattedAiNote}</div>`);
+    }
+    else {
+        body += `<div><b>AI note</b><br>${formattedAiNote}</div><br>`;
+    }
+    return body;
+}
+
+function upsertTranscript({ body, transcript }) {
+    if (!!!transcript) {
+        return body;
+    }
+    const formattedTranscript = transcript.replace(/(?:\r\n|\r|\n)/g, '<br>');
+    const transcriptRegex = RegExp('<div><b>Transcript</b><br>(.+?)</div>');
+    if (transcriptRegex.test(body)) {
+        body = body.replace(transcriptRegex, `<div><b>Transcript</b><br>${formattedTranscript}</div>`);
+    }
+    else {
+        body += `<div><b>Transcript</b><br>${formattedTranscript}</div><br>`;
+    }
+    return body;
 }
 
 exports.getAuthType = getAuthType;
