@@ -951,23 +951,21 @@ async function downloadAudioFile(url, filePath) {
 }
 
 async function uploadToServiceNow(filePath, instanceId, accessToken, sys_id, fileName) {
-    const serviceNowURL = `https://${instanceId}.service-now.com/api/now/attachment/file`;
+    const serviceNowURL = `https://${instanceId}.service-now.com/api/now/attachment/upload`;
     const interactionSysId = sys_id;
 
     try {
         const formData = new FormData();
-        formData.append("file", fs.createReadStream(filePath), {
-            filename: fileName,
-            contentType: "*/*",
-        });
+        formData.append("table_name", "interaction");
+        formData.append("table_sys_id", sys_id);
+        // formData.append("schedule_for_cleanup", "false");
+        // formData.append("encryption_context", "");
+        formData.append("file", fs.createReadStream(filePath));
 
-        const response = await axios.post(
-            `${serviceNowURL}?table_name=interaction&table_sys_id=${interactionSysId}&file_name=${fileName}`,
-            formData,
-            {
+        const response = await axios.post(serviceNowURL, formData, {
                 headers: {
                     "Authorization": accessToken,
-                    ...formData.getHeaders(),
+                    // ...formData.getHeaders(),
                 },
             }
         );
