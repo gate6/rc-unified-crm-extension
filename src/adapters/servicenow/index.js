@@ -14,6 +14,8 @@ const { secondsToHoursMinutesSeconds } = require('../../lib/util');
 const fs = require("fs");
 const path = require("path");
 const FormData = require("form-data");
+const s3Helper = require('../servicenow-core/s3');
+const AWS = require('aws-sdk');
 
 //function to generate aplhanumeric string for admin login sysid
 function generateAlphanumericString(length) {
@@ -529,14 +531,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
 
-    if (callLog?.recording?.downloadUrl) {
-        const timestamp = moment().format("DD-MM-YYYY_HH:MM:SS");
-        const fileName = `downloaded_audio_${timestamp}`;
-        const filePath = path.join(__dirname, `downloads/${fileName}.mp3`);
-        await downloadAudioFile(callLog?.recording?.downloadUrl, filePath);
-        await uploadToServiceNow(filePath, instanceId, authHeader, existingLogId, fileName)
-    }
-
     const postBody = {
         short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phoneNumber}]`,
         work_notes: body ? `${workNotes} ${body}` : workNotes
@@ -561,7 +555,16 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         postBody,
         {
             headers: { 'Authorization': authHeader }
-        });
+        }
+    );
+    
+    if (callLog?.recording?.downloadUrl) {
+        const timestamp = moment().format("DD-MM-YYYY_HH:MM:SS");
+        const fileName = `downloaded_audio_${timestamp}`;
+        const s3Key = `${fileName}.mp3`;
+        const s3Url = await downloadAudioFile(callLog?.recording?.downloadUrl, process.env.S3_BUCKET, s3Key);
+        await uploadToServiceNow(s3Url, instanceId, authHeader, addLogRes?.data?.result?.sys_id, fileName);
+    }
 
     //----------------------------------------------------------------------------
     //---CHECK.4: Open db.sqlite and CRM website to check if call log is saved ---
@@ -724,9 +727,9 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     if (recordingDownloadLink) {
         const timestamp = moment().format("DD-MM-YYYY_HH:MM:SS");
         const fileName = `downloaded_audio_${timestamp}`;
-        const filePath = path.join(__dirname, `downloads/${fileName}.mp3`);
-        await downloadAudioFile(recordingDownloadLink, filePath);
-        await uploadToServiceNow(filePath, instanceId, authHeader, existingLogId, fileName)
+        const s3Key = `${fileName}.mp3`;
+        const s3Url = await downloadAudioFile(recordingDownloadLink, process.env.S3_BUCKET, s3Key);
+        await uploadToServiceNow(s3Url, instanceId, authHeader, existingLogId, fileName)
     }
 
     const patchLogRes = {
@@ -921,9 +924,14 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 }
 
-async function downloadAudioFile(url, filePath) {
+async function downloadAudioFile(url, s3Bucket, s3Key) {
     const urlObj = new URL(url);
     const accessToken = urlObj.searchParams.get("accessToken");
+    const s3 = new AWS.S3({
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        region: process.env.AWS_REGION
+    });
 
     try {
 
@@ -936,49 +944,44 @@ async function downloadAudioFile(url, filePath) {
 
         console.log("Downloading audio file...");
 
-        // Pipe the response stream to a file
-        const writer = fs.createWriteStream(filePath);
-        response.data.pipe(writer);
+        const uploadParams = {
+            Bucket: s3Bucket,
+            Key: s3Key,
+            Body: response.data
+        };
 
-        return new Promise((resolve, reject) => {
-            writer.on("finish", () => resolve(filePath));
-            writer.on("error", reject);
-        });
+        const uploadResult = await s3.upload(uploadParams).promise();
+        console.log("File uploaded to S3:", uploadResult);
+
+        return uploadResult.Location;
 
     } catch (error) {
-        console.error("Error downloading audio:", error.response ? error.response.data : error.message);
+        console.error("Error downloading or uploading audio:", error.response ? error.response.data : error.message);
     }
 }
 
-async function uploadToServiceNow(filePath, instanceId, accessToken, sys_id, fileName) {
+async function uploadToServiceNow(s3Url, instanceId, accessToken, sys_id, fileName) {
     const serviceNowURL = `https://${instanceId}.service-now.com/api/now/attachment/upload`;
-    const interactionSysId = sys_id;
 
     try {
+        const s3Key = decodeURIComponent(new URL(s3Url).pathname.substring(1));
+        console.log("Extracted S3 Key:", s3Key);
+
+        const fileStream = await s3Helper.getObject(s3Key, "audio");
+
         const formData = new FormData();
         formData.append("table_name", "interaction");
         formData.append("table_sys_id", sys_id);
-        // formData.append("schedule_for_cleanup", "false");
-        // formData.append("encryption_context", "");
-        formData.append("file", fs.createReadStream(filePath));
+        formData.append("file", fileStream, { filename: s3Key, contentType: "audio/mpeg" });
 
         const response = await axios.post(serviceNowURL, formData, {
-                headers: {
-                    "Authorization": accessToken,
-                    // ...formData.getHeaders(),
-                },
-            }
-        );
+            headers: {
+                "Authorization": accessToken,
+                ...formData.getHeaders(),
+            },
+        });
 
         console.log("File uploaded to ServiceNow:", response.data);
-
-        fs.unlink(filePath, (err) => {
-            if (err) {
-                console.log("Error deleting file:", err);
-            } else {
-                console.log("File deleted from local system:", filePath);
-            }
-        });
 
     } catch (error) {
         console.error("Error uploading file:", error.response ? error.response.data : error.message);

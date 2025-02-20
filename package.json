@@ -33,6 +33,7 @@
   "author": "Da Kong",
   "license": "MIT",
   "dependencies": {
+    "@aws-sdk/s3-request-presigner": "^3.750.0",
     "awesome-phonenumber": "^5.6.0",
     "axios": "^1.1.2",
     "body-parser": "^1.20.1",
