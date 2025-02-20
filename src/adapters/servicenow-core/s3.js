@@ -12,7 +12,7 @@ const region = process.env.AWS_REGION;
 const s3Client = new S3Client({
     region,
     credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID, secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        accessKeyId: process.env.MEDIA_UPLOAD_KEY_ID, secretAccessKey: process.env.MEDIA_UPLOAD_SECRET_KEY,
     },
 });
 const buckets = {

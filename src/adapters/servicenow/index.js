@@ -928,8 +928,8 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
     const urlObj = new URL(url);
     const accessToken = urlObj.searchParams.get("accessToken");
     const s3 = new AWS.S3({
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        accessKeyId: process.env.MEDIA_UPLOAD_KEY_ID,
+        secretAccessKey: process.env.MEDIA_UPLOAD_SECRET_KEY,
         region: process.env.AWS_REGION
     });
 
