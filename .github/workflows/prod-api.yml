@@ -3,6 +3,10 @@ on:
   push:
     branches: Gate6-Prod
 jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: prod
   preview:
     runs-on: ringcentral-api-233.225
     steps:
