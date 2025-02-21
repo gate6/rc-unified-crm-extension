@@ -5,10 +5,9 @@ on:
 jobs:
   deploy:
     name: Deploy
-    runs-on: ubuntu-latest
-    environment: prod
-  preview:
     runs-on: ringcentral-api-233.225
+    environment: prod
+   
     steps:
       - name: Checkout source code
         uses: actions/checkout@v1
