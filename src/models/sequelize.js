@@ -1,7 +1,7 @@
 const { Sequelize } = require('sequelize');
 const AWS = require('aws-sdk');
 
-async function getSecret() {
+function getSecretSync() {
     const secretName = "rcservicenow-prod";
     const regionName = "us-east-1";
 
@@ -9,20 +9,29 @@ async function getSecret() {
         region: regionName
     });
 
-    try {
-        const data = await client.getSecretValue({ SecretId: secretName }).promise();
-        if ('SecretString' in data) {
-            return JSON.parse(data.SecretString);
+    let secret;
+    client.getSecretValue({ SecretId: secretName }, (err, data) => {
+        if (err) {
+            console.log("Error retrieving secret: ", err);
+            throw err;
+        } else {
+            if ('SecretString' in data) {
+                secret = JSON.parse(data.SecretString);
+            }
         }
-    } catch (err) {
-        console.log("Error retrieving secret: ", err);
-        throw err;
+    });
+
+    // Wait until the secret is retrieved
+    while (!secret) {
+        require('deasync').runLoopOnce();
     }
+
+    return secret;
 }
 
-async function loadSecrets() {
+function loadSecretsSync() {
     if (!process.env.MYSQL_HOST) {
-        const secrets = await getSecret();
+        const secrets = getSecretSync();
         console.log("secrets", secrets)
         if (secrets) {
             Object.keys(secrets).forEach(key => {
@@ -32,8 +41,8 @@ async function loadSecrets() {
     }
 }
 
-// Call loadSecrets at the start of the application
-loadSecrets();
+// Load secrets synchronously at the start of the application
+loadSecretsSync();
 
 console.log("process.env.MYSQL_HOST", process.env.MYSQL_HOST)
 
@@ -49,6 +58,5 @@ const sequelize = new Sequelize(process.env.DATABASE_URL,
     logging: false
   }
 );
- 
 
 exports.sequelize = sequelize;
