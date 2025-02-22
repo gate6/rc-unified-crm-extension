@@ -1,7 +1,7 @@
 name: Deploy code to API server
 on:
   push:
-    branches: Gate6-Prod
+    branches: Gate6-Prod-NotInUSE
 jobs:
   deploy:
     name: Deploy
