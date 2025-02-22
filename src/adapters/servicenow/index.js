@@ -31,7 +31,7 @@ async function getSecret() {
             return JSON.parse(data.SecretString);
         }
     } catch (err) {
-        console.error("Error retrieving secret: ", err);
+        console.log("Error retrieving secret: ", err);
         throw err;
     }
 }
@@ -39,6 +39,7 @@ async function getSecret() {
 async function loadSecrets() {
     if (!process.env.MYSQL_HOST) {
         const secrets = await getSecret();
+        console.log("secrets", secrets)
         if (secrets) {
             Object.keys(secrets).forEach(key => {
                 process.env[key] = secrets[key];
@@ -49,6 +50,8 @@ async function loadSecrets() {
 
 // Call loadSecrets at the start of the application
 loadSecrets();
+
+console.log("process.env.MYSQL_HOST", process.env.MYSQL_HOST)
 
 //function to generate aplhanumeric string for admin login sysid
 function generateAlphanumericString(length) {
