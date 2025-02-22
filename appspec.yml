@@ -14,7 +14,7 @@ hooks:
       timeout: 300
       runas: servicenow
 permissions:
-  - object: /home/servicenow/rcservicenowapi.gate6.com    
+  - object: /home/servicenow/rcservicenowapi.gate6.com 
     owner: servicenow
     group: servicenow
     mode: 755
