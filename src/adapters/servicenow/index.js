@@ -927,11 +927,14 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
 async function downloadAudioFile(url, s3Bucket, s3Key) {
     const urlObj = new URL(url);
     const accessToken = urlObj.searchParams.get("accessToken");
-    const s3 = new AWS.S3({
+    const s3Values = {
         accessKeyId: process.env.MEDIA_UPLOAD_KEY_ID,
         secretAccessKey: process.env.MEDIA_UPLOAD_SECRET_KEY,
         region: process.env.AWS_REGION
-    });
+    };
+    const s3 = new AWS.S3(s3Values);
+
+    console.log("s3Values", s3Values);
 
     try {
 
@@ -942,7 +945,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
             responseType: "stream",
         });
 
-        console.log("Downloading audio file...");
+        console.log("Downloading audio file...", response);
 
         const uploadParams = {
             Bucket: s3Bucket,
