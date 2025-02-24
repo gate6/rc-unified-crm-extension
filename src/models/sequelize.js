@@ -42,9 +42,9 @@ function loadSecretsSync() {
 }
 
 // Load secrets synchronously at the start of the application
-loadSecretsSync();
+// loadSecretsSync();
 
-console.log("process.env.MYSQL_HOST", process.env.MYSQL_HOST)
+// console.log("process.env.MYSQL_HOST", process.env.MYSQL_HOST)
 
 const sequelize = new Sequelize(process.env.DATABASE_URL,
   {
