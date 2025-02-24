@@ -559,7 +559,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     );
     
     if (callLog?.recording?.downloadUrl) {
-        const timestamp = moment().format("DD-MM-YYYY_HH:MM:SS");
+        const timestamp = moment().format("DD-MM-YYYY_HH_MM_SS");
         const fileName = `downloaded_audio_${timestamp}`;
         const s3Key = `${fileName}.mp3`;
         const s3Url = await downloadAudioFile(callLog?.recording?.downloadUrl, process.env.S3_BUCKET, s3Key);
@@ -725,7 +725,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     );
 
     if (recordingDownloadLink) {
-        const timestamp = moment().format("DD-MM-YYYY_HH:MM:SS");
+        const timestamp = moment().format("DD-MM-YYYY_HH_MM_SS");
         const fileName = `downloaded_audio_${timestamp}`;
         const s3Key = `${fileName}.mp3`;
         const s3Url = await downloadAudioFile(recordingDownloadLink, process.env.S3_BUCKET, s3Key);
@@ -945,21 +945,22 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
             responseType: "stream",
         });
 
-        console.log("Downloading audio file...", response);
+        // console.log("Downloading audio file...", response.data);
 
         const uploadParams = {
             Bucket: s3Bucket,
             Key: s3Key,
             Body: response.data
         };
+        // console.log("Uploading audio file to S3...", uploadParams);
 
         const uploadResult = await s3.upload(uploadParams).promise();
-        console.log("File uploaded to S3:", uploadResult);
+        // console.log("File uploaded to S3:", uploadResult);
 
         return uploadResult.Location;
 
     } catch (error) {
-        console.error("Error downloading or uploading audio:", error.response ? error.response.data : error.message);
+        console.error("Error downloading or uploading audio:", error);
     }
 }
 
