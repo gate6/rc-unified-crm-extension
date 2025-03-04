@@ -983,6 +983,9 @@ async function uploadToServiceNow(s3Url, instanceId, accessToken, sys_id, fileNa
 
         console.log("File uploaded to ServiceNow:", response.data);
 
+        await s3Helper.deleteObject(s3Key, "audio");
+        console.log("File deleted from S3:", s3Key);
+
     } catch (error) {
         console.error("Error uploading file:", error.response ? error.response.data : error.message);
     }
