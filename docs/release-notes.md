@@ -1,5 +1,36 @@
 # Release notes
 
+## 1.3.10
+
+- Fix: New users cannot save auto log setting
+- Fix: Randomly dial previous number
+
+## 1.3.9
+
+- New: User settings for ai related features (applicable accounts only)
+- Better: Token refresh lock to reduce issues of invalid authorization
+- Fix: Clio not able to log message issue
+- Fix: Bullhorn log page bug of not having NoteAction field in a few cases
+- Fix: Agent note title inserted in log description when there's no note
+- Fix: Fix spamming of contact not found warning notification
+- Fix: Fix contact match issue on multiple contact case
+- Better: Clearer sign on case where auto call log setting disabled by Server Side Call Logging
+- Better: User settings are kept after logout and auto-loaded after re-connect
+- Better: Redtail timezone in user setting
+
+## 1.3.8
+
+- Fix: Contact match timeout issue
+- Fix: Auto log in user setting isn't set unless reloaded
+- Bullhorn: User authorization validation issue
+- Bullhorn: Server side logging now has AI summary and transcript
+
+## 1.3.7
+
+- Fix: Timeout issue (mostly affecting call logging)
+- Fix: Admin users now get admin setting right after login
+- New: A new setting to turn ON/OFF retroactive call logging
+
 ## 1.3.6
 
 - Fix: Retro call logging now has recording link if applicable, instead of showing "(pending...)"

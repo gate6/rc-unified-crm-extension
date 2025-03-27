@@ -1,6 +1,6 @@
 # Project information
 site_name: App Connect for RingEX
-site_url: https://github.com/ringcentral/rc-unified-crm-extension
+site_url: https://ringcentral.github.io/rc-unified-crm-extension
 
 # Repository
 repo_url: https://github.com/ringcentral/rc-unified-crm-extension
@@ -57,6 +57,11 @@ markdown_extensions:
   - admonition
   - mdx_include
   - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.emoji:
@@ -94,6 +99,7 @@ nav:
     - 'Logging calls automatically': users/automatic-logging.md
     - 'Server-side call logging': users/server-side-logging.md
   - 'User settings':
+    - 'Settings synchronization': users/settings-sync.md
     - 'Audio input/output': users/audio.md
     - 'Call log prompts': users/prompts.md
     - 'Call-pop': users/call-pop.md
