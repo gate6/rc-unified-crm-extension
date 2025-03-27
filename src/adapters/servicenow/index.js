@@ -105,8 +105,6 @@ async function getOauthInfo(requestData) {
     //     raw: true
     // })
 
-    // console.log("isRcIdPresent", isRcIdPresent)
-
     // if(!isRcIdPresent){
     //     return {
     //         failMessage: 'RingCentral Account ID is not Associated with Gate6'
