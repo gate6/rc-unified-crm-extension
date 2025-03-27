@@ -42,7 +42,7 @@ async function authValidation({ user }) {
                     successful: false,
                     returnMessage: {
                         messageType: 'warning',
-                        message: 'It seems like your Bullhorn session has expired. Please re-authenticate.',
+                        message: 'It seems like your Bullhorn session has expired. Please re-connect.',
                         ttl: 3000
                     },
                     status: e.response.status
@@ -53,7 +53,7 @@ async function authValidation({ user }) {
             successful: false,
             returnMessage: {
                 messageType: 'warning',
-                message: 'It seems like your Bullhorn session has expired. Please re-authenticate.',
+                message: 'It seems like your Bullhorn session has expired. Please re-connect.',
                 ttl: 3000
             },
             status: e.response.status
@@ -144,7 +144,10 @@ function getOverridingOAuthOption({ code }) {
 }
 
 async function unAuthorize({ user }) {
-    await user.destroy();
+    // remove user credentials
+    user.accessToken = '';
+    user.refreshToken = '';
+    await user.save();
     return {
         returnMessage: {
             messageType: 'success',
@@ -262,7 +265,30 @@ async function findContact({ user, phoneNumber }) {
 }
 
 async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType }) {
+    let commentActionListResponse;
     let extraDataTracking = {};
+    try {
+        commentActionListResponse = await axios.get(
+            `${user.platformAdditionalInfo.restUrl}settings/commentActionList`,
+            {
+                headers: {
+                    BhRestToken: user.platformAdditionalInfo.bhRestToken
+                }
+            });
+    }
+    catch (e) {
+        if (isAuthError(e.response.status)) {
+            user = await refreshSessionToken(user);
+            commentActionListResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}settings/commentActionList`,
+                {
+                    headers: {
+                        BhRestToken: user.platformAdditionalInfo.bhRestToken
+                    }
+                });
+        }
+        extraDataTracking['statusCode'] = e.response.status;
+    }
+    const commentActionList = commentActionListResponse.data.commentActionList.map(a => { return { const: a, title: a } });
     switch (newContactType) {
         case 'Lead':
             const leadPostBody = {
@@ -289,7 +315,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             return {
                 contactInfo: {
                     id: leadInfoResp.data.changedEntityId,
-                    name: newContactName
+                    name: newContactName,
+                    additionalInfo: commentActionList?.length > 0 ? { noteActions: commentActionList } : null
                 },
                 returnMessage: {
                     message: `${newContactType} created.`,
@@ -323,7 +350,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             return {
                 contactInfo: {
                     id: candidateInfoResp.data.changedEntityId,
-                    name: newContactName
+                    name: newContactName,
+                    additionalInfo: commentActionList?.length > 0 ? { noteActions: commentActionList } : null
                 },
                 returnMessage: {
                     message: `${newContactType} created.`,
@@ -391,7 +419,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             return {
                 contactInfo: {
                     id: contactInfoResp.data.changedEntityId,
-                    name: newContactName
+                    name: newContactName,
+                    additionalInfo: commentActionList?.length > 0 ? { noteActions: commentActionList } : null
                 },
                 returnMessage: {
                     message: `${newContactType} created.`,
@@ -406,7 +435,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
 async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript }) {
     const noteActions = additionalSubmission.noteActions ?? '';
     const subject = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? `to ${contactInfo.name}` : `from ${contactInfo.name}`}`;
-    let comments = '<b>Agent notes</b>';;
+    let comments = '';;
     if (user.userSettings?.addCallLogNote?.value ?? true) { comments = upsertCallAgentNote({ body: comments, note }); }
     comments += '<b>Call details</b><ul>';
     if (user.userSettings?.addCallLogSubject?.value ?? true) { comments = upsertCallSubject({ body: comments, subject }); }
@@ -775,7 +804,7 @@ function upsertCallAgentNote({ body, note }) {
         body = body.replace(noteRegex, `<b>Agent notes</b><br>${note}<br><br><b>Call details</b>`);
     }
     else {
-        body += `<br>${note}<br><br>`;
+        body = `<b>Agent notes</b><br>${note}<br><br>` + body;
     }
     return body;
 }
