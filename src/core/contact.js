@@ -38,6 +38,14 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
             return { successful: true, returnMessage, contact: matchedContactInfo, extraDataTracking };
         }
         else {
+            if (!!returnMessage) {
+                return {
+                    successful: true,
+                    returnMessage,
+                    extraDataTracking,
+                    contact: matchedContactInfo,
+                }
+            }
             return {
                 successful: true,
                 returnMessage:
@@ -61,7 +69,7 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
             };
         }
     } catch (e) {
-        console.log(`platform: ${platform} \n${e.stack}`);
+        console.error(`platform: ${platform} \n${e.stack} \n${JSON.stringify(e.response?.data)}`);
         if (e.response?.status === 429) {
             return {
                 successful: false,
