@@ -1,7 +1,7 @@
 name: Deploy code to API server
 on:
   push:
-    branches: test-gate6-
+    branches: test-gate6
 jobs:
   preview:
     runs-on: runner-253.106
