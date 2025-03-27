@@ -36,7 +36,10 @@
   "license": "MIT",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.751.0",
+    "@aws-sdk/client-s3": "^3.750.0",
+    "@aws-sdk/s3-request-presigner": "^3.750.0",
     "awesome-phonenumber": "^5.6.0",
+    "aws-sdk": "^2.1692.0",
     "axios": "^1.1.2",
     "body-parser": "^1.20.1",
     "client-oauth2": "^4.3.3",
@@ -49,6 +52,7 @@
     "mixpanel": "^0.18.0",
     "moment": "^2.29.4",
     "moment-timezone": "^0.5.39",
+    "mysql2": "^3.11.0",
     "pg": "^8.8.0",
     "sequelize": "^6.25.0",
     "serverless-http": "^3.0.3",
