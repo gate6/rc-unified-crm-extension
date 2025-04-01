@@ -65,6 +65,7 @@ async function getOauthInfo(requestData) {
     //         failMessage: 'RingCentral Account ID Missing'
     //     }; 
     // }
+    console.log("getOauthInfo requestData", requestData);
 
     const companyData = await models.companies.findOne({
         where: {
