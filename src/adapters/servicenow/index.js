@@ -562,7 +562,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         const fileName = `downloaded_audio_${timestamp}`;
         const s3Key = `${fileName}.mp3`;
         const s3Url = await downloadAudioFile(callLog?.recording?.downloadUrl, process.env.S3_BUCKET, s3Key);
-        await uploadToServiceNow(s3Url, instanceId, authHeader, addLogRes?.data?.result?.sys_id, fileName);
+        await uploadToServiceNow(s3Url, hostname, authHeader, addLogRes?.data?.result?.sys_id, fileName);
     }
 
     //----------------------------------------------------------------------------
@@ -724,11 +724,12 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     );
 
     if (recordingDownloadLink) {
+        console.log("Downloading Recorded File...");
         const timestamp = moment().format("DD-MM-YYYY_HH_MM_SS");
         const fileName = `downloaded_audio_${timestamp}`;
         const s3Key = `${fileName}.mp3`;
         const s3Url = await downloadAudioFile(recordingDownloadLink, process.env.S3_BUCKET, s3Key);
-        await uploadToServiceNow(s3Url, instanceId, authHeader, existingLogId, fileName)
+        await uploadToServiceNow(s3Url, hostname, authHeader, existingLogId, fileName)
     }
 
     const patchLogRes = {
@@ -963,8 +964,8 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
     }
 }
 
-async function uploadToServiceNow(s3Url, instanceId, accessToken, sys_id, fileName) {
-    const serviceNowURL = `https://${instanceId}.service-now.com/api/now/attachment/upload`;
+async function uploadToServiceNow(s3Url, hostname, accessToken, sys_id, fileName) {
+    const serviceNowURL = `https://${hostname}/api/now/attachment/upload`;
 
     try {
         const s3Key = decodeURIComponent(new URL(s3Url).pathname.substring(1));
