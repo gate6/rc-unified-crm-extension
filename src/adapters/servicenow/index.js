@@ -528,11 +528,11 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         }
     });
 
-    const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
+    // const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
 
     const postBody = {
         short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phoneNumber}]`,
-        work_notes: body ? `${workNotes} ${body}` : workNotes
+        work_notes: body //? `${workNotes} ${body}` : workNotes
     }
 
     if (additionalSubmission && additionalSubmission.state){
@@ -699,7 +699,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         {
             headers: { 'Authorization': authHeader }
         });
-    const originalNote = getLogRes?.data?.result?.work_notes;
+    const originalNote = getLogRes?.data?.result?.work_notes ?? '';
     let patchBody = {};
 
     let logBody = originalNote;
@@ -712,7 +712,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
     patchBody = {
             short_description: subject,
-            work_notes: recordingLink ? logBody + `\nCall Recording Link: \n${recordingLink}` : logBody
+            work_notes: logBody
     }
 
     const patchLog = await axios.patch(
@@ -934,7 +934,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
     };
     const s3 = new AWS.S3(s3Values);
 
-    console.log("s3Values", s3Values);
+    console.log("Downloading Audio File...");
 
     try {
 
@@ -960,7 +960,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
         return uploadResult.Location;
 
     } catch (error) {
-        console.error("Error downloading or uploading audio:", error);
+        console.log("Error downloading or uploading audio:", error);
     }
 }
 
@@ -969,7 +969,7 @@ async function uploadToServiceNow(s3Url, hostname, accessToken, sys_id, fileName
 
     try {
         const s3Key = decodeURIComponent(new URL(s3Url).pathname.substring(1));
-        console.log("Extracted S3 Key:", s3Key);
+        console.log("Extracted S3 Key, Uploading to ServiceNow...");
 
         const fileStream = await s3Helper.getObject(s3Key, "audio");
 
@@ -991,7 +991,7 @@ async function uploadToServiceNow(s3Url, hostname, accessToken, sys_id, fileName
         console.log("File deleted from S3:", s3Key);
 
     } catch (error) {
-        console.error("Error uploading file:", error.response ? error.response.data : error.message);
+        console.log("Error uploading file:", error.response ? error.response.data : error.message);
     }
 }
 
