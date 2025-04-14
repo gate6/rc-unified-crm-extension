@@ -699,7 +699,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         {
             headers: { 'Authorization': authHeader }
         });
-    const originalNote = getLogRes?.data?.result?.work_notes;
+    const originalNote = getLogRes?.data?.result?.work_notes ?? '';
     let patchBody = {};
 
     let logBody = originalNote;
@@ -712,7 +712,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
     patchBody = {
             short_description: subject,
-            work_notes: recordingLink ? logBody + `\nCall Recording Link: \n${recordingLink}` : logBody
+            work_notes: logBody
     }
 
     const patchLog = await axios.patch(
