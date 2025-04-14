@@ -934,7 +934,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
     };
     const s3 = new AWS.S3(s3Values);
 
-    console.log("s3Values", s3Values);
+    console.log("Downloading Audio File...");
 
     try {
 
@@ -960,7 +960,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
         return uploadResult.Location;
 
     } catch (error) {
-        console.error("Error downloading or uploading audio:", error);
+        console.log("Error downloading or uploading audio:", error);
     }
 }
 
@@ -969,7 +969,7 @@ async function uploadToServiceNow(s3Url, hostname, accessToken, sys_id, fileName
 
     try {
         const s3Key = decodeURIComponent(new URL(s3Url).pathname.substring(1));
-        console.log("Extracted S3 Key:", s3Key);
+        console.log("Extracted S3 Key, Uploading to ServiceNow...");
 
         const fileStream = await s3Helper.getObject(s3Key, "audio");
 
@@ -991,7 +991,7 @@ async function uploadToServiceNow(s3Url, hostname, accessToken, sys_id, fileName
         console.log("File deleted from S3:", s3Key);
 
     } catch (error) {
-        console.error("Error uploading file:", error.response ? error.response.data : error.message);
+        console.log("Error uploading file:", error.response ? error.response.data : error.message);
     }
 }
 
