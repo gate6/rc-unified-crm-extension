@@ -528,14 +528,16 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         }
     });
 
-    postBody.assigned_to = caller_id.data.result.id;
-
     // const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
 
     const postBody = {
         short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phoneNumber}]`,
         work_notes: body //? `${workNotes} ${body}` : workNotes
     }
+
+    postBody.assigned_to = caller_id.data.result.id;
+
+    console.log("additionalSubmission", additionalSubmission)
 
     if (additionalSubmission && additionalSubmission.state){
     
