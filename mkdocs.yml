@@ -77,6 +77,7 @@ nav:
    - 'Overview': crm/index.md
    - 'Bullhorn': crm/bullhorn.md
    - 'Clio': crm/clio.md
+   - 'Google Sheets': crm/google-sheets.md
    - 'Insightly': crm/insightly.md
    - 'NetSuite': crm/netsuite.md
    - 'Pipedrive': crm/pipedrive.md
@@ -88,7 +89,7 @@ nav:
     - 'Making and receiving calls': users/making-calls.md
     - 'AI Assistant': users/ai.md
     - 'Sending SMS': users/sms.md
-    - 'Presence': users/presence.md
+    - 'Presence and status': users/presence.md
   - 'Administration':
     - 'Becoming an admin': users/admin.md
     - 'Managed settings': users/managed-settings.md

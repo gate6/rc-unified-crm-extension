@@ -1,3 +1,5 @@
+/* eslint-disable no-control-regex */
+/* eslint-disable no-param-reassign */
 const axios = require('axios');
 const moment = require('moment');
 const url = require('url');
@@ -165,78 +167,174 @@ async function unAuthorize({ user }) {
         }
     }
 }
+async function upsertCallDisposition({ user, existingCallLog, authHeader, dispositions }) {
+    const existingCallLogId = existingCallLog.thirdPartyLogId.split('.')[0];
+    const getLogRes = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phonecall/${existingCallLogId}`,
+        {
+            headers: { 'Authorization': authHeader }
+        });
+    let note = getLogRes.data.message;
+    let title = getLogRes.data.title;
+    let newSalesOrderUserNote = sanitizeNote({ note });
+    const isSalesOrderCallLogEnable = user.userSettings?.enableSalesOrderLogging?.value ?? false;
+    if (dispositions && dispositions.salesorder && isSalesOrderCallLogEnable) {
+        try {
+            const noteId = extractNoteIdFromNote({ note, targetSalesOrderId: dispositions.salesorder });
+            const createUserNotesUrl = `https://${user.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_createusernotes&deploy=customdeploy_createusernotes`;
+            if (noteId === undefined) {
+                const postBody = {
+                    salesOrderId: dispositions.salesorder,
+                    noteTitle: title,
+                    noteText: newSalesOrderUserNote ?? 'empty'
+                };
+                const createUserNotesResponse = await axios.post(createUserNotesUrl, postBody, {
+                    headers: { 'Authorization': authHeader }
+                });
+                if (createUserNotesResponse?.data?.success) {
+                    const userNoteUrl = `https://${user.hostname.split(".")[0]}.app.netsuite.com//app/crm/common/note.nl?id=${createUserNotesResponse?.data?.noteId}`;
+                    console.log({ message: "User note created successfully", userNoteUrl });
+                    const updatedNote = upsertNetSuiteUserNoteUrl({ body: note, userNoteUrl, salesOrderId: dispositions.salesorder });
 
+                    const patchLogRes = await axios.patch(
+                        `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phoneCall/${existingCallLogId}`,
+                        {
+                            message: updatedNote,
+                        },
+                        {
+                            headers: { 'Authorization': authHeader }
+                        });
+                }
+            } else {
+                const postBody = {
+                    noteTitle: title,
+                    noteText: newSalesOrderUserNote ?? 'empty',
+                    noteId: noteId
+                };
+                await axios.put(createUserNotesUrl, postBody, { headers: { 'Authorization': authHeader } });
+            }
+
+        } catch (error) {
+            console.log({ message: "Error in logging calls against salesOrder" });
+        }
+    }
+    return {
+        logId: existingCallLogId,
+    }
+}
 async function findContact({ user, authHeader, phoneNumber, overridingFormat }) {
+    //  const requestStartTime = new Date().getTime();
     try {
         const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
         const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
         const matchedContactInfo = [];
-        if (phoneNumberWithoutCountryCode !== 'undefined' && phoneNumberWithoutCountryCode !== null && phoneNumberWithoutCountryCode !== '') {
-            const contactQuery = `SELECT * FROM contact WHERE REGEXP_REPLACE(phone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(homePhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(mobilePhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(officePhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%'`;
-            const customerQuery = `SELECT * FROM customer WHERE REGEXP_REPLACE(phone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(homePhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(mobilePhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%' OR REGEXP_REPLACE(altPhone, '[^0-9]', '') LIKE '%${phoneNumberWithoutCountryCode}%'`;
-            const personInfo = await axios.post(
-                `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                {
-                    q: contactQuery
-                },
-                {
-                    headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
-                });
-            if (personInfo.data.items.length > 0) {
-                for (var result of personInfo.data.items) {
-                    let firstName = result.firstname ?? '';
-                    let middleName = result.middlename ?? '';
-                    let lastName = result.lastname ?? '';
-                    const contactName = (firstName + middleName + lastName).length > 0 ? `${firstName} ${middleName} ${lastName}` : result.entitytitle;
-                    matchedContactInfo.push({
-                        id: result.id,
-                        name: contactName,
-                        phone: result.phone ?? '',
-                        homephone: result.homephone ?? '',
-                        mobilephone: result.mobilephone ?? '',
-                        officephone: result.officephone ?? '',
-                        additionalInfo: null,
-                        type: 'contact'
-                    })
+        const phoneFields = user.userSettings?.phoneFieldsId?.value ?? [];
+        const contactSearch = user.userSettings?.contactsSearchId?.value ?? [];
+        if (phoneFields.length === 0) {
+            phoneFields.push('phone', 'homePhone', 'mobilePhone', 'officePhone', 'altPhone');
+        }
+        if (contactSearch.length === 0) {
+            contactSearch.push('contact', 'customer');
+        }
+        const commonFields = phoneFields.filter(f => f !== 'altPhone' && f !== 'officePhone');
+        const contactFields = [...commonFields];
+        const customerFields = [...commonFields];
+        if (phoneFields.includes('altPhone')) {
+            customerFields.push('altPhone');
+        }
+        if (phoneFields.includes('officePhone')) {
+            contactFields.push('officePhone');
+        }
+        const { enableSalesOrderLogging = false } = user.userSettings;
+        const dateBeforeThreeYear = getThreeYearsBeforeDate();
+        const numberToQueryArray = [];
+        if (overridingFormat !== '') {
+            const formats = overridingFormat.split(',');
+            numberToQueryArray.push(phoneNumber.replace(' ', '+')); //This is an E.164 format search, as the new contact was created by App Connect using the E.164 format.
+            for (var format of formats) {
+                const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
+                if (phoneNumberObj.valid) {
+                    const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
+                    let formattedNumber = format;
+                    for (const numberBit of phoneNumberWithoutCountryCode) {
+                        formattedNumber = formattedNumber.replace('*', numberBit);
+                    }
+                    numberToQueryArray.push(formattedNumber);
                 }
             }
-            //For Customer search
-            const customerInfo = await axios.post(
-                `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                {
-                    q: customerQuery
-                },
-                {
-                    headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
-                });
-            if (customerInfo.data.items.length > 0) {
-                for (var result of customerInfo.data.items) {
-                    let salesOrders = [];
-                    try {
-                        const salesOrderResponse = await findSalesOrdersAgainstContact({ user, authHeader, contactId: result.id });
-                        for (const salesOrder of salesOrderResponse?.data?.items) {
-                            salesOrders.push({
-                                const: salesOrder?.id,
-                                title: salesOrder?.trandisplayname
-                            });
-                        }
-                    } catch (e) {
-                        console.log({ message: "Error in SalesOrder search" });
+        } else {
+            numberToQueryArray.push(phoneNumberWithoutCountryCode);
+        }
+        for (var numberToQuery of numberToQueryArray) {
+            const contactQuery = `SELECT id,firstName,middleName,lastName,entitytitle,phone FROM contact WHERE lastmodifieddate >= to_date('${dateBeforeThreeYear}', 'yyyy-mm-dd hh24:mi:ss') AND (${buildContactSearchCondition(contactFields, numberToQuery, overridingFormat)})`;
+            const customerQuery = `SELECT id,firstName,middleName,lastName,entitytitle,phone FROM customer WHERE lastmodifieddate >= to_date('${dateBeforeThreeYear}', 'yyyy-mm-dd hh24:mi:ss') AND (${buildContactSearchCondition(customerFields, numberToQuery, overridingFormat)})`;
+            if (contactSearch.includes('contact')) {
+                const personInfo = await axios.post(
+                    `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                    {
+                        q: contactQuery
+                    },
+                    {
+                        headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
+                    });
+                if (personInfo.data.items.length > 0) {
+                    for (var result of personInfo.data.items) {
+                        let firstName = result.firstname ?? '';
+                        let middleName = result.middlename ?? '';
+                        let lastName = result.lastname ?? '';
+                        const contactName = (firstName + middleName + lastName).length > 0 ? `${firstName} ${middleName} ${lastName}` : result.entitytitle;
+                        matchedContactInfo.push({
+                            id: result.id,
+                            name: contactName,
+                            phone: result.phone ?? '',
+                            homephone: result.homephone ?? '',
+                            mobilephone: result.mobilephone ?? '',
+                            officephone: result.officephone ?? '',
+                            additionalInfo: null,
+                            type: 'contact'
+                        })
                     }
-                    let firstName = result.firstname ?? '';
-                    let middleName = result.middlename ?? '';
-                    let lastName = result.lastname ?? '';
-                    const customerName = (firstName + middleName + lastName).length > 0 ? `${firstName} ${middleName} ${lastName}` : result.entitytitle;
-                    matchedContactInfo.push({
-                        id: result.id,
-                        name: customerName,
-                        phone: result.phone ?? '',
-                        homephone: result.homephone ?? '',
-                        mobilephone: result.mobilephone ?? '',
-                        altphone: result.altphone ?? '',
-                        additionalInfo: salesOrders.length > 0 ? { salesorder: salesOrders } : {},
-                        type: 'custjob'
-                    })
+                }
+            }
+            if (contactSearch.includes('customer')) {
+                const customerInfo = await axios.post(
+                    `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                    {
+                        q: customerQuery
+                    },
+                    {
+                        headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
+                    });
+                if (customerInfo.data.items.length > 0) {
+                    for (const result of customerInfo.data.items) {
+                        let salesOrders = [];
+                        try {
+                            if (enableSalesOrderLogging.value) {
+                                const salesOrderResponse = await findSalesOrdersAgainstContact({ user, authHeader, contactId: result.id });
+                                for (const salesOrder of salesOrderResponse?.data?.items) {
+                                    salesOrders.push({
+                                        const: salesOrder?.id,
+                                        title: salesOrder?.trandisplayname
+                                    });
+                                }
+                            }
+                        } catch (e) {
+                            console.log({ message: "Error in SalesOrder search" });
+                        }
+                        let firstName = result.firstname ?? '';
+                        let middleName = result.middlename ?? '';
+                        let lastName = result.lastname ?? '';
+                        const customerName = (firstName + middleName + lastName).length > 0 ? `${firstName} ${middleName} ${lastName}` : result.entitytitle;
+                        matchedContactInfo.push({
+                            id: result.id,
+                            name: customerName,
+                            phone: result.phone ?? '',
+                            homephone: result.homephone ?? '',
+                            mobilephone: result.mobilephone ?? '',
+                            altphone: result.altphone ?? '',
+                            additionalInfo: salesOrders.length > 0 ? { salesorder: salesOrders } : {},
+                            type: 'custjob'
+                        })
+                    }
                 }
             }
         }
@@ -246,7 +344,10 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
             additionalInfo: null,
             isNewContact: true
         });
+        // const requestEndTime = new Date().getTime();
+        // console.log({ message: "Time taken to find contact", time: (requestEndTime - requestStartTime) / 1000 });
         return {
+            successful: true,
             matchedContactInfo,
         };
     } catch (error) {
@@ -301,8 +402,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             //If Start Time and End Time are same, then add 1 minute to End Time because endTime can not be less or equal to startTime
             endTimeSlot = callEndTime.add(1, 'minutes').format('HH:mm');
         }
-        let comments = '';;
-        console.log({ callStartTime });
+        let comments = '';
         if (user.userSettings?.addCallLogNote?.value ?? true) { comments = upsertCallAgentNote({ body: comments, note }); }
         if (user.userSettings?.addCallLogSubject?.value ?? true) { comments = upsertCallSubject({ body: comments, title }); }
         if (user.userSettings?.addCallLogContactNumber?.value ?? true) { comments = upsertContactPhoneNumber({ body: comments, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
@@ -346,21 +446,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             });
         const callLogId = extractIdFromUrl(addLogRes.headers.location);
 
-        if (additionalSubmission && additionalSubmission.salesorder) {
-            try {
-                const createUserNotesUrl = `https://${user.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_createusernotes&deploy=customdeploy_createusernotes`;
-                const postBody = {
-                    salesOrderId: additionalSubmission.salesorder,
-                    noteTitle: title,
-                    noteText: note ?? 'empty'
-                };
-                const createUserNotesResponse = await axios.post(createUserNotesUrl, postBody, {
-                    headers: { 'Authorization': authHeader }
-                });
-            } catch (error) {
-                console.log({ message: "Error in logging calls against salesOrder" });
-            }
-        }
         return {
             logId: callLogId,
             returnMessage: {
@@ -415,6 +500,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
         note = note?.replace(/\n- Date\/Time: .*/, '');
         note = note?.replace(/\n- Duration: .*/, '');
         note = note?.replace(/\n- Call recording link: .*/, '');
+        note = note?.replace(/- SalesOrderNoteUrl:.*SalesOrderId:.*\n?/g, '').trim();
+        note = note?.replace("Sales Order Call Logs (Do Not Edit)", '').trim();
         return {
             callLogInfo: {
                 subject: getLogRes.data.title,
@@ -541,7 +628,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             type: 'User'
         }
         const userName = user?.dataValues?.platformAdditionalInfo?.name ?? 'NetSuiteCRM';
-        const messageType = !!recordingLink ? 'Voicemail' : (!!faxDocLink ? 'Fax' : 'SMS');
+        const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
         let logBody = '';
         let title = '';
         switch (messageType) {
@@ -874,6 +961,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 }
 
+
 function splitName(fullName) {
     const parts = fullName.trim().split(/\s+/); // Split by one or more spaces
     const firstName = parts.shift() || "";
@@ -926,19 +1014,25 @@ function netSuiteRestLetError(error, message) {
 }
 
 function upsertCallAgentNote({ body, note }) {
-    if (!!!note) {
+    if (!note) {
         return body;
     }
-    const noteRegex = /^- Note:[^\n]*(?:\n(?!- ).*)*/m;
+    const noteRegex = RegExp('- Note: ([\\s\\S]+?)\n');
     if (noteRegex.test(body)) {
-        body = body.replace(noteRegex, `- Note: ${note}`);
+        body = body.replace(noteRegex, `- Note: ${note}\n`);
     }
     else {
-        if (body && !body.endsWith('\n')) {
-            body += '\n';
-        }
         body += `- Note: ${note}\n`;
     }
+    return body;
+}
+
+function upsertNetSuiteUserNoteUrl({ body, userNoteUrl, salesOrderId }) {
+    const salesOrderText = "Sales Order Call Logs (Do Not Edit)"
+    if (!(body.includes(salesOrderText))) {
+        body += `\n\n ${salesOrderText}`;
+    }
+    body += `\n- SalesOrderNoteUrl: ${userNoteUrl} SalesOrderId: ${salesOrderId}`;
     return body;
 }
 
@@ -953,9 +1047,9 @@ function upsertCallResult({ body, result }) {
 }
 
 function upsertCallDuration({ body, duration }) {
-    const durationRegex = /- Duration: (.+?)(?=\n|$)/g;
+    const durationRegex = RegExp('- Duration: (.+?)?\n');
     if (durationRegex.test(body)) {
-        body = body.replace(durationRegex, `- Duration: ${secondsToHoursMinutesSeconds(duration)}`);
+        body = body.replace(durationRegex, `- Duration: ${secondsToHoursMinutesSeconds(duration)}\n`);
     } else {
         body += `- Duration: ${secondsToHoursMinutesSeconds(duration)}\n`;
     }
@@ -973,10 +1067,10 @@ function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
 }
 
 function upsertCallRecording({ body, recordingLink }) {
-    const recordingLinkRegex = /- Call recording link: (.+?)(?=\n|$)/g;
+    const recordingLinkRegex = RegExp('- Call recording link: (.+?)\n');
     if (!!recordingLink && recordingLinkRegex.test(body)) {
         body = body.replace(recordingLinkRegex, `- Call recording link: ${recordingLink}`);
-    } else if (!!recordingLink) {
+    } else if (recordingLink) {
         // if not end with new line, add new line
         if (body && !body.endsWith('\n')) {
             body += '\n';
@@ -1072,6 +1166,51 @@ async function findSalesOrdersAgainstContact({ user, authHeader, contactId }) {
 //     }
 // }
 
+function getThreeYearsBeforeDate() {
+    const date = new Date();
+    date.setFullYear(date.getFullYear() - 3);
+    date.setHours(0, 0, 0, 0);
+    return date.toISOString().slice(0, 10) + " 00:00:00"; //Date formate 2022-04-03 00:00:00
+};
+
+function extractNoteIdFromNote({ note, targetSalesOrderId }) {
+    // Extract the userNoteUrl from the string
+    try {
+        const regex = /SalesOrderNoteUrl:\s*(https?:\/\/[^\s]+)\s+SalesOrderId:\s*(\d+)/g;
+        let match;
+        while ((match = regex.exec(note)) !== null) {
+            const url = match[1];
+            const salesOrderId = match[2];
+
+            if (salesOrderId === targetSalesOrderId.toString()) {
+                const idMatch = url.match(/id=(\d+)/);
+                if (idMatch) {
+                    return idMatch[1]; // return the id from URL
+                }
+            }
+        }
+        return undefined; // if not found
+    } catch (e) {
+        return undefined;
+    }
+
+}
+
+function sanitizeNote({ note }) {
+    note = note?.replace(/- SalesOrderNoteUrl:.*SalesOrderId:.*\n?/g, '').trim();
+    note = note?.replace("Sales Order Call Logs (Do Not Edit)", '').trim();
+    return note;
+}
+const buildContactSearchCondition = (fields, numberToQuery, overridingFormat) => {
+    if (overridingFormat !== '') {
+        return fields.map(field => `${field}='${numberToQuery}'`).join(' OR ');
+    } else {
+        return fields.map(field =>
+            `REGEXP_REPLACE(${field}, '[^0-9]', '') LIKE '%${numberToQuery}'`
+        ).join(' OR ');
+    }
+};
+
 exports.getAuthType = getAuthType;
 exports.getOauthInfo = getOauthInfo;
 exports.getUserInfo = getUserInfo;
@@ -1083,3 +1222,4 @@ exports.updateMessageLog = updateMessageLog;
 exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
+exports.upsertCallDisposition = upsertCallDisposition;
