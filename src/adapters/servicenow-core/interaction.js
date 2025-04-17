@@ -1,5 +1,4 @@
 const axios = require('axios');
-const { cat } = require('shelljs');
 
 const stateMapping = {
     "wrap up": "wrap_up",
@@ -19,7 +18,7 @@ const typeMapping = {
 
 async function findStateValueByName(hostname, authHeader, inputValue){
     
-    try{
+    try {
         console.log("findStateValueByName called with inputValue:", inputValue);
         const normalizedInputValue = inputValue.toLowerCase();
         const normalizedValue = stateMapping[normalizedInputValue] || null;
