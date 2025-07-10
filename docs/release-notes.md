@@ -1,5 +1,109 @@
 # Release notes
 
+## 1.5.6:
+
+- New: Users can now log messages in Google Sheets. A new sheet titled "Message Logs" will be created for that.
+- New: Ringtone can now be set up in Audio settings
+- Better: Improve user settings presentation
+- Fix: Bullhorn retroactive call log mistakenly putting 'pending note...' in Note Action
+- Fix: AI notes are now attached when doing retroactive call logging
+- Better: Message logs within the CRM are now consistently displayed in chronological order
+- Better: Added functionality to log Sales Orders and Opportunities in NetSuite with individual contacts in addition to customers.
+
+## 1.5.5:
+
+- New: Add Freskdesk and Gohighlevel 
+- New: Insightly has new setting in Insightly options to input custom phone field names
+- Better: Google Sheets users will get notified with clearer information to set up the sheet
+- Better: Click-to-dial enablement is now controled by user settings with 4 modes. (previous whitelist is deprecated)
+- Fix: Google Sheets issue on undefined values in fields
+- Fix: A bug on GoogleSheet getting call log if no note provide while editing call log
+
+## 1.5.4
+
+- New: Clio now supports EU and CA
+- New: Notification-level setting to control what types of notification would be shown
+- Better: DisableRetroCallLogging in user setting is changed to EnableRetroCallLogging
+- Better: Clio view log will go to contact communication tab
+- Better: Contacts are shown with source icon
+- Better: When Netsuite users log calls against contacts that have no company, a placeholder company will be assigned so to be able to associate the log with the contact
+- Fix: An issue when opening contact page
+- Fix: An issue when getting user settings
+
+## 1.5.3
+
+- New: Quick access button and click-to-dial can be configured to be shown on other pages rather than CRM page. Set it up in user settings -> general -> allowed pages
+- Better: Bullhorn Server-side call logging will use admin's role and try to find user role to assign Note to if user's Bullhorn name matches with user's RingCentral profile name 
+- Better: Clio and Insightly users can use # or * in alternative number formats
+- Better: Bullhorn authorization is more stable now
+- Better: NetSuite improved error message when attempting to log calls for contacts without an associated company. A clearer guidance is now provided when a contact is not linked to a company
+- Fix: Bullhorn issue when creating a new Contact/Candidate/Lead
+
+## 1.5.2
+
+- New: Contact search in call/message log page to add contact searched by name
+- New: Pipedrive now supports Lead (need to log out and log back in to activate)
+- New: Bullhorn users can now create Contact/Candidate/Lead with Status field
+- New: Include tab visibility control in Admin settings
+- New: NetSuite now supports selecting Opportunity in call/message log page
+- Better: Bullhorn server-side logging will now try to create Note from admin role and assign to users (require users to connect to Bullhorn first)
+- Better: If Bullhorn session becomes invalid, the extension will try to re-connect automatically
+- Fix: Netsuite now truncates AI transcript if it's over 4000 words
+
+## 1.5.1
+
+- New: Redtail now supports categories for notes. Default value can be set up in user/admin settings
+- New: Clio now supports Australia region
+- New: Call session id can now be included in call log notes. This can be turned ON in user settings
+- Fix: Developer mode can be turned ON before connecting to CRM
+- Fix: User setting now shows correct connect status right after open
+- Fix: Bullhorn. If Note Action is empty, it'll now show 'pending note'
+- Fix: Clio now won't show duplicated contacts
+- Fix: User settings are not applied immediately after connecting to CRM
+- Fix: Bullhorn now won't show converted Leads
+- Fix: Call queue calls cannot be logged in a few cases
+
+## 1.5.0
+
+- New: Fax log support
+- New: If user is admin, '(Admin)' will be shown after user name on user setting page
+- New: Clio now supports upload fax document files
+- Fix: Redtail AI transcript setting turned OFF but still logging transcript
+- Fix: Netsuite log failure when local computer time is ahead
+- Fix: Pipedrive SMS logging not associated with deal
+
+
+## 1.4.2
+
+- Fix: Show "Cannot find call log" and "Cannot find contact" even when contact is known
+- Fix: Contact call-pop for known contact
+
+## 1.4.1
+
+- New: Netsuite now supports contact match customization
+- New: Server-side call logging support using user credentials if possbile
+- New: Server-side call logging new selection for logging by Agent/user (if possible) OR Admin
+- Change: "Tabs" setting is renamed as "Customize tabs" and is moved under "General" setting
+- Change: Netsuite, Clio and Insightly -> Number formats are moved to options setting
+- Change: Relocate active call auto logging to call log event
+- Change: Google Sheet file picker now has more polished UI
+- Fix: Call queue not answered cannot be logged
+- Fix: Authorization error and Note Action missing. If user does not have EDIT permission, instead of creating Note then update Note Action, one-time logging setting should be turned ON
+
+## 1.4.0
+
+- New: One-time log in user setting to reduce Rate Limit issue and make logging more stable
+- New: Server side call logging for all platforms
+- New: Hide or show tabs in user settings
+- New: Call queue presence setting
+- New: Display voicemail transcript
+- New: Google Sheets is now supported
+- Better: Auto-logging happens right after call is connected (unless one-time log is ON)
+- Better: Bullhorn authorization management
+- Better: Multiple matched contact handling
+- Fix: Clio should not return closed matters
+- New: Matter description for Clio
+
 ## 1.3.10
 
 - Fix: New users cannot save auto log setting

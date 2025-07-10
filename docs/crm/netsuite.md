@@ -56,11 +56,14 @@ We recommend using the "RingCentral App Connect" role created for you when you i
 | Lists        | Customers                            | Full                        |
 | Lists        | Phone Calls                          | Full                        |
 | Lists        | Subsidiaries                         | View  (OneWorld users only) |
+| Lists        | Notes Tab                            | Full                        |
+| Lists        | Documents and Files                  | Full                        |
 | Reports      | SuiteAnalytics Workbook              | Edit                        |
 | Setup        | Log in using OAuth 2.0 Access Tokens | Full                        |
 | Setup        | REST Web Services                    | Full                        |
 | Setup        | User Access Tokens                   | Full                        |
 | Transactions | Sales Order                          | Full                        |
+| Transactions | Opportunity                          | Full                        |
 | Transactions | Find Transaction                     | View                        |
 
 ## Install the Chrome/Edge extension
@@ -102,21 +105,24 @@ In this way, App Connect ensures that all contacts created by it conform to the 
 
 When attempting to find and match a phone call to a customer or contact record, the NetSuite integration searches the following fields:
 
-Contacts:
+* Main Phone
+* Home Phone
+* Mobile Phone
+* Office Phone
 
-* `phone`
-* `homePhone`
-* `mobilePhone`
-* `officePhone`
+In addition, App Connect will search the "Office Phone" field for contacts, and the "Alternate Phone" field for customer entities. 
 
-Customers:
+!!! warning "App Connect does not search custom phone fields."
 
-* `phone`
-* `homePhone`
-* `mobilePhone`
-* `altPhone`
+## Optimizing contact matching performance
 
-The integration does not search custom phone fields. 
+If you are experiencing a timeout issue during contact search, you can follow the steps below to optimize the search process. First navigate to Settings → NetSuite Options, then:
+
+* Under "Phone fields to search," limit your search to only the fields you use.
+* Under "Entities to search," limit your search to only those object types you want returned in your results.
+* Disable  "Sales Order logging" to prevents calls from being logged against sales orders.
+
+![NetSuite contact matching optimization](../img/netsuite-optimization.png){ .mw-200 }
 
 ## Concurrency limits
 

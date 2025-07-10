@@ -1,5 +1,6 @@
 const oauth = require('../lib/oauth');
 const { UserModel } = require('../models/userModel');
+const errorMessage = require('../lib/generalErrorMessage');
 
 async function findContact({ platform, userId, phoneNumber, overridingFormat, isExtension }) {
     try {
@@ -33,21 +34,21 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
                 authHeader = `Basic ${basicAuth}`;
                 break;
         }
-        const { matchedContactInfo, returnMessage, extraDataTracking } = await platformModule.findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension });
+        const { successful, matchedContactInfo, returnMessage, extraDataTracking } = await platformModule.findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension });
         if (matchedContactInfo != null && matchedContactInfo?.filter(c => !c.isNewContact)?.length > 0) {
-            return { successful: true, returnMessage, contact: matchedContactInfo, extraDataTracking };
+            return { successful, returnMessage, contact: matchedContactInfo, extraDataTracking };
         }
         else {
-            if (!!returnMessage) {
+            if (returnMessage) {
                 return {
-                    successful: true,
+                    successful,
                     returnMessage,
                     extraDataTracking,
                     contact: matchedContactInfo,
                 }
             }
             return {
-                successful: true,
+                successful,
                 returnMessage:
                 {
                     message: `Contact not found`,
@@ -73,23 +74,7 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
         if (e.response?.status === 429) {
             return {
                 successful: false,
-                returnMessage: {
-                    message: `Rate limit exceeded`,
-                    messageType: 'warning',
-                    details: [
-                        {
-                            title: 'Details',
-                            items: [
-                                {
-                                    id: '1',
-                                    type: 'text',
-                                    text: `You have exceeded the maximum number of requests allowed by ${platform}. Please try again in the next minute. If the problem persists please contact support.`
-                                }
-                            ]
-                        }
-                    ],
-                    ttl: 5000
-                },
+                returnMessage: errorMessage.rateLimitErrorMessage({ platform }),
                 extraDataTracking: {
                     statusCode: e.response?.status,
                 }
@@ -98,23 +83,7 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
         else if (e.response?.status >= 400 && e.response?.status < 410) {
             return {
                 successful: false,
-                returnMessage: {
-                    message: `Authorization error`,
-                    messageType: 'warning',
-                    details: [
-                        {
-                            title: 'Details',
-                            items: [
-                                {
-                                    id: '1',
-                                    type: 'text',
-                                    text: `It seems like there's something wrong with your authorization of ${platform}. Please Logout and then Connect your ${platform} account within this extension.`
-                                }
-                            ]
-                        }
-                    ],
-                    ttl: 5000
-                },
+                returnMessage: errorMessage.authorizationErrorMessage({ platform }),
                 extraDataTracking: {
                     statusCode: e.response?.status,
                 }
@@ -147,7 +116,7 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
     }
 }
 
-async function createContact({ platform, userId, phoneNumber, newContactName, newContactType }) {
+async function createContact({ platform, userId, phoneNumber, newContactName, newContactType, additionalSubmission }) {
     try {
         let user = await UserModel.findOne({
             where: {
@@ -172,7 +141,7 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
                 authHeader = `Basic ${basicAuth}`;
                 break;
         }
-        const { contactInfo, returnMessage, extraDataTracking } = await platformModule.createContact({ user, authHeader, phoneNumber, newContactName, newContactType });
+        const { contactInfo, returnMessage, extraDataTracking } = await platformModule.createContact({ user, authHeader, phoneNumber, newContactName, newContactType, additionalSubmission });
         if (contactInfo != null) {
             return { successful: true, returnMessage, contact: contactInfo, extraDataTracking };
         }
@@ -184,46 +153,13 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
         if (e.response?.status === 429) {
             return {
                 successful: false,
-                returnMessage:
-                {
-                    message: `Rate limit exceeded`,
-                    messageType: 'warning',
-                    details: [
-                        {
-                            title: 'Details',
-                            items: [
-                                {
-                                    id: '1',
-                                    type: 'text',
-                                    text: `You have exceeded the maximum number of requests allowed by ${platform}. Please try again in the next minute. If the problem persists please contact support.`
-                                }
-                            ]
-                        }
-                    ],
-                    ttl: 5000
-                }
+                returnMessage: errorMessage.rateLimitErrorMessage({ platform }),
             };
         }
         else if (e.response?.status >= 400 && e.response?.status < 410) {
             return {
                 successful: false,
-                returnMessage: {
-                    message: `Authorization error`,
-                    messageType: 'warning',
-                    details: [
-                        {
-                            title: 'Details',
-                            items: [
-                                {
-                                    id: '1',
-                                    type: 'text',
-                                    text: `It seems like there's something wrong with your authorization of ${platform}. Please Logout and then Connect your ${platform} account within this extension.`
-                                }
-                            ]
-                        }
-                    ],
-                    ttl: 5000
-                },
+                returnMessage: errorMessage.authorizationErrorMessage({ platform }),
                 extraDataTracking: {
                     statusCode: e.response?.status,
                 }
@@ -253,5 +189,87 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
     }
 }
 
+async function findContactWithName({ platform, userId, name }) {
+    try {
+        let user = await UserModel.findOne({
+            where: {
+                id: userId,
+                platform
+            }
+        });
+        if (!user || !user.accessToken) {
+            return {
+                successful: false,
+                returnMessage: {
+                    message: `No contact found with name ${name}`,
+                    messageType: 'warning',
+                    ttl: 5000
+                }
+            };
+        }
+        const platformModule = require(`../adapters/${platform}`);
+        const authType = platformModule.getAuthType();
+        let authHeader = '';
+        switch (authType) {
+            case 'oauth':
+                const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname })));
+                user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
+                authHeader = `Bearer ${user.accessToken}`;
+                break;
+            case 'apiKey':
+                const basicAuth = platformModule.getBasicAuth({ apiKey: user.accessToken });
+                authHeader = `Basic ${basicAuth}`;
+                break;
+        }
+        const { successful, matchedContactInfo, returnMessage } = await platformModule.findContactWithName({ user, authHeader, name });
+        if (matchedContactInfo != null && matchedContactInfo?.filter(c => !c.isNewContact)?.length > 0) {
+            return { successful, returnMessage, contact: matchedContactInfo };
+        }
+        else {
+            if (returnMessage) {
+                return {
+                    successful,
+                    returnMessage,
+                    contact: matchedContactInfo,
+                }
+            }
+            return {
+                successful,
+                returnMessage:
+                {
+                    message: `No contact found with name ${name} `,
+                    messageType: 'warning',
+                    ttl: 5000
+                },
+                contact: matchedContactInfo
+            };
+        }
+    } catch (e) {
+        console.error(`platform: ${platform} \n${e.stack} \n${JSON.stringify(e.response?.data)}`);
+        if (e.response?.status === 429) {
+            return {
+                successful: false,
+                returnMessage: errorMessage.rateLimitErrorMessage({ platform })
+            };
+        }
+        else if (e.response?.status >= 400 && e.response?.status < 410) {
+            return {
+                successful: false,
+                returnMessage: errorMessage.authorizationErrorMessage({ platform }),
+            };
+        }
+        return {
+            successful: false,
+            returnMessage:
+            {
+                message: `Error finding contacts`,
+                messageType: 'warning',
+                ttl: 5000
+            }
+        };
+    }
+}
+
 exports.findContact = findContact;
 exports.createContact = createContact;
+exports.findContactWithName = findContactWithName;

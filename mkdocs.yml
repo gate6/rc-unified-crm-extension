@@ -77,6 +77,9 @@ nav:
    - 'Overview': crm/index.md
    - 'Bullhorn': crm/bullhorn.md
    - 'Clio': crm/clio.md
+   - 'Freshdesk': crm/freshdesk.md
+   - 'GoHighLevel': crm/gohighlevel.md
+   - 'Google Sheets': crm/google-sheets.md
    - 'Insightly': crm/insightly.md
    - 'NetSuite': crm/netsuite.md
    - 'Pipedrive': crm/pipedrive.md
@@ -88,7 +91,7 @@ nav:
     - 'Making and receiving calls': users/making-calls.md
     - 'AI Assistant': users/ai.md
     - 'Sending SMS': users/sms.md
-    - 'Presence': users/presence.md
+    - 'Presence and status': users/presence.md
   - 'Administration':
     - 'Becoming an admin': users/admin.md
     - 'Managed settings': users/managed-settings.md
@@ -130,14 +133,16 @@ nav:
       - 'Viewing contacts and activities': developers/view-details.md
       - 'Welcome pages': developers/welcome-page.md
       - 'Returning errors': developers/errors.md
-      - 'Building your own server': developers/advanced/openapi.md
+#      - 'Building your own server': developers/advanced/openapi.md
     - 'Interfaces':
+      - 'Overview': developers/interfaces/index.md
       - 'createCallLog': developers/interfaces/createCallLog.md
       - 'createMessageLog': developers/interfaces/createMessageLog.md
       - 'createContact': developers/interfaces/createContact.md
       - 'getAuthType': developers/interfaces/getAuthType.md
       - 'getCallLog': developers/interfaces/getCallLog.md
-      - 'findContact': developers/interfaces/findContact.md
+      - 'findContact (by phone)': developers/interfaces/findContact.md
+      - 'findContactWithName': developers/interfaces/findContactWithName.md
       - 'getOauthInfo': developers/interfaces/getOauthInfo.md
       - 'getUserInfo': developers/interfaces/getUserInfo.md
       - 'unAuthorize': developers/interfaces/unAuthorize.md
