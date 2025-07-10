@@ -1,3 +1,5 @@
+/* eslint-disable no-control-regex */
+/* eslint-disable no-param-reassign */
 const axios = require('axios');
 const moment = require('moment');
 const url = require('url');
@@ -8,18 +10,43 @@ function getAuthType() {
     return 'oauth';
 }
 
-async function getOauthInfo() {
-    return {
-        clientId: process.env.CLIO_CLIENT_ID,
-        clientSecret: process.env.CLIO_CLIENT_SECRET,
-        accessTokenUri: process.env.CLIO_ACCESS_TOKEN_URI,
-        redirectUri: process.env.CLIO_REDIRECT_URI
+async function getOauthInfo({ hostname }) {
+    if (hostname.startsWith('au.')) {
+        return {
+            clientId: process.env.CLIO_AU_CLIENT_ID,
+            clientSecret: process.env.CLIO_AU_CLIENT_SECRET,
+            accessTokenUri: process.env.CLIO_AU_ACCESS_TOKEN_URI,
+            redirectUri: process.env.CLIO_REDIRECT_URI
+        }
+    }
+    else if (hostname.startsWith('eu.')) {
+        return {
+            clientId: process.env.CLIO_EU_CLIENT_ID,
+            clientSecret: process.env.CLIO_EU_CLIENT_SECRET,
+            accessTokenUri: process.env.CLIO_EU_ACCESS_TOKEN_URI,
+            redirectUri: process.env.CLIO_REDIRECT_URI
+        }
+    }
+    else if (hostname.startsWith('ca.')) {
+        return {
+            clientId: process.env.CLIO_CA_CLIENT_ID,
+            clientSecret: process.env.CLIO_CA_CLIENT_SECRET,
+            accessTokenUri: process.env.CLIO_CA_ACCESS_TOKEN_URI,
+            redirectUri: process.env.CLIO_REDIRECT_URI
+        }
+    } else {
+        return {
+            clientId: process.env.CLIO_CLIENT_ID,
+            clientSecret: process.env.CLIO_CLIENT_SECRET,
+            accessTokenUri: process.env.CLIO_ACCESS_TOKEN_URI,
+            redirectUri: process.env.CLIO_REDIRECT_URI
+        }
     }
 }
 
-async function getUserInfo({ authHeader }) {
+async function getUserInfo({ authHeader, hostname }) {
     try {
-        const userInfoResponse = await axios.get('https://app.clio.com/api/v4/users/who_am_i.json?fields=id,name,time_zone', {
+        const userInfoResponse = await axios.get(`https://${hostname}/api/v4/users/who_am_i.json?fields=id,name,time_zone`, {
             headers: {
                 'Authorization': authHeader
             }
@@ -68,7 +95,7 @@ async function getUserInfo({ authHeader }) {
     }
 }
 async function unAuthorize({ user }) {
-    const revokeUrl = 'https://app.clio.com/oauth/deauthorize';
+    const revokeUrl = `https://${user.hostname}/oauth/deauthorize`;
     const accessTokenParams = new url.URLSearchParams({
         token: user.accessToken
     });
@@ -94,16 +121,17 @@ async function unAuthorize({ user }) {
 async function findContact({ user, authHeader, phoneNumber, overridingFormat }) {
     const numberToQueryArray = [];
     let extraDataTracking = {};
-    numberToQueryArray.push(phoneNumber.replace(' ', '+'));
+    const numberFromRc = phoneNumber.replace(' ', '+');
+    numberToQueryArray.push(numberFromRc);
     if (overridingFormat !== '') {
         const formats = overridingFormat.split(',');
         for (var format of formats) {
-            const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
+            const phoneNumberObj = parsePhoneNumber(numberFromRc);
             if (phoneNumberObj.valid) {
                 const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
                 let formattedNumber = format;
                 for (const numberBit of phoneNumberWithoutCountryCode) {
-                    formattedNumber = formattedNumber.replace('*', numberBit);
+                    formattedNumber = formattedNumber.replace(/[*#]/, numberBit);
                 }
                 numberToQueryArray.push(formattedNumber);
             }
@@ -123,14 +151,18 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
         };
         if (personInfo.data.data.length > 0) {
             for (var result of personInfo.data.data) {
+                if (matchedContactInfo.some(c => c.id === result.id)) {
+                    continue;
+                }
                 const matterInfo = await axios.get(
-                    `https://${user.hostname}/api/v4/matters.json?client_id=${result.id}`,
+                    `https://${user.hostname}/api/v4/matters.json?client_id=${result.id}&fields=id,display_number,description,status`,
                     {
                         headers: { 'Authorization': authHeader }
                     });
-                const matters = matterInfo.data.data.length > 0 ? matterInfo.data.data.map(m => { return { const: m.id, title: m.display_number } }) : null;
-                const associatedMatterInfo = await axios.get(
-                    `https://${user.hostname}/api/v4/relationships.json?contact_id=${result.id}&fields=matter`,
+                let matters = matterInfo.data.data.length > 0 ? matterInfo.data.data.map(m => { return { const: m.id, title: m.display_number, description: m.description, status: m.status } }) : null;
+                matters = matters?.filter(m => m.status !== 'Closed');
+                let associatedMatterInfo = await axios.get(
+                    `https://${user.hostname}/api/v4/relationships.json?contact_id=${result.id}&fields=matter{id,display_number,description,status}`,
                     {
                         headers: { 'Authorization': authHeader }
                     });
@@ -139,7 +171,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
                     ratelimitAmount: associatedMatterInfo.headers['x-ratelimit-limit'],
                     ratelimitReset: associatedMatterInfo.headers['x-ratelimit-reset']
                 };
-                const associatedMatters = associatedMatterInfo.data.data.length > 0 ? associatedMatterInfo.data.data.map(m => { return { const: m.matter.id, title: m.matter.display_number } }) : null;
+                let associatedMatters = associatedMatterInfo.data.data.length > 0 ? associatedMatterInfo.data.data.map(m => { return { const: m.matter.id, title: m.matter.display_number, description: m.matter.description, status: m.matter.status } }) : null;
+                associatedMatters = associatedMatters?.filter(m => m.status !== 'Closed');
                 let returnedMatters = [];
                 returnedMatters = returnedMatters.concat(matters ?? []);
                 returnedMatters = returnedMatters.concat(associatedMatters ?? []);
@@ -148,7 +181,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
                     name: result.name,
                     title: result.title ?? "",
                     company: result.company?.name ?? "",
-                    phone: numberToQuery,
+                    phone: numberFromRc,
                     additionalInfo: returnedMatters.length > 0 ?
                         {
                             matters: returnedMatters,
@@ -169,9 +202,76 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
         isNewContact: true
     });
     return {
+        successful: true,
         matchedContactInfo,
         extraDataTracking
     };
+}
+
+async function findContactWithName({ user, authHeader, name }) {
+    const matchedContactInfo = [];
+    let extraDataTracking = {};
+    /*
+    Clio's contact search functionality works correctly with name-based queries, including first name, last name, and full name. 
+    It handles all variations without requiring the query to be split
+    */
+    const personInfo = await axios.get(`https://${user.hostname}/api/v4/contacts.json?type=Person&query=${name}&fields=id,name,title,company,primary_phone_number`, {
+        headers: { 'Authorization': authHeader }
+    });
+    extraDataTracking = {
+        ratelimitRemaining: personInfo.headers['x-ratelimit-remaining'],
+        ratelimitAmount: personInfo.headers['x-ratelimit-limit'],
+        ratelimitReset: personInfo.headers['x-ratelimit-reset']
+    };
+    if (personInfo.data.data.length > 0) {
+        for (var result of personInfo.data.data) {
+            const matterInfo = await axios.get(
+                `https://${user.hostname}/api/v4/matters.json?client_id=${result.id}&fields=id,display_number,description,status`,
+                {
+                    headers: { 'Authorization': authHeader }
+                });
+            let matters = matterInfo.data.data.length > 0 ? matterInfo.data.data.map(m => { return { const: m.id, title: m.display_number, description: m.description, status: m.status } }) : null;
+            matters = matters?.filter(m => m.status !== 'Closed');
+            let associatedMatterInfo = await axios.get(
+                `https://${user.hostname}/api/v4/relationships.json?contact_id=${result.id}&fields=matter{id,display_number,description,status}`,
+                {
+                    headers: { 'Authorization': authHeader }
+                });
+            extraDataTracking = {
+                ratelimitRemaining: associatedMatterInfo.headers['x-ratelimit-remaining'],
+                ratelimitAmount: associatedMatterInfo.headers['x-ratelimit-limit'],
+                ratelimitReset: associatedMatterInfo.headers['x-ratelimit-reset']
+            };
+            let associatedMatters = associatedMatterInfo.data.data.length > 0 ? associatedMatterInfo.data.data.map(m => { return { const: m.matter.id, title: m.matter.display_number, description: m.matter.description, status: m.matter.status } }) : null;
+            associatedMatters = associatedMatters?.filter(m => m.status !== 'Closed');
+            let returnedMatters = [];
+            returnedMatters = returnedMatters.concat(matters ?? []);
+            returnedMatters = returnedMatters.concat(associatedMatters ?? []);
+            matchedContactInfo.push({
+                id: result.id,
+                name: result.name,
+                title: result.title ?? "",
+                type: 'contact',
+                company: result.company?.name ?? "",
+                phone: result.primary_phone_number ?? "",
+                additionalInfo: returnedMatters.length > 0 ?
+                    {
+                        matters: returnedMatters,
+                        logTimeEntry: user.userSettings?.clioDefaultTimeEntryTick ?? true,
+                        nonBillable: user.userSettings?.clioDefaultNonBillableTick ?? false
+                    } :
+                    {
+                        logTimeEntry: user.userSettings?.clioDefaultTimeEntryTick ?? true
+                    }
+            })
+        }
+    }
+
+    return {
+        successful: true,
+        matchedContactInfo,
+        extraDataTracking
+    }
 }
 
 async function createContact({ user, authHeader, phoneNumber, newContactName }) {
@@ -235,7 +335,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             type: 'User'
         }
     let body = '\n';
-    if (user.userSettings?.addCallLogContactNumber?.value ?? true) { body = upsertContactPhoneNumber({ body, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
+    if (user.userSettings?.addCallSessionId?.value ?? false) { body = upsertCallSessionId({ body, id: callLog.sessionId }); }
+    if (user.userSettings?.addCallLogContactNumber?.value ?? false) { body = upsertContactPhoneNumber({ body, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
     if (user.userSettings?.addCallLogResult?.value ?? true) { body = upsertCallResult({ body, result: callLog.result }); }
     if (user.userSettings?.addCallLogNote?.value ?? true) { body = upsertCallAgentNote({ body, note }); }
     if (user.userSettings?.addCallLogDuration?.value ?? true) { body = upsertCallDuration({ body, duration: callLog.duration }); }
@@ -318,6 +419,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     let patchBody = {};
 
     if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
+    if (!!existingCallLog.sessionId && (user.userSettings?.addCallSessionId?.value ?? false)) { logBody = upsertCallSessionId({ body: logBody, id: existingCallLog.sessionId }); }
     if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
     if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
     if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink: decodeURIComponent(recordingLink) }); }
@@ -328,24 +430,24 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             body: logBody
         }
     }
-    if (!!subject) { patchBody.data.subject = subject; }
-    if (!!startTime) { patchBody.data.received_at = moment(startTime).toISOString(); }
+    if (subject) { patchBody.data.subject = subject; }
+    if (startTime) { patchBody.data.received_at = moment(startTime).toISOString(); }
     // duration - update Timer
-    if (!!duration) {
+    if (duration) {
         const getTimerRes = await axios.get(
             `https://${user.hostname}/api/v4/activities?communication_id=${getLogRes.data.data.id}&fields=quantity,id`,
             {
                 headers: { 'Authorization': authHeader }
             }
         )
-        if (!!getTimerRes.data.data[0]) {
+        if (getTimerRes.data.data[0]) {
             const patchTimerBody = {
                 data: {
                     quantity: duration,
                     note: logBody,
                 }
             }
-            if (!!startTime) {
+            if (startTime) {
                 patchTimerBody.data.date = moment(startTime).toISOString();
             }
             const patchTimerRes = await axios.patch(
@@ -378,7 +480,39 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     };
 }
 
-async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
+async function upsertCallDisposition({ user, existingCallLog, authHeader, dispositions }) {
+    let extraDataTracking = {};
+    if (!dispositions.matters) {
+        return {
+            logId: null
+        };
+    }
+    const existingClioLogId = existingCallLog.thirdPartyLogId.split('.')[0];
+    const patchBody = {
+        data: {
+            matter: {
+                id: dispositions.matters
+            }
+        }
+    }
+    const upsertDispositionRes = await axios.patch(
+        `https://${user.hostname}/api/v4/communications/${existingClioLogId}.json`,
+        patchBody,
+        {
+            headers: { 'Authorization': authHeader }
+        });
+    extraDataTracking = {
+        ratelimitRemaining: upsertDispositionRes.headers['x-ratelimit-remaining'],
+        ratelimitAmount: upsertDispositionRes.headers['x-ratelimit-limit'],
+        ratelimitReset: upsertDispositionRes.headers['x-ratelimit-reset']
+    };
+    return {
+        logId: existingClioLogId,
+        extraDataTracking
+    }
+}
+
+async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink, faxDownloadLink }) {
     let extraDataTracking = {};
     const sender =
     {
@@ -390,18 +524,18 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         id: user.id,
         type: 'User'
     }
-    const userInfoResponse = await axios.get('https://app.clio.com/api/v4/users/who_am_i.json?fields=name', {
+    const userInfoResponse = await axios.get(`https://${user.hostname}/api/v4/users/who_am_i.json?fields=name`, {
         headers: {
             'Authorization': authHeader
         }
     });
     const userName = userInfoResponse.data.data.name;
-    const messageType = !!recordingLink ? 'Voicemail' : (!!faxDocLink ? 'Fax' : 'SMS');
+    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
     let logBody = '';
     let logSubject = '';
     switch (messageType) {
         case 'SMS':
-            logSubject = `SMS conversation with ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
+            logSubject = `SMS conversation with ${contactInfo.name} - ${moment(message.creationTime).format('MM/DD/YYYY')}`;
             logBody =
                 '\nConversation summary\n' +
                 `${moment(message.creationTime).format('dddd, MMMM DD, YYYY')}\n` +
@@ -418,12 +552,70 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
                 '--- Created via RingCentral App Connect';
             break;
         case 'Voicemail':
-            logSubject = `Voicemail left by ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
+            logSubject = `Voicemail left by ${contactInfo.name} - ${moment(message.creationTime).format('MM/DD/YYYY')}`;
             logBody = `Voicemail recording link: ${recordingLink} \n\n--- Created via RingCentral App Connect`;
             break;
         case 'Fax':
-            logSubject = `Fax document sent from ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
-            logBody = `Fax document link: ${faxDocLink} \n\n--- Created via RingCentral App Connect`;
+            try {
+                // download media from server mediaLink (application/pdf) - do this first because RC Access Token might expire during the process
+                const mediaRes = await axios.get(faxDownloadLink, { responseType: 'arraybuffer' });
+                const documentUploadIdResponse = await axios.post(`
+                    https://${user.hostname}/api/v4/documents?fields=id,latest_document_version{uuid,put_url,put_headers}`,
+                    {
+                        data: {
+                            name: `${message.direction} Fax - ${contactInfo.name} - ${moment(message.creationTime).format('MM/DD/YYYY')}.pdf`,
+                            parent: {
+                                id: additionalSubmission.matters ?? contactInfo.id,
+                                type: additionalSubmission.matters ? 'Matter' : 'Contact'
+                            },
+                            received_at: moment(message.creationTime).toISOString()
+                        }
+                    },
+                    {
+                        headers: { 'Authorization': authHeader }
+                    }
+                )
+                const documentId = documentUploadIdResponse.data.data.id;
+                const uuid = documentUploadIdResponse.data.data.latest_document_version.uuid;
+                const putUrl = documentUploadIdResponse.data.data.latest_document_version.put_url;
+                const putHeaders = documentUploadIdResponse.data.data.latest_document_version.put_headers.reduce((acc, header) => {
+                    acc[header.name] = header.value;
+                    return acc;
+                }, {});
+                const putDocumentResponse = await axios.put(
+                    putUrl,
+                    mediaRes.data,
+                    {
+                        headers: {
+                            'Connection': 'keep-alive',
+                            ...putHeaders
+                        }
+                    }
+                );
+                const patchDocResponse = await axios.patch(
+                    `https://${user.hostname}/api/v4/documents/${documentId}?fields=id,latest_document_version{fully_uploaded}`,
+                    {
+                        data: {
+                            uuid,
+                            fully_uploaded: true
+                        }
+                    },
+                    {
+                        headers: { 'Authorization': authHeader }
+                    }
+                )
+                logSubject = `Fax document sent from ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
+                if (patchDocResponse.data.data.latest_document_version.fully_uploaded) {
+                    logBody = `Fax uploaded to Clio successfully.\nFax Status: ${message.messageStatus}\nPage count: ${message.faxPageCount}\nFax document link: https://${user.hostname}/nc/#/documents/${documentId}/details\nLocation: ${message.direction === 'Inbound' ? message.from.location : message.to[0].location} \n\n--- Created via RingCentral App Connect`;
+                }
+                else {
+                    logBody = `Fax failed to be uploaded to Clio.\nFax document link: ${faxDocLink} \n\n--- Created via RingCentral App Connect`;
+                }
+            }
+            catch (e) {
+                logSubject = `Fax document sent from ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
+                logBody = `Fax failed to be uploaded to Clio.\nFax document link: ${faxDocLink} \n\n--- Created via RingCentral App Connect`;
+            }
             break;
     }
     const postBody = {
@@ -474,7 +666,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         {
             headers: { 'Authorization': authHeader }
         });
-    const userInfoResponse = await axios.get('https://app.clio.com/api/v4/users/who_am_i.json?fields=name', {
+    const userInfoResponse = await axios.get(`https://${user.hostname}/api/v4/users/who_am_i.json?fields=name`, {
         headers: {
             'Authorization': authHeader
         }
@@ -483,10 +675,11 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     let logBody = getLogRes.data.data.body;
     let patchBody = {};
     const originalNote = logBody.split('BEGIN\n------------\n')[1];
+    const endMarker = '------------\nEND';
     const newMessageLog =
         `${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo.phoneNumber})` : userName} ${moment(message.creationTime).format('hh:mm A')}\n` +
-        `${message.subject}\n`;
-    logBody = logBody.replace(originalNote, `${newMessageLog}\n${originalNote}`);
+        `${message.subject}\n\n`;
+    logBody = logBody.replace(endMarker, `${newMessageLog}${endMarker}`);
 
     const regex = RegExp('Conversation.(.*) messages.');
     const matchResult = regex.exec(logBody);
@@ -540,7 +733,10 @@ async function getCallLog({ user, callLogId, authHeader }) {
         callLogInfo: {
             subject: getLogRes.data.data.subject,
             note,
-            contactName: contactRes.data.data.name
+            contactName: contactRes.data.data.name,
+            dispositions: {
+                matters: getLogRes.data.data.matter?.id
+            }
         },
         extraDataTracking
     }
@@ -566,7 +762,7 @@ function upsertCallResult({ body, result }) {
 }
 
 function upsertCallAgentNote({ body, note }) {
-    if (!!!note) {
+    if (!note) {
         return body;
     }
     const noteRegex = RegExp('- Note: ([\\s\\S]+?)\n');
@@ -575,6 +771,16 @@ function upsertCallAgentNote({ body, note }) {
     }
     else {
         body += `- Note: ${note}\n`;
+    }
+    return body;
+}
+
+function upsertCallSessionId({ body, id }) {
+    const sessionIdRegex = RegExp('- Session Id: (.+?)\n');
+    if (sessionIdRegex.test(body)) {
+        body = body.replace(sessionIdRegex, `- Session Id: ${id}\n`);
+    } else {
+        body += `- Session Id: ${id}\n`;
     }
     return body;
 }
@@ -594,7 +800,7 @@ function upsertCallRecording({ body, recordingLink }) {
     const recordingLinkRegex = RegExp('- Call recording link: (.+?)\n');
     if (!!recordingLink && recordingLinkRegex.test(body)) {
         body = body.replace(recordingLinkRegex, `- Call recording link: ${recordingLink}\n`);
-    } else if (!!recordingLink) {
+    } else if (recordingLink) {
         body += `- Call recording link: ${recordingLink}\n`;
     }
     return body;
@@ -620,15 +826,16 @@ function upsertTranscript({ body, transcript }) {
     }
     return body;
 }
-
 exports.getAuthType = getAuthType;
 exports.getOauthInfo = getOauthInfo;
 exports.getUserInfo = getUserInfo;
 exports.createCallLog = createCallLog;
 exports.updateCallLog = updateCallLog;
+exports.upsertCallDisposition = upsertCallDisposition;
 exports.getCallLog = getCallLog;
 exports.createMessageLog = createMessageLog;
 exports.updateMessageLog = updateMessageLog;
 exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
+exports.findContactWithName = findContactWithName;

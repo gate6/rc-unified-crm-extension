@@ -5,12 +5,15 @@
         "userInfoDomain": "https://api.pipedrive.com",
         "userInfoPath": "/v1/users/me",
         "domain": "https://test.pipedrive.com",
-        "callLogPath": "/v1/activities",
-        "messageLogPath": "/v1/activities",
+        "callLogPath": "/api/v2/activities",
+        "messageLogPath": "/api/v2/activities",
         "activityTypesPath": "/v1/activityTypes",
-        "contactPath": "/v1/persons",
+        "contactPath": "/api/v2/persons",
+        "oldContactPath": "/v1/persons",
         "oauthDomain": "https://oauth.pipedrive.com",
         "oauthTokenPath": "/oauth/token",
-        "tokenRevokePath": "/oauth/revoke"
+        "tokenRevokePath": "/oauth/revoke",
+        "dealPath": "/api/v2/deals",
+        "leadPath": "/v1/leads"
     }
 ]
