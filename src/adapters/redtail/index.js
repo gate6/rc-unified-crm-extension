@@ -98,16 +98,58 @@ async function findContact({ user, phoneNumber }) {
         {
             headers: { 'Authorization': overrideAuthHeader }
         });
+    const categoriesResp = await axios.get(
+        `${process.env.REDTAIL_API_SERVER}/lists/categories`,
+        {
+            headers: { 'Authorization': overrideAuthHeader }
+        });
+    const activeCategories = categoriesResp.data.categories.filter(c => !c.deleted);
     for (let rawPersonInfo of personInfo.data.contacts) {
         rawPersonInfo['phoneNumber'] = phoneNumber;
-        matchedContactInfo.push(formatContact(rawPersonInfo));
+        matchedContactInfo.push(formatContact(rawPersonInfo, activeCategories));
     }
     matchedContactInfo.push({
         id: 'createNewContact',
         name: 'Create new contact...',
-        additionalInfo: null,
-        isNewContact: true
+        isNewContact: true,
+        additionalInfo: {
+            category: activeCategories.map(c => {
+                return {
+                    const: c.id,
+                    title: c.name
+                }
+            })
+        }
     });
+    return {
+        successful: true,
+        matchedContactInfo
+    };
+}
+
+async function findContactWithName({ user, name }) {
+    const matchedContactInfo = [];
+    const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
+    /*
+    Redtail contact search functionality works correctly with name-based queries, including first name, last name, and full name.
+     It handles all variations without requiring the query to be split
+    */
+    const personInfo = await axios.get(
+        `${process.env.REDTAIL_API_SERVER}/contacts/search_basic?name=${name}`,
+        {
+            headers: { 'Authorization': overrideAuthHeader }
+        });
+
+    console.log({ COntacts: personInfo.data.contacts, Data: personInfo.data });
+    const categoriesResp = await axios.get(
+        `${process.env.REDTAIL_API_SERVER}/lists/categories`,
+        {
+            headers: { 'Authorization': overrideAuthHeader }
+        });
+    const activeCategories = categoriesResp.data.categories.filter(c => !c.deleted);
+    for (let rawPersonInfo of personInfo.data.contacts) {
+        matchedContactInfo.push(formatContact(rawPersonInfo, activeCategories));
+    }
     return {
         successful: true,
         matchedContactInfo
@@ -148,13 +190,14 @@ async function createContact({ user, phoneNumber, newContactName }) {
     }
 }
 
-async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript }) {
+async function createCallLog({ user, contactInfo, callLog, note, additionalSubmission, aiNote, transcript }) {
     const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
 
     let description = '';
     if (user.userSettings?.addCallLogNote?.value ?? true) { description = upsertCallAgentNote({ body: description, note }); }
     description += '<b>Call details</b><ul>';
     const subject = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+    if (user.userSettings?.addCallSessionId?.value ?? false) { description = upsertCallSessionId({ body: description, id: callLog.sessionId }); }
     if (user.userSettings?.addCallLogSubject?.value ?? true) { description = upsertCallSubject({ body: description, subject }); }
     if (user.userSettings?.addCallLogContactNumber?.value ?? true) { description = upsertContactPhoneNumber({ body: description, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
     if (user.userSettings?.addCallLogDateTime?.value ?? true) { description = upsertCallDateTime({ body: description, startTime: callLog.startTime, timezoneOffset: user.userSettings?.redtailCustomTimezone?.value ?? 0 }); }
@@ -162,8 +205,8 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     if (user.userSettings?.addCallLogResult?.value ?? true) { description = upsertCallResult({ body: description, result: callLog.result }); }
     if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { description = upsertCallRecording({ body: description, recordingLink: callLog.recording.link }); }
     description += '</ul>';
-    if (!!aiNote && (user.userSettings?.addAiNote?.value ?? true)) { description = upsertAiNote({ body: description, aiNote }); }
-    if (!!transcript && (user.userSettings?.addTranscript?.value ?? true)) { description = upsertTranscript({ body: description, transcript }); }
+    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { description = upsertAiNote({ body: description, aiNote }); }
+    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { description = upsertTranscript({ body: description, transcript }); }
 
     let extraDataTracking = {
         withSmartNoteLog: !!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true),
@@ -175,6 +218,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
         start_date: moment(callLog.startTime).utc().toISOString(),
         end_date: moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString(),
         activity_code_id: 3,
+        category_id: additionalSubmission?.category ?? 2,
         repeats: 'never',
         linked_contacts: [
             {
@@ -192,7 +236,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
         const addNoteRes = await axios.post(
             `${process.env.REDTAIL_API_SERVER}/activities/${addLogRes.data.activity.id}/notes`,
             {
-                category_id: 2,
+                category_id: additionalSubmission?.category ?? 2,
                 note_type: 1,
                 body: note
             },
@@ -208,6 +252,9 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
         {
             headers: { 'Authorization': overrideAuthHeader }
         });
+
+    await updateCategoryToUserSetting({ user, authHeader: overrideAuthHeader });
+
     return {
         logId: completeLogRes.data.activity.id,
         returnMessage: {
@@ -229,13 +276,14 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         });
     let logBody = getLogRes.data.activity.description;
     if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
+    if (!!existingCallLog.sessionId && (user.userSettings?.addCallSessionId?.value ?? false)) { logBody = upsertCallSessionId({ body: logBody, id: existingCallLog.sessionId }); }
     if (!!subject && (user.userSettings?.addCallLogSubject?.value ?? true)) { logBody = upsertCallSubject({ body: logBody, subject }); }
     if (!!startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) { logBody = upsertCallDateTime({ body: logBody, startTime, timezoneOffset: user.userSettings?.redtailCustomTimezone?.value ?? 0 }); }
     if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
     if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
     if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink }); }
-    if (!!aiNote && (user.userSettings?.addAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
-    if (!!transcript && (user.userSettings?.addTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
+    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
+    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
     let putBody = {};
 
     if (subject) {
@@ -349,7 +397,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     const newMessageLog =
         `<li>${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo.phoneNumber})` : userName} ${moment(message.creationTime).format('hh:mm A')}<br>` +
         `<b>${message.subject}</b></li>`;
-    logBody = logBody.replace('------------<br><ul>', `------------<br><ul>${newMessageLog}`);
+    // Add new message at the end (before the closing </ul> tag inside BEGIN/END block)
+    logBody = logBody.replace('</ul>------------<br>', `${newMessageLog}</ul>------------<br>`);
 
     const regex = RegExp('<br>Conversation.(.*) messages.');
     const matchResult = regex.exec(logBody);
@@ -385,12 +434,21 @@ async function getCallLog({ user, callLogId, authHeader }) {
     }
 }
 
-function formatContact(rawContactInfo) {
+function formatContact(rawContactInfo, categories) {
     return {
         id: rawContactInfo.id,
         name: `${rawContactInfo.full_name}`,
         phone: rawContactInfo.phoneNumber,
-        title: rawContactInfo.job_title ?? ""
+        title: rawContactInfo.job_title ?? "",
+        type: 'contact',
+        additionalInfo: {
+            category: categories.map(c => {
+                return {
+                    const: c.id,
+                    title: c.name
+                }
+            })
+        }
     }
 }
 
@@ -413,6 +471,16 @@ function upsertCallSubject({ body, subject }) {
         body = body.replace(subjectRegex, (match, p1) => `<li><b>Summary</b>: ${subject}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
     } else {
         body += `<li><b>Summary</b>: ${subject}</li>`;
+    }
+    return body;
+}
+
+function upsertCallSessionId({ body, id }) {
+    const idRegex = RegExp('<li><b>Session Id</b>: (.+?)(?:<li>|</ul>)');
+    if (idRegex.test(body)) {
+        body = body.replace(idRegex, (match, p1) => `<li><b>Session Id</b>: ${id}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>Session Id</b>: ${id}<li>`;
     }
     return body;
 }
@@ -511,6 +579,31 @@ function upsertTranscript({ body, transcript }) {
     return body;
 }
 
+async function updateCategoryToUserSetting({ user, authHeader }) {
+    const categoriesResp = await axios.get(
+        `${process.env.REDTAIL_API_SERVER}/lists/categories`,
+        {
+            headers: { 'Authorization': authHeader }
+        });
+    const activeCategories = categoriesResp.data.categories.filter(c => !c.deleted);
+    let updatedSettings = {
+        ...(user.userSettings || {})
+    };
+    updatedSettings.defaultCategory = {
+        value: updatedSettings.defaultCategory?.value ?? 2,
+        customizable: updatedSettings.defaultCategory?.customizable ?? true,
+        options: activeCategories.map(c => {
+            return {
+                id: c.id,
+                name: c.name
+            }
+        })
+    }
+    await user.update({
+        userSettings: updatedSettings
+    });
+}
+
 exports.getAuthType = getAuthType;
 exports.getBasicAuth = getBasicAuth;
 exports.getUserInfo = getUserInfo;
@@ -522,3 +615,4 @@ exports.getCallLog = getCallLog;
 exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
+exports.findContactWithName = findContactWithName;

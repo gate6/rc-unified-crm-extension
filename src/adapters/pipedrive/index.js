@@ -140,7 +140,66 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     const matchedContactInfo = [];
     for (const person of personInfo.data.data.items) {
         const dealsResponse = await axios.get(
-            `https://${user.hostname}/v1/persons/${person.item.id}/deals?status=open`,
+            `https://${user.hostname}/api/v2/deals?person_id=${person.item.id}&&status=open`,
+            {
+                headers: { 'Authorization': authHeader }
+            });
+        extraDataTracking = {
+            ratelimitRemaining: dealsResponse.headers['x-ratelimit-remaining'],
+            ratelimitAmount: dealsResponse.headers['x-ratelimit-limit'],
+            ratelimitReset: dealsResponse.headers['x-ratelimit-reset']
+        };
+        const relatedDeals = dealsResponse.data.data ?
+            dealsResponse.data.data.map(d => { return { const: d.id, title: d.title } })
+            : null;
+        let leadsResponse = null;
+        try {
+            leadsResponse = await axios.get(
+                `https://${user.hostname}/v1/leads?person_id=${person.item.id}`,
+                {
+                    headers: { 'Authorization': authHeader }
+                });
+            extraDataTracking = {
+                ratelimitRemaining: leadsResponse.headers['x-ratelimit-remaining'],
+                ratelimitAmount: leadsResponse.headers['x-ratelimit-limit'],
+                ratelimitReset: leadsResponse.headers['x-ratelimit-reset']
+            };
+        }
+        catch (e) { leadsResponse = null; }
+        const relatedLeads = leadsResponse?.data?.data ?
+            leadsResponse.data.data.map(l => { return { const: l.id, title: l.title } })
+            : null;
+        matchedContactInfo.push(formatContact(person.item, relatedDeals, relatedLeads));
+    }
+    matchedContactInfo.push({
+        id: 'createNewContact',
+        name: 'Create new contact...',
+        isNewContact: true
+    });
+    return {
+        successful: true,
+        matchedContactInfo,
+        extraDataTracking
+    };
+}
+async function findContactWithName({ user, authHeader, name }) {
+    let extraDataTracking = {};
+    const personInfo = await axios.get(
+        `https://${user.hostname}/api/v2/persons/search?term=${name}&fields=name`,
+        {
+            headers: { 'Authorization': authHeader }
+        });
+    extraDataTracking = {
+        ratelimitRemaining: personInfo.headers['x-ratelimit-remaining'],
+        ratelimitAmount: personInfo.headers['x-ratelimit-limit'],
+        ratelimitReset: personInfo.headers['x-ratelimit-reset']
+    };
+
+    const matchedContactInfo = [];
+    for (const person of personInfo.data.data.items) {
+        console.log({ Item: person.item })
+        const dealsResponse = await axios.get(
+            `https://${user.hostname}/api/v2/deals?person_id=${person.item.id}&&status=open`,
             {
                 headers: { 'Authorization': authHeader }
             });
@@ -154,11 +213,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
             : null;
         matchedContactInfo.push(formatContact(person.item, relatedDeals));
     }
-    matchedContactInfo.push({
-        id: 'createNewContact',
-        name: 'Create new contact...',
-        isNewContact: true
-    });
     return {
         successful: true,
         matchedContactInfo,
@@ -166,13 +220,21 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
     };
 }
 
-function formatContact(rawContactInfo, relatedDeals) {
+function formatContact(rawContactInfo, relatedDeals, relatedLeads) {
+    const additionalInfo = {};
+    if (relatedDeals && relatedDeals.length > 0) {
+        additionalInfo.deals = relatedDeals;
+    }
+    if (relatedLeads && relatedLeads.length > 0) {
+        additionalInfo.leads = relatedLeads;
+    }
     return {
         id: rawContactInfo.id,
         name: rawContactInfo.name,
         phone: rawContactInfo.phones[0],
         organization: rawContactInfo.organization?.name ?? '',
-        additionalInfo: relatedDeals ? { deals: relatedDeals } : null
+        additionalInfo: additionalInfo ?? null,
+        type: 'contact'
     }
 }
 
@@ -183,7 +245,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName }) 
         phone: phoneNumber
     }
     const createContactRes = await axios.post(
-        `https://${user.hostname}/api/v2/persons`,
+        `https://${user.hostname}/v1/persons`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
@@ -209,18 +271,19 @@ async function createContact({ user, authHeader, phoneNumber, newContactName }) 
 
 function secondsToHoursMinutesSecondsInPipedriveFormat(seconds) {
     const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
+    const minutes = Math.floor((seconds % 3600) / 60) + 1;
 
     if (hours > 0) {
-        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-    } else {
-        return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    }
+    else {
+        return `00:${String(minutes).padStart(2, '0')}`;
     }
 }
 
 async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript }) {
     const dealId = additionalSubmission ? additionalSubmission.deals : '';
+    const leadId = additionalSubmission ? additionalSubmission.leads : '';
     const personResponse = await axios.get(`https://${user.hostname}/api/v2/persons/${contactInfo.id}`, { headers: { 'Authorization': authHeader } });
     const orgId = personResponse.data.data.org_id ?? '';
     const timeUtc = moment(callLog.startTime).utcOffset(0).format('HH:mm')
@@ -228,7 +291,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     let noteBody = '';;
     if (user.userSettings?.addCallLogNote?.value ?? true) { noteBody = upsertCallAgentNote({ body: noteBody, note }); }
     noteBody += '<b>Call details</b><ul>';
-    if (user.userSettings?.addCallLogContactNumber?.value ?? true) { noteBody = upsertContactPhoneNumber({ body: noteBody, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
+    if (user.userSettings?.addCallSessionId?.value ?? false) { noteBody = upsertCallSessionId({ body: noteBody, id: callLog.sessionId }); }
+    if (user.userSettings?.addCallLogContactNumber?.value ?? false) { noteBody = upsertContactPhoneNumber({ body: noteBody, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
     if (user.userSettings?.addCallLogDateTime?.value ?? true) { noteBody = upsertCallDateTime({ body: noteBody, startTime: callLog.startTime, timezoneOffset: user.timezoneOffset }); }
     if (user.userSettings?.addCallLogDuration?.value ?? true) { noteBody = upsertCallDuration({ body: noteBody, duration: callLog.duration }); }
     if (user.userSettings?.addCallLogResult?.value ?? true) { noteBody = upsertCallResult({ body: noteBody, result: callLog.result }); }
@@ -250,15 +314,17 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         done: true,
         due_date: dateUtc,
         due_time: timeUtc,
-        participants:[
+        participants: [
             {
                 person_id: Number(contactInfo.id),
                 primary: true
             }
         ]
     }
-    if(orgId)
-    {
+    if (!dealId && leadId) {
+        postBody.lead_id = leadId;
+    }
+    if (orgId) {
         postBody.org_id = orgId;
     }
     const addLogRes = await axios.post(
@@ -295,6 +361,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     let logBody = getLogRes.data.data.note;
 
     if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
+    if (!!existingCallLog.sessionId && (user.userSettings?.addCallSessionId?.value ?? false)) { logBody = upsertCallSessionId({ body: logBody, id: existingCallLog.sessionId }); }
     if (!!startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) { logBody = upsertCallDateTime({ body: logBody, startTime, timezoneOffset: user.timezoneOffset }); }
     if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
     if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
@@ -331,14 +398,20 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
 async function upsertCallDisposition({ user, existingCallLog, authHeader, dispositions }) {
     let extraDataTracking = {};
-    if (!dispositions.deals) {
+    if (!dispositions.deals && !dispositions.leads) {
         return {
             logId: null
         };
     }
     const existingPipedriveLogId = existingCallLog.thirdPartyLogId;
-    const patchBody = {
-        deal_id: dispositions.deals                   
+    const patchBody = {};
+    if (dispositions.deals) {
+        patchBody.deal_id = dispositions.deals;
+        patchBody.lead_id = null;
+    }
+    else if (dispositions.leads) {
+        patchBody.lead_id = dispositions.leads;
+        patchBody.deal_id = null;
     }
     const patchLogRes = await axios.patch(
         `https://${user.hostname}/api/v2/activities/${existingPipedriveLogId}`,
@@ -368,6 +441,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 
     const userName = userInfoResponse.data.data.name;
     const dealId = additionalSubmission ? additionalSubmission.deals : '';
+    const leadId = additionalSubmission ? additionalSubmission.leads : '';
     const orgId = personResponse.data.data.org_id ?? '';
     const timeUtc = moment(message.creationTime).utcOffset(0).format('HH:mm')
     const dateUtc = moment(message.creationTime).utcOffset(0).format('YYYY-MM-DD');
@@ -416,15 +490,17 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         due_date: dateUtc,
         due_time: timeUtc,
         type: smsType ? smsType.key_string : 'call',
-        participants:[
+        participants: [
             {
                 person_id: Number(contactInfo.id),
                 primary: true
             }
         ]
     }
-    if(orgId)
-    {
+    if (!dealId && leadId) {
+        postBody.lead_id = leadId;
+    }
+    if (orgId) {
         postBody.org_id = orgId;
     }
     const addLogRes = await axios.post(
@@ -449,7 +525,9 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     };
 }
 
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, additionalSubmission }) {
+    const dealId = additionalSubmission ? additionalSubmission.deals : '';
+    const leadId = additionalSubmission ? additionalSubmission.leads : '';
     let extraDataTracking = {};
     const existingLogId = existingMessageLog.thirdPartyLogId;
     const userInfoResponse = await axios.get('https://api.pipedrive.com/v1/users/me', {
@@ -468,14 +546,19 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     const newMessageLog =
         `<li>${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo.phoneNumber})` : userName} ${moment(message.creationTime).utcOffset(user.timezoneOffset).format('hh:mm A')}<br>` +
         `<b>${message.subject}</b></li>`;
-    logBody = logBody.replace('------------<br><ul>', `------------<br><ul>${newMessageLog}`);
+    // Add new message at the end (before the closing </ul> tag inside BEGIN/END block)
+    logBody = logBody.replace('</ul>------------<br>', `${newMessageLog}</ul>------------<br>`);
 
     const regex = RegExp('<br>Conversation.(.*) messages.');
     const matchResult = regex.exec(logBody);
     logBody = logBody.replace(matchResult[0], `<br>Conversation(${parseInt(matchResult[1]) + 1} messages)`);
 
     patchBody = {
-        note: logBody
+        note: logBody,
+        deal_id: dealId
+    }
+    if (!dealId && leadId) {
+        patchBody.lead_id = leadId;
     }
     const patchLogRes = await axios.patch(
         `https://${user.hostname}/api/v2/activities/${existingLogId}`,
@@ -520,7 +603,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
             note,
             contactName,
             dispositions: {
-                deals: getLogRes.data.data.deal_id
+                deals: getLogRes.data.data.deal_id,
+                leads: getLogRes.data.data.lead_id
             }
         },
         extraDataTracking
@@ -537,6 +621,16 @@ function upsertCallAgentNote({ body, note }) {
     }
     else {
         body = `<b>Agent notes</b><br>${note}<br><br>` + body;
+    }
+    return body;
+}
+
+function upsertCallSessionId({ body, id }) {
+    const idRegex = RegExp('<li><b>Session Id</b>: (.+?)(?:<li>|</ul>)');
+    if (idRegex.test(body)) {
+        body = body.replace(idRegex, (match, p1) => `<li><b>Session Id</b>: ${id}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
+    } else {
+        body += `<li><b>Session Id</b>: ${id}<li>`;
     }
     return body;
 }
@@ -649,3 +743,4 @@ exports.getCallLog = getCallLog;
 exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
+exports.findContactWithName = findContactWithName;

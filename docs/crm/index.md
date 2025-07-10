@@ -7,14 +7,18 @@ RingCentral's App Connect for RingEX provides support for a number of different 
 
 ## Supported CRMs
 
-<div class="grid cards" markdown>
+<div class="grid cards crm-list" markdown>
 
 -    [![Bullhorn Logo](../img/crm-logo-bullhorn.png){.crm-logo}](bullhorn.md)
      [Bullhorn](bullhorn.md)
 -    [![Clio Logo](../img/crm-logo-clio.png){.crm-logo}](clio.md)
      [Clio](clio.md)
+-    [![Freshdesk Logo](../img/crm-logo-freshdesk.png){.crm-logo}](freshdesk.md)
+     [Freshdesk](freshdesk.md)
 -    [![Google Sheets Logo](../img/crm-logo-googlesheets.png){.crm-logo}](google-sheets.md)
      [Google Sheets](google-sheets.md)
+-    [![HighLevel Logo](../img/crm-logo-highlevel.png){.crm-logo}](gohighlevel.md)
+     [HighLevel](gohighlevel.md)
 -    [![Insightly Logo](../img/crm-logo-insightly.png){.crm-logo}](insightly.md)
      [Insightly](insightly.md)
 -    [![NetSuite Logo](../img/crm-logo-netsuite.png){.crm-logo}](netsuite.md)

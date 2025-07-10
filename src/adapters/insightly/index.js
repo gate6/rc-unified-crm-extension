@@ -97,7 +97,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
                 const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
                 let formattedNumber = format.startsWith(' ') ? format.replace(' ', '') : format;
                 for (const numberBit of phoneNumberWithoutCountryCode) {
-                    formattedNumber = formattedNumber.replace('*', numberBit);
+                    formattedNumber = formattedNumber.replace(/[*#]/, numberBit);
                 }
                 numberToQueryArray.push(formattedNumber);
             }
@@ -125,6 +125,26 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
             rawContactInfo.contactType = 'contactMobile';
             rawContacts.push(rawContactInfo);
         }
+        const extraPhoneFieldNamesForContact = user.userSettings?.insightlyExtraPhoneFieldNameForContact?.value ? user.userSettings?.insightlyExtraPhoneFieldNameForContact?.value?.split(',') : [];
+        // try Contact by extra phone fields
+        for (const extraPhoneFieldName of extraPhoneFieldNamesForContact) {
+            try {
+                const contactExtraPhonePersonInfo = await axios.get(
+                    `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/contacts/search?field_name=${extraPhoneFieldName}&field_value=${numberToQuery}&brief=false`,
+                    {
+                        headers: { 'Authorization': authHeader }
+                    });
+                for (let rawContactInfo of contactExtraPhonePersonInfo.data) {
+                    rawContactInfo.contactType = 'contactExtraPhone';
+                    rawContactInfo.extraPhoneFieldName = extraPhoneFieldName;
+                    rawContactInfo.extraPhoneFieldNameValue = rawContactInfo.CUSTOMFIELDS.find(f => f.FIELD_NAME === extraPhoneFieldName)?.FIELD_VALUE;
+                    rawContacts.push(rawContactInfo);
+                }
+            }
+            catch (e) {
+                console.log('Insightly extra phone field not found');
+            }
+        }
         // try Lead by PHONE
         const leadPhonePersonInfo = await axios.get(
             `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/leads/search?field_name=PHONE&field_value=${numberToQuery}&brief=false`,
@@ -144,6 +164,26 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
         for (let rawContactInfo of leadMobileInfo.data) {
             rawContactInfo.contactType = 'leadMobile';
             rawContacts.push(rawContactInfo);
+        }
+        // try Lead by extra phone fields
+        const extraPhoneFieldNamesForLead = user.userSettings?.insightlyExtraPhoneFieldNameForLead?.value ? user.userSettings?.insightlyExtraPhoneFieldNameForLead?.value?.split(',') : [];
+        for (const extraPhoneFieldName of extraPhoneFieldNamesForLead) {
+            try {
+                const leadExtraPhonePersonInfo = await axios.get(
+                    `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/leads/search?field_name=${extraPhoneFieldName}&field_value=${numberToQuery}&brief=false`,
+                    {
+                        headers: { 'Authorization': authHeader }
+                    });
+                for (let rawContactInfo of leadExtraPhonePersonInfo.data) {
+                    rawContactInfo.contactType = 'leadExtraPhone';
+                    rawContactInfo.extraPhoneFieldName = extraPhoneFieldName;
+                    rawContactInfo.extraPhoneFieldNameValue = rawContactInfo.CUSTOMFIELDS.find(f => f.FIELD_NAME === extraPhoneFieldName)?.FIELD_VALUE;
+                    rawContacts.push(rawContactInfo);
+                }
+            }
+            catch (e) {
+                console.log('Insightly extra phone field not found');
+            }
         }
     }
     const matchedContactInfo = [];
@@ -208,6 +248,114 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
         matchedContactInfo
     };
 }
+async function findContactWithName({ user, authHeader, name }) {
+    const { firstName, lastName } = splitName(name);
+    const contactInfoByFirstName = await axios.get(
+        `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/contacts/search?field_name=FIRST_NAME&field_value=${firstName}&brief=false`,
+        {
+            headers: { 'Authorization': authHeader }
+        });
+    let contactInfoByLastName = [];
+    if (lastName) {
+        contactInfoByLastName = await axios.get(
+            `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/contacts/search?field_name=LAST_NAME&field_value=${lastName}&brief=false`,
+            {
+                headers: { 'Authorization': authHeader }
+            });
+    }
+    const allContacts = [...contactInfoByFirstName.data, ...contactInfoByLastName?.data ?? []];
+    const uniqueContacts = Array.from(
+        new Map(allContacts.map(c => [c.CONTACT_ID, c])).values()
+    );
+    const filteredContacts = uniqueContacts.filter(c =>
+        `${c.FIRST_NAME} ${c.LAST_NAME}`.toLowerCase().includes(name.toLowerCase())
+    );
+    const rawContacts = [];
+    for (let rawContactInfo of filteredContacts) {
+        rawContactInfo.contactType = 'contactPhone';
+        rawContacts.push(rawContactInfo);
+    }
+
+    const leadInforByFirstName = await axios.get(
+        `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/leads/search?field_name=FIRST_NAME&field_value=${name}&brief=false`,
+        {
+            headers: { 'Authorization': authHeader }
+        });
+    let leadInfoByLastName = [];
+    if (lastName) {
+        leadInfoByLastName = await axios.get(
+            `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/leads/search?field_name=LAST_NAME&field_value=${lastName}&brief=false`,
+            {
+                headers: { 'Authorization': authHeader }
+            });
+    }
+    const allLeads = [...leadInforByFirstName.data, ...leadInfoByLastName?.data ?? []];
+    const uniqueLeads = Array.from(
+        new Map(allLeads.map(c => [c.LEAD_ID, c])).values()
+    );
+    const filteredLeads = uniqueLeads.filter(c =>
+        `${c.FIRST_NAME} ${c.LAST_NAME}`.toLowerCase().includes(name.toLowerCase())
+    );
+    for (let rawLeadInfo of filteredLeads) {
+        rawLeadInfo.contactType = 'leadPhone';
+        rawContacts.push(rawLeadInfo);
+    }
+    const matchedContactInfo = [];
+    for (let singlePersonInfo of rawContacts) {
+        singlePersonInfo.additionalInfo = {};
+        for (const link of singlePersonInfo.LINKS) {
+            switch (link.LINK_OBJECT_NAME) {
+                case 'Organisation':
+                    const orgRes = await axios.get(
+                        `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/organisations/${link.LINK_OBJECT_ID}`,
+                        {
+                            headers: { 'Authorization': authHeader }
+                        });
+                    if (!singlePersonInfo.additionalInfo.organisation) {
+                        singlePersonInfo.additionalInfo.organisation = [];
+                    }
+                    singlePersonInfo.additionalInfo.organisation.push({
+                        title: orgRes.data.ORGANISATION_NAME,
+                        const: orgRes.data.ORGANISATION_ID
+                    });
+                    break;
+                case 'Opportunity':
+                    const opportunityRes = await axios.get(
+                        `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/opportunities/${link.LINK_OBJECT_ID}`,
+                        {
+                            headers: { 'Authorization': authHeader }
+                        });
+                    if (!singlePersonInfo.additionalInfo.opportunity) {
+                        singlePersonInfo.additionalInfo.opportunity = [];
+                    }
+                    singlePersonInfo.additionalInfo.opportunity.push({
+                        title: opportunityRes.data.OPPORTUNITY_NAME,
+                        const: opportunityRes.data.OPPORTUNITY_ID
+                    });
+                    break;
+                case 'Project':
+                    const projectRes = await axios.get(
+                        `${user.platformAdditionalInfo.apiUrl}/${process.env.INSIGHTLY_API_VERSION}/projects/${link.LINK_OBJECT_ID}`,
+                        {
+                            headers: { 'Authorization': authHeader }
+                        });
+                    if (!singlePersonInfo.additionalInfo.project) {
+                        singlePersonInfo.additionalInfo.project = [];
+                    }
+                    singlePersonInfo.additionalInfo.project.push({
+                        title: projectRes.data.PROJECT_NAME,
+                        const: projectRes.data.PROJECT_ID
+                    });
+                    break;
+            }
+        }
+        matchedContactInfo.push(formatContact(singlePersonInfo));
+    }
+    return {
+        successful: true,
+        matchedContactInfo: matchedContactInfo
+    };
+}
 
 function formatContact(rawContactInfo) {
     switch (rawContactInfo.contactType) {
@@ -229,6 +377,15 @@ function formatContact(rawContactInfo) {
                 additionalInfo: rawContactInfo.additionalInfo,
                 type: 'Contact'
             };
+        case 'contactExtraPhone':
+            return {
+                id: rawContactInfo.CONTACT_ID,
+                name: `${rawContactInfo.FIRST_NAME ?? ""} ${rawContactInfo.LAST_NAME ?? ""}`,
+                phone: rawContactInfo.extraPhoneFieldNameValue,
+                title: rawContactInfo.TITLE,
+                additionalInfo: rawContactInfo.additionalInfo,
+                type: 'Contact'
+            };
         case 'leadPhone':
             return {
                 id: rawContactInfo.LEAD_ID,
@@ -243,6 +400,15 @@ function formatContact(rawContactInfo) {
                 id: rawContactInfo.LEAD_ID,
                 name: `${rawContactInfo.FIRST_NAME ?? ""} ${rawContactInfo.LAST_NAME ?? ""}`,
                 phone: rawContactInfo.MOBILE,
+                title: rawContactInfo.TITLE,
+                additionalInfo: rawContactInfo.additionalInfo,
+                type: 'Lead'
+            };
+        case 'leadExtraPhone':
+            return {
+                id: rawContactInfo.LEAD_ID,
+                name: `${rawContactInfo.FIRST_NAME ?? ""} ${rawContactInfo.LAST_NAME ?? ""}`,
+                phone: rawContactInfo.extraPhoneFieldNameValue,
                 title: rawContactInfo.TITLE,
                 additionalInfo: rawContactInfo.additionalInfo,
                 type: 'Lead'
@@ -282,7 +448,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
 async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript }) {
     let body = '';
     if (user.userSettings?.addCallLogNote?.value ?? true) { body = upsertCallAgentNote({ body, note }); }
-    if (user.userSettings?.addCallLogContactNumber?.value ?? true) { body = upsertContactPhoneNumber({ body, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
+    if (user.userSettings?.addCallSessionId?.value ?? false) { body = upsertCallSessionId({ body, id: callLog.sessionId }); }
+    if (user.userSettings?.addCallLogContactNumber?.value ?? false) { body = upsertContactPhoneNumber({ body, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
     if (user.userSettings?.addCallLogResult?.value ?? true) { body = upsertCallResult({ body, result: callLog.result }); }
     if (user.userSettings?.addCallLogDuration?.value ?? true) { body = upsertCallDuration({ body, duration: callLog.duration }); }
     if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { body = upsertCallRecording({ body, recordingLink: callLog.recording.link }); }
@@ -387,6 +554,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     let logBody = getLogRes.data.DETAILS;
 
     if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
+    if (!!existingCallLog.sessionId && (user.userSettings?.addCallSessionId?.value ?? false)) { logBody = upsertCallSessionId({ body: logBody, id: existingCallLog.sessionId }); }
     if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
     if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
     if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink: decodeURIComponent(recordingLink) }); }
@@ -551,7 +719,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
                 'BEGIN\n' +
                 '------------\n' +
                 `${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo.phoneNumber})` : userName} ${moment(message.creationTime).format('hh:mm A')}\n` +
-                `${message.subject}\n` +
+                `${message.subject}\n\n` +
                 '------------\n' +
                 'END\n\n' +
                 '--- Created via RingCentral App Connect';
@@ -627,10 +795,11 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     let logBody = getLogRes.data.DETAILS;
     let putBody = {};
     const originalNote = logBody.split('BEGIN\n------------\n')[1];
+    const endMarker = '------------\nEND';
     const newMessageLog =
         `${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo.phoneNumber})` : userName} ${moment(message.creationTime).format('hh:mm A')}\n` +
         `${message.subject}\n`;
-    logBody = logBody.replace(originalNote, `${newMessageLog}\n${originalNote}`);
+    logBody = logBody.replace(endMarker, `${newMessageLog}${endMarker}`);
 
     const regex = RegExp('Conversation.(.*) messages.');
     const matchResult = regex.exec(logBody);
@@ -693,6 +862,15 @@ function upsertCallDuration({ body, duration }) {
     return body;
 }
 
+function upsertCallSessionId({ body, id }) {
+    const sessionIdRegex = RegExp('- Session Id: (.+?)\n');
+    if (sessionIdRegex.test(body)) {
+        body = body.replace(sessionIdRegex, `- Session Id: ${id}\n`);
+    } else {
+        body += `- Session Id: ${id}\n`;
+    }
+    return body;
+}
 
 function upsertCallRecording({ body, recordingLink }) {
     const recordingLinkRegex = RegExp('- Call recording link: (.+?)\n');
@@ -724,6 +902,12 @@ function upsertTranscript({ body, transcript }) {
     }
     return body;
 }
+function splitName(fullName) {
+    const parts = fullName.trim().split(/\s+/);
+    const firstName = parts[0];
+    const lastName = parts.length > 1 ? parts.slice(1).join(' ') : '';
+    return { firstName, lastName };
+}
 
 exports.getAuthType = getAuthType;
 exports.getBasicAuth = getBasicAuth;
@@ -737,3 +921,4 @@ exports.getCallLog = getCallLog;
 exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
+exports.findContactWithName = findContactWithName;
