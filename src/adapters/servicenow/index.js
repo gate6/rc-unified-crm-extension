@@ -338,6 +338,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     const numberToQueryArray = [];
 
+    console.log("overridingFormat", overridingFormat)
+
     if (overridingFormat === '') {
         numberToQueryArray.push(phoneNumber.trim());
     }
@@ -364,6 +366,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
+
+    console.log("hostname", hostname)
 
     const companyData = await models.companies.findOne({
         where: {
@@ -395,6 +399,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         {
             headers: { 'Authorization':  authHeader }
         });
+
+    console.log("stateSelection", stateSelection)
     
     const typeSelection = await axios.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
@@ -411,6 +417,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const matchedContactInfo = [];
     const contactTable = (companyData?.contactTable == 'user' || isExtension) ? 'table/sys_user' : 'contact';
 
+    console.log("numberToQueryArray", numberToQueryArray)
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
