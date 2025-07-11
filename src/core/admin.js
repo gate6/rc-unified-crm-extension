@@ -17,7 +17,7 @@ async function validateAdminRole({ rcAccessToken }) {
 
 async function upsertAdminSettings({ hashedRcAccountId, adminSettings }) {
     let existingAdminConfig = await AdminConfigModel.findByPk(hashedRcAccountId);
-    if (!!existingAdminConfig) {
+    if (existingAdminConfig) {
         await existingAdminConfig.update({
             ...adminSettings
         });
@@ -34,6 +34,26 @@ async function getAdminSettings({ hashedRcAccountId }) {
     return existingAdminConfig;
 }
 
+async function getServerLoggingSettings({ user }) {
+    const platformModule = require(`../adapters/${user.platform}`);
+    if (platformModule.getServerLoggingSettings) {
+        const serverLoggingSettings = await platformModule.getServerLoggingSettings({ user });
+        return serverLoggingSettings;
+    }
+    return {};
+}
+
+async function updateServerLoggingSettings({ user, additionalFieldValues }) {
+    const platformModule = require(`../adapters/${user.platform}`);
+    if (platformModule.updateServerLoggingSettings) {
+        const serverLoggingSettings = await platformModule.updateServerLoggingSettings({ user, additionalFieldValues });
+        return serverLoggingSettings;
+    }
+    return {};
+}
+
 exports.validateAdminRole = validateAdminRole;
 exports.upsertAdminSettings = upsertAdminSettings;
 exports.getAdminSettings = getAdminSettings;
+exports.getServerLoggingSettings = getServerLoggingSettings;
+exports.updateServerLoggingSettings = updateServerLoggingSettings;

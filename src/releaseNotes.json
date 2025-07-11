@@ -1,4 +1,394 @@
 {
+    "1.5.6": {
+        "global": [
+            {
+                "type": "New",
+                "description": "- Ringtone can now be set up in Audio settings"
+            },
+            {
+                "type": "Better",
+                "description": "- Improve user settings presentation"
+            },
+            {
+                "type": "Fix",
+                "description": "- AI notes are now attached when doing retroactive call logging"
+            },
+            {
+                "type": "Better",
+                "description": "- Message logs within the CRM are now consistently displayed in chronological order"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "Fix",
+                "description": "- Bullhorn retroactive call log mistakenly putting 'pending note...' in Note Action"
+            }
+        ],
+        "googleSheets": [
+            {
+                "type": "New",
+                "description": "- Users can now log messages in Google Sheets. A new sheet titled 'Message Logs' will be created for that."
+            }
+        ],
+        "netsuite": [
+            {
+                "type": "Better",
+                "description": "- Added functionality to log Sales Orders and Opportunities in NetSuite with individual contacts in addition to customers."
+            }
+        ]
+    },
+    "1.5.5": {
+        "global": [
+            {
+                "type": "New",
+                "description": "- Freskdesk and Gohighlevel are now supported"
+            },
+            {
+                "type": "New",
+                "description": "- Insightly has new setting in Insightly options to input custom phone field names"
+            },
+            {
+                "type": "Better",
+                "description": "- Click-to-dial enablement is now controled by user settings with 4 modes. (previous whitelist is deprecated)"
+            }
+        ],
+        "googleSheets": [
+            {
+                "type": "Better",
+                "description": "- Google Sheets users will get notified with clearer information to set up the sheet"
+            },
+            {
+                "type": "Fix",
+                "description": "- Google Sheets issue on undefined values in fields"
+            },
+            {
+                "type": "Fix",
+                "description": "- A bug on GoogleSheet getting call log if no note provide while editing call log"
+            }
+        ]
+    },
+    "1.5.4": {
+        "global": [
+            {
+                "type": "New",
+                "description": "- Notification-level setting to control what types of notification would be shown"
+            },
+            {
+                "type": "Better",
+                "description": "- DisableRetroCallLogging in user setting is changed to EnableRetroCallLogging"
+            },
+            {
+                "type": "Better",
+                "description": "- Contacts are shown with source icon"
+            },
+            {
+                "type": "Fix",
+                "description": "- An issue when opening contact page"
+            },
+            {
+                "type": "Fix",
+                "description": "- An issue when getting user settings"
+            }
+        ],
+        "clio": [
+            {
+                "type": "New",
+                "description": "- Clio now supports EU and CA"
+            },
+            {
+                "type": "Better",
+                "description": "- Clio view log will go to contact communication tab"
+            }
+        ],
+        "netsuite": [
+            {
+                "type": "Better",
+                "description": "- When users log calls against contacts that have no company, a placeholder company will be assigned so to be able to associate the log with the contact"
+            }
+        ]
+    },
+    "1.5.3": {
+        "global": [
+            {
+                "type": "New",
+                "description": "- Quick access button and click-to-dial can be configured to be shown on other pages rather than CRM page. Set it up in user settings -> general -> allowed pages"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "Better",
+                "description": "- Bullhorn Server-side call logging will use admin's role and try to find user role to assign Note to if user's Bullhorn name matches with user's RingCentral profile name"
+            },
+            {
+                "type": "Better",
+                "description": "- Authorization is more stable now"
+            },
+            {
+                "type": "Fix",
+                "description": "- Fixed issue when creating a new Contact/Candidate/Lead"
+            }
+        ],
+        "clio": [
+            {
+                "type": "Better",
+                "description": "- Able to use # or * in alternative number formats"
+            }
+        ],
+        "insightly": [
+            {
+                "type": "Better",
+                "description": "- Able to use # or * in alternative number formats"
+            }
+        ],
+        "netsuite": [
+            {
+                "type": "Better",
+                "description": "- Improved error message when attempting to log calls for contacts without an associated company. A clearer guidance is now provided when a contact is not linked to a company"
+            }
+        ]
+    },
+    "1.5.2": {
+        "global": [
+            {
+                "type": "New",
+                "description": "- Contact search in call/message log page to add contact searched by name"
+            },
+            {
+                "type": "New",
+                "description": "- Include tab visibility control in Admin settings"
+            }
+        ],
+        "pipedrive": [
+            {
+                "type": "New",
+                "description": "- Pipedrive now supports Lead (need to log out and log back in to activate)"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "New",
+                "description": "- Bullhorn now supports Contact/Candidate/Lead with Status field"
+            },
+            {
+                "type": "Better",
+                "description": "- Bullhorn server-side logging will now try to create Note from admin role and assign to users (require users to connect to Bullhorn first)"
+            },
+            {
+                "type": "Better",
+                "description": "- If Bullhorn session becomes invalid, the extension will try to re-connect automatically"
+            }
+        ],
+        "netsuite": [
+            {
+                "type": "New",
+                "description": "- NetSuite now supports selecting Opportunity in call/message log page"
+            },
+            {
+                "type": "Fix",
+                "description": "- NetSuite now truncates AI transcript if it's over 4000 words"
+            }
+        ]
+    },
+    "1.5.1": {
+        "global": [
+            {
+                "type": "New",
+                "description": "- Call session id can now be included in call log notes. This can be turned ON/OFF in user settings"
+            },
+            {
+                "type": "Fix",
+                "description": "- Developer mode can be turned ON before connecting to CRM"
+            },
+            {
+                "type": "Fix",
+                "description": "- User setting now shows correct connect status right after open"
+            },
+            {
+                "type": "Fix",
+                "description": "- Call queue calls cannot be logged in a few cases"
+            }
+        ],
+        "redtail": [
+            {
+                "type": "New",
+                "description": "- Redtail now supports categories for notes. Default value can be set up in user/admin settings"
+            }
+        ],
+        "clio": [
+            {
+                "type": "New",
+                "description": "- Clio now supports Australia region"
+            },
+            {
+                "type": "Fix",
+                "description": "- Clio now won't show duplicated contacts"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "Fix",
+                "description": "- If Note Action is empty, it'll now show 'pending note'"
+            },
+            {
+                "type": "Fix",
+                "description": "- Bullhorn now won't show converted Leads"
+            }
+        ]
+    },
+    "1.5.0": {
+        "global": [
+            {
+                "type": "New",
+                "description": "- Fax log support"
+            },
+            {
+                "type": "New",
+                "description": "- If user is admin, '(Admin)' will be shown after user name on user setting page"
+            }
+        ],
+        "clio": [
+            {
+                "type": "New",
+                "description": "- Clio now supports upload fax document files"
+            }
+        ],
+        "redtail": [
+            {
+                "type": "Fix",
+                "description": "- Redtail AI transcript setting turned OFF but still logging transcript"
+            }
+        ],
+        "netsuite": [
+            {
+                "type": "Fix",
+                "description": "- Netsuite log failure when local computer time is ahead"
+            }
+        ],
+        "pipedrive": [
+            {
+                "type": "Fix",
+                "description": "- Pipedrive SMS logging not associated with deal"
+            }
+        ]
+    },
+    "1.4.2": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "- Show 'Cannot find call log' and 'Cannot find contact' even when contact is known"
+            },
+            {
+                "type": "Fix",
+                "description": "- Contact call-pop for known contact"
+            }
+        ]
+    },
+    "1.4.1": {
+        "global": [
+            {
+                "type": "New",
+                "description": "- Server-side call logging support using user credentials if possible"
+            },
+            {
+                "type": "New",
+                "description": "- Server-side call logging new selection for logging by Agent/User (if possible) OR Admin"
+            },
+            {
+                "type": "Change",
+                "description": "- 'Tabs' setting is renamed as 'Customize tabs' and is moved under 'General' setting"
+            },
+            {
+                "type": "Fix",
+                "description": "- Call queue not answered cannot be logged"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "Fix",
+                "description": "- Authorization error and Note Action missing. If user does not have EDIT permission, instead of creating Note then updating Note Action, one-time logging setting should be turned ON"
+            }
+        ],
+        "googleSheets": [
+            {
+                "type": "Change",
+                "description": "- File picker now has more polished UI"
+            }
+        ],
+        "netsuite": [
+            {
+                "type": "New",
+                "description": "- Now support contact match customization"
+            },
+            {
+                "type": "Change",
+                "description": "- Number formats are moved to options setting"
+            }
+        ],
+        "clio": [
+            {
+                "type": "Change",
+                "description": "- Number formats are moved to options setting"
+            }
+        ],
+        "insightly": [
+            {
+                "type": "Change",
+                "description": "- Number formats are moved to options setting"
+            }
+        ]
+    },
+    "1.4.0": {
+        "global": [
+            {
+                "type": "New",
+                "description": "- Server side call logging for all platforms"
+            },
+            {
+                "type": "New",
+                "description": "- One-time log in user setting to reduce Rate Limit issue and make logging more stable"
+            },
+            {
+                "type": "New",
+                "description": "- Hide or show tabs in user settings"
+            },
+            {
+                "type": "New",
+                "description": "- Call queue presence setting"
+            },
+            {
+                "type": "New",
+                "description": "- Display voicemail transcript"
+            },
+            {
+                "type": "New",
+                "description": "- Google Sheets is now supported"
+            },
+            {
+                "type": "Better",
+                "description": "- Auto-logging happens right after call is connected (unless one-time log is ON)"
+            },
+            {
+                "type": "Better",
+                "description": "- Multiple matched contact handling"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "Better",
+                "description": "- Improved authorization management"
+            }
+        ],
+        "clio": [
+            {
+                "type": "Fix",
+                "description": "- Clio should not return closed matters"
+            },
+            {
+                "type": "New",
+                "description": "- Matter description for Clio"
+            }
+        ]
+    },
     "1.3.10": {
         "global": [
             {
