@@ -337,11 +337,10 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     // ----------------------------------------
 
     const numberToQueryArray = [];
-
-    console.log("overridingFormat", overridingFormat)
+    console.log("authHeader", authHeader)
 
     if (overridingFormat === '') {
-        numberToQueryArray.push(phoneNumber.trim());
+        numberToQueryArray.push(phoneNumber.replace(/^\+/, ''));
     }
     else {
         const formats = overridingFormat.split(',');
@@ -399,8 +398,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         {
             headers: { 'Authorization':  authHeader }
         });
-
-    console.log("stateSelection", stateSelection)
     
     const typeSelection = await axios.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
@@ -415,9 +412,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     // You can use parsePhoneNumber functions to further parse the phone number
     const matchedContactInfo = [];
-    const contactTable = (companyData?.contactTable == 'user' || isExtension) ? 'table/sys_user' : 'contact';
-
-    console.log("numberToQueryArray", numberToQueryArray)
+    const isExtensionBool = isExtension === true || isExtension === 'true';
+    const contactTable = (companyData?.contactTable?.trim().toLowerCase() == 'user' || isExtensionBool) ? 'table/sys_user' : 'contact';
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
@@ -449,13 +445,9 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     //---CHECK.3: In console, if contact info is printed---
     //-----------------------------------------------------
     return {
-        matchedContactInfo,
-        returnMessage: {
-            messageType: 'success',
-            message: 'Successfully found contact.',
-            ttl: 3000
-        }
-    };  //[{id, name, phone, additionalInfo}]
+        successful: true,
+        matchedContactInfo
+    };
 }
 
 async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript }) {
@@ -586,6 +578,17 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             ttl: 3000
         }
     };
+}
+
+async function upsertCallDisposition({ user, existingCallLog, authHeader, callDisposition }) {
+    const existingLogId = existingCallLog.thirdPartyLogId;
+    if (callDisposition?.dispositionItem) {
+        // If has disposition item, check existence. If existing, update it, otherwise create it.
+        console.log("callDisposition", callDisposition?.dispositionItem);
+    }
+    return {
+        logId: existingLogId
+    }
 }
 
 function upsertCallAgentNote({ body, note }) {
@@ -1017,3 +1020,4 @@ exports.updateMessageLog = updateMessageLog;
 exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
+exports.upsertCallDisposition = upsertCallDisposition;
