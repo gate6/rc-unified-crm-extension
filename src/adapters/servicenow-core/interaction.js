@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 const stateMapping = {
-    "wrap up": "wrap_up",
+    // "wrap up": "wrap_up",
     "new": "new",
     "closed complete": "closed_complete",
     "on hold": "on_hold",
