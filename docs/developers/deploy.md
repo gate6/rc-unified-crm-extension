@@ -44,5 +44,5 @@ Technically your adapter's server could be deployed anywhere. You could host it 
 | `TEST_CRM_CLIENT_SECRET`    | If CRM uses OAuth, it should be the client secret for OAuth         |
 | `TEST_CRM_ACCESS_TOKEN_URI` | If CRM uses OAuth, it should access token url for OAuth             |
 | `TEST_CRM_REDIRECT_URI`     | You can use the default redirect URI, or change it to yours         |
-| `DATABASE_URL`              | URL for your database, the default one is for local sqlite database |
+| `DATABASE_URL`              | PostgreSQL connection URL in format: postgresql://user:pass@host:port/db |
 
