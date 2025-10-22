@@ -1,10 +1,16 @@
-const { checkAndRefreshAccessToken } = require('../src/lib/oauth');
-const { UserModel } = require('../src/models/userModel');
-const { Lock } = require('../src/models/dynamo/lockSchema');
+const { checkAndRefreshAccessToken } = require('@app-connect/core/lib/oauth');
+const { UserModel } = require('@app-connect/core/models/userModel');
+const { Lock } = require('@app-connect/core/models/dynamo/lockSchema');
+const { adapterRegistry } = require('@app-connect/core');
 const nock = require('nock');
+const { encode } = require('@app-connect/core/lib/encode');
+
+adapterRegistry.setDefaultManifest(require('../src/adapters/manifest.json'));
+adapterRegistry.registerAdapter('bullhorn', require('../src/adapters/bullhorn'));
+adapterRegistry.registerAdapter('pipedrive', require('../src/adapters/pipedrive'));
 
 // Mock the Lock model
-jest.mock('../src/models/dynamo/lockSchema', () => ({
+jest.mock('@app-connect/core/models/dynamo/lockSchema', () => ({
     Lock: {
         get: jest.fn(),
         create: jest.fn(),
@@ -26,9 +32,12 @@ jest.spyOn(console, 'error').mockImplementation(() => {});
 // Reset mocks before each test
 beforeEach(() => {
     jest.clearAllMocks();
+    // Explicitly reset the Lock model mocks
+    Lock.get.mockReset();
+    Lock.create.mockReset();
+    Lock.delete.mockReset();
     nock.cleanAll();
-    // Reset environment variable
-    delete process.env.USE_TOKEN_REFRESH_LOCK;
+    adapterRegistry.getManifest('default').platforms.pipedrive.auth.useTokenRefreshLock = true;
 });
 
 // Clear test data in db
@@ -39,6 +48,7 @@ afterEach(async () => {
         }
     });
     nock.cleanAll();
+    delete adapterRegistry.getManifest('default').platforms.pipedrive.auth.useTokenRefreshLock;
 });
 
 describe('oauth manage', () => {
@@ -93,16 +103,15 @@ describe('oauth manage', () => {
 
         test('expired, with lock mechanism, no existing lock - refresh with lock', async () => {
             // Arrange
-            process.env.USE_TOKEN_REFRESH_LOCK = 'true';
             const user = await UserModel.create({
                 id: userId,
+                platform: 'pipedrive',
                 accessToken,
                 refreshToken,
                 tokenExpiry: '2025-01-01T00:00:00.000Z'
             });
 
-            // Mock Lock model
-            Lock.get.mockResolvedValue(null); // No existing lock
+            // Mock Lock model - successful lock creation
             const mockLock = {
                 delete: jest.fn().mockResolvedValue(true)
             };
@@ -125,37 +134,46 @@ describe('oauth manage', () => {
             // Assert
             expect(returnedUser.accessToken).toBe(newAccessToken);
             expect(returnedUser.refreshToken).toBe(newRefreshToken);
-            expect(Lock.get).toHaveBeenCalledWith({ userId: user.id });
-            expect(Lock.create).toHaveBeenCalledWith({ userId: user.id });
+            expect(Lock.create).toHaveBeenCalledWith(
+                { userId: user.id, ttl: expect.any(Number) },
+                { overwrite: false }
+            );
+            expect(Lock.get).not.toHaveBeenCalled(); // Should not be called in successful path
             expect(mockLock.delete).toHaveBeenCalled();
         });
 
         test('expired, with lock mechanism, existing valid lock - wait and timeout', async () => {
             // Arrange
-            process.env.USE_TOKEN_REFRESH_LOCK = 'true';
             const user = await UserModel.create({
                 id: userId,
+                platform: 'pipedrive',
                 accessToken,
                 refreshToken,
                 tokenExpiry: '2025-01-01T00:00:00.000Z'
             });
 
-            // Mock Lock model - always return existing lock
+            // Mock Lock.create to fail with ConditionalCheckFailedException
+            const conditionalError = new Error('ConditionalCheckFailedException');
+            conditionalError.name = 'ConditionalCheckFailedException';
+            Lock.create.mockRejectedValue(conditionalError);
+
+            // Mock Lock model - always return existing valid lock that doesn't expire
             const mockLock = {
-                ttl: Date.now() + 100000 // Valid lock
+                ttl: Date.now() + 100000 // Valid lock that won't expire during test
             };
             Lock.get.mockResolvedValue(mockLock);
 
             // Act & Assert
             await expect(checkAndRefreshAccessToken({}, user, 0.5)).rejects.toThrow('Token lock timeout');
+            expect(Lock.create).toHaveBeenCalled();
             expect(Lock.get).toHaveBeenCalledWith({ userId: user.id });
         });
 
         test('expired, with lock mechanism, expired lock - refresh after removing expired lock', async () => {
             // Arrange
-            process.env.USE_TOKEN_REFRESH_LOCK = 'true';
             const user = await UserModel.create({
                 id: userId,
+                platform: 'pipedrive',
                 accessToken,
                 refreshToken,
                 tokenExpiry: '2025-01-01T00:00:00.000Z'
@@ -167,13 +185,18 @@ describe('oauth manage', () => {
                 delete: jest.fn().mockResolvedValue(true)
             };
             
-            Lock.get.mockResolvedValueOnce(mockExpiredLock) // First call returns expired lock
-                    .mockResolvedValueOnce(null); // Second call returns no lock
-
             const mockNewLock = {
                 delete: jest.fn().mockResolvedValue(true)
             };
-            Lock.create.mockResolvedValue(mockNewLock);
+
+            // Mock the sequence: first create fails, get returns expired lock, second create succeeds
+            const conditionalError = new Error('ConditionalCheckFailedException');
+            conditionalError.name = 'ConditionalCheckFailedException';
+            
+            Lock.create.mockRejectedValueOnce(conditionalError) // First create fails due to existing lock
+                     .mockResolvedValueOnce(mockNewLock); // Second create succeeds after deleting expired lock
+            
+            Lock.get.mockResolvedValueOnce(mockExpiredLock); // Returns expired lock
 
             // Mock oauthApp
             const oauthApp = {
@@ -192,23 +215,23 @@ describe('oauth manage', () => {
             // Assert
             expect(returnedUser.accessToken).toBe(newAccessToken);
             expect(returnedUser.refreshToken).toBe(newRefreshToken);
+            expect(Lock.create).toHaveBeenCalledTimes(2);
+            expect(Lock.get).toHaveBeenCalledWith({ userId: user.id });
             expect(mockExpiredLock.delete).toHaveBeenCalled();
-            expect(Lock.create).toHaveBeenCalledWith({ userId: user.id });
             expect(mockNewLock.delete).toHaveBeenCalled();
         });
 
         test('expired, with lock mechanism, no existing lock - create lock and refresh', async () => {
             // Arrange
-            process.env.USE_TOKEN_REFRESH_LOCK = 'true';
             const user = await UserModel.create({
                 id: userId,
+                platform: 'pipedrive',
                 accessToken,
                 refreshToken,
                 tokenExpiry: '2025-01-01T00:00:00.000Z'
             });
 
-            // Mock Lock model - no existing lock, so it creates a new one and refreshes
-            Lock.get.mockResolvedValue(null); // No existing lock
+            // Mock Lock model - successful lock creation on first try
             const mockLock = {
                 delete: jest.fn().mockResolvedValue(true)
             };
@@ -231,22 +254,74 @@ describe('oauth manage', () => {
             // Assert
             expect(returnedUser.accessToken).toBe(newAccessToken);
             expect(returnedUser.refreshToken).toBe(newRefreshToken);
-            expect(Lock.get).toHaveBeenCalledWith({ userId: user.id });
-            expect(Lock.create).toHaveBeenCalledWith({ userId: user.id });
+            expect(Lock.create).toHaveBeenCalledWith(
+                { userId: user.id, ttl: expect.any(Number) },
+                { overwrite: false }
+            );
+            expect(Lock.get).not.toHaveBeenCalled(); // Lock.get shouldn't be called in successful path
             expect(mockLock.delete).toHaveBeenCalled();
         });
 
         test('expired, concurrent requests with locking - both get updated tokens', async () => {
             // Arrange
-            process.env.USE_TOKEN_REFRESH_LOCK = 'true';
             const user = await UserModel.create({
                 id: userId,
+                platform: 'pipedrive',
                 accessToken,
                 refreshToken,
                 tokenExpiry: '2025-01-01T00:00:00.000Z'
             });
 
-            // Mock oauthApp
+            // Create updated user object that will be returned from DB
+            const updatedUser = {
+                ...user.toJSON(),
+                accessToken: newAccessToken,
+                refreshToken: newRefreshToken,
+                tokenExpiry: '2035-01-01T00:00:00.000Z'
+            };
+
+            // Mock for first request (successful lock creation)
+            const mockLock = {
+                delete: jest.fn().mockResolvedValue(true)
+            };
+
+            // Mock for second request sequence
+            const mockExistingLock = {
+                ttl: Date.now() + 100000 // Valid lock that exists during first request
+            };
+
+            // Control the sequence of Lock operations
+            let lockCreateCallCount = 0;
+            let lockGetCallCount = 0;
+
+            // Mock Lock.create to succeed on first call, fail on second
+            Lock.create.mockImplementation(() => {
+                lockCreateCallCount++;
+                if (lockCreateCallCount === 1) {
+                    return Promise.resolve(mockLock); // First request succeeds
+                } else {
+                    // Second request fails with conditional check exception
+                    const conditionalError = new Error('ConditionalCheckFailedException');
+                    conditionalError.name = 'ConditionalCheckFailedException';
+                    return Promise.reject(conditionalError);
+                }
+            });
+
+            // Mock Lock.get to return existing lock first, then null after first request completes
+            Lock.get.mockImplementation(() => {
+                lockGetCallCount++;
+                if (lockGetCallCount === 1) {
+                    return Promise.resolve(mockExistingLock); // Lock exists during first request
+                } else {
+                    return Promise.resolve(null); // Lock gone after first request completes
+                }
+            });
+
+            // Mock UserModel.findByPk to return updated user for second request
+            const originalFindByPk = UserModel.findByPk;
+            UserModel.findByPk = jest.fn().mockResolvedValue(updatedUser);
+
+            // Mock oauthApp for first request
             const oauthApp = {
                 createToken: jest.fn().mockReturnValue({
                     refresh: jest.fn().mockResolvedValue({
@@ -257,48 +332,27 @@ describe('oauth manage', () => {
                 })
             };
 
-            // Mock Lock model for concurrent scenario
-            Lock.get.mockResolvedValueOnce(null); // First request gets no lock
-            const mockLock = {
-                delete: jest.fn().mockResolvedValue(true)
-            };
-            Lock.create.mockResolvedValue(mockLock);
+            // Act - Run both requests concurrently
+            const [result1, result2] = await Promise.all([
+                checkAndRefreshAccessToken(oauthApp, user, 5), // First request
+                checkAndRefreshAccessToken(oauthApp, user, 5)  // Second request
+            ]);
 
-            // Mock UserModel.findByPk for second request
-            const updatedUser = {
-                id: userId,
-                accessToken: newAccessToken,
-                refreshToken: newRefreshToken,
-                tokenExpiry: '2035-01-01T00:00:00.000Z',
-                save: jest.fn().mockResolvedValue(true)
-            };
-            jest.spyOn(UserModel, 'findByPk').mockResolvedValue(updatedUser);
+            // Assert - Both requests should return updated tokens
+            expect(result1.accessToken).toBe(newAccessToken);
+            expect(result1.refreshToken).toBe(newRefreshToken);
+            expect(result2.accessToken).toBe(newAccessToken);
+            expect(result2.refreshToken).toBe(newRefreshToken);
 
-            let returnedUser1, returnedUser2;
-            
-            // Setup for second request (simulating concurrent access)
-            const mockLockForSecond = {
-                ttl: Date.now() + 1000
-            };
-            Lock.get.mockResolvedValueOnce(mockLockForSecond) // Second request finds lock
-                    .mockResolvedValueOnce(null); // Then lock is cleared
+            // Verify the expected call patterns
+            expect(Lock.create).toHaveBeenCalledTimes(2); // Both requests try to create lock
+            expect(Lock.get).toHaveBeenCalledTimes(2); // Second request checks for existing lock twice
+            expect(mockLock.delete).toHaveBeenCalledTimes(1); // First request deletes lock
+            expect(oauthApp.createToken).toHaveBeenCalledTimes(1); // Only first request refreshes token
+            expect(UserModel.findByPk).toHaveBeenCalledWith(user.id); // Second request gets updated user
 
-            const request1 = async () => {
-                returnedUser1 = await checkAndRefreshAccessToken(oauthApp, user);
-            };
-            const request2 = async () => {
-                await new Promise(resolve => setTimeout(resolve, 100));
-                returnedUser2 = await checkAndRefreshAccessToken(oauthApp, user);
-            };
-
-            // Act
-            await Promise.all([request1(), request2()]);
-
-            // Assert
-            expect(returnedUser1.accessToken).toBe(newAccessToken);
-            expect(returnedUser1.refreshToken).toBe(newRefreshToken);
-            expect(returnedUser2.accessToken).toBe(newAccessToken);
-            expect(returnedUser2.refreshToken).toBe(newRefreshToken);
+            // Cleanup
+            UserModel.findByPk = originalFindByPk;
         });
     });
 
@@ -450,7 +504,9 @@ describe('oauth manage', () => {
                     restUrl: 'https://rest.bullhorn.com',
                     bhRestToken: 'bhRestToken123',
                     tokenUrl: 'https://auth.bullhorn.com/token',
-                    loginUrl: 'https://auth.bullhorn.com'
+                    loginUrl: 'https://auth.bullhorn.com',
+                    encodedApiPassword: encode('testpass'),
+                    encodedApiUsername: encode('testuser')
                 }
             });
 
@@ -464,14 +520,6 @@ describe('oauth manage', () => {
                 .post('/token')
                 .query(true)
                 .reply(400, 'Bad Request');
-
-            // Mock platform module for password auth
-            jest.doMock('../src/adapters/bullhorn', () => ({
-                getServerLoggingSettings: jest.fn().mockResolvedValue({
-                    apiUsername: 'testuser',
-                    apiPassword: 'testpass'
-                })
-            }));
 
             // Mock password authorization flow
             nock('https://auth.bullhorn.com')
@@ -526,7 +574,9 @@ describe('oauth manage', () => {
                     restUrl: 'https://rest.bullhorn.com',
                     bhRestToken: 'bhRestToken123',
                     tokenUrl: 'https://auth.bullhorn.com/token',
-                    loginUrl: 'https://auth.bullhorn.com'
+                    loginUrl: 'https://auth.bullhorn.com',
+                    encodedApiPassword: encode('testpass'),
+                    encodedApiUsername: encode('testuser')
                 }
             });
 
@@ -540,14 +590,6 @@ describe('oauth manage', () => {
                 .post('/token')
                 .query(true)
                 .reply(400, 'Bad Request');
-
-            // Mock platform module for password auth
-            jest.doMock('../src/adapters/bullhorn', () => ({
-                getServerLoggingSettings: jest.fn().mockResolvedValue({
-                    apiUsername: 'testuser',
-                    apiPassword: 'testpass'
-                })
-            }));
 
             // Mock password authorization failure - missing location header
             nock('https://auth.bullhorn.com')
@@ -587,7 +629,9 @@ describe('oauth manage', () => {
                     restUrl: 'https://rest.bullhorn.com',
                     bhRestToken: 'bhRestToken123',
                     tokenUrl: 'https://auth.bullhorn.com/token',
-                    loginUrl: 'https://auth.bullhorn.com'
+                    loginUrl: 'https://auth.bullhorn.com',
+                    encodedApiPassword: encode('testpass'),
+                    encodedApiUsername: encode('testuser')
                 }
             });
 
@@ -601,14 +645,6 @@ describe('oauth manage', () => {
                 .post('/token')
                 .query(true)
                 .reply(400, 'Bad Request');
-
-            // Mock platform module for password auth
-            jest.doMock('../src/adapters/bullhorn', () => ({
-                getServerLoggingSettings: jest.fn().mockResolvedValue({
-                    apiUsername: 'testuser',
-                    apiPassword: 'testpass'
-                })
-            }));
 
             // Mock password authorization failure - redirect without code parameter
             nock('https://auth.bullhorn.com')
@@ -660,13 +696,6 @@ describe('oauth manage', () => {
                 .post('/token')
                 .query(true)
                 .reply(400, 'Bad Request');
-
-            // Mock platform module with no credentials
-            jest.doMock('../src/adapters/bullhorn', () => ({
-                getServerLoggingSettings: jest.fn().mockResolvedValue({
-                    // No apiUsername or apiPassword
-                })
-            }));
 
             // Act
             const returnedUser = await checkAndRefreshAccessToken({}, user);
@@ -822,7 +851,6 @@ describe('oauth manage', () => {
 
         test('token refresh with locking enabled - succeeds', async () => {
             // Arrange
-            process.env.USE_TOKEN_REFRESH_LOCK = 'true';
             const user = await UserModel.create({
                 id: userId,
                 accessToken,
@@ -886,34 +914,6 @@ describe('oauth manage', () => {
     });
 
     describe('edge cases', () => {
-        test('very short timeout - immediate timeout', async () => {
-            // Arrange
-            process.env.USE_TOKEN_REFRESH_LOCK = 'true';
-            const user = await UserModel.create({
-                id: userId,
-                accessToken,
-                refreshToken,
-                tokenExpiry: '2025-01-01T00:00:00.000Z'
-            });
-
-            // Reset mocks for this test
-            jest.clearAllMocks();
-            
-            // Mock existing valid lock that doesn't expire
-            const mockLock = {
-                ttl: Date.now() + 100000 // Valid lock that won't expire
-            };
-            Lock.get.mockResolvedValue(mockLock);
-
-            // Mock oauthApp (shouldn't be called due to timeout)
-            const oauthApp = {
-                createToken: jest.fn()
-            };
-
-            // Act & Assert
-            await expect(checkAndRefreshAccessToken(oauthApp, user, 0)).rejects.toThrow('Token lock timeout');
-        });
-
         test('token expiry far in future - no refresh needed', async () => {
             // Arrange
             const user = await UserModel.create({
