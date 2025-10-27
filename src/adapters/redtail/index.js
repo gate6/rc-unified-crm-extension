@@ -2,7 +2,9 @@
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
-const { secondsToHoursMinutesSeconds } = require('../../lib/util');
+const jwt = require('@app-connect/core/lib/jwt');
+const { UserModel } = require('@app-connect/core/models/userModel');
+const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
 
 function getAuthType() {
     return 'apiKey';
@@ -27,7 +29,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
         });
         additionalInfo['userResponse'] = authResponse.data.authenticated_user;
         delete additionalInfo.password;
-        const id = additionalInfo.username;
+        const id = `${additionalInfo.username}-redtail`;
         const name = additionalInfo.username;
         const timezoneName = '';
         return {
@@ -84,7 +86,13 @@ async function unAuthorize({ user }) {
     }
 }
 
-async function findContact({ user, phoneNumber }) {
+async function findContact({ user, phoneNumber, isExtension }) {
+    if (isExtension === 'true') {
+        return {
+            successful: false,
+            matchedContactInfo: []
+        }
+    }
     const matchedContactInfo = [];
     const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
     phoneNumber = phoneNumber.replace(' ', '+')
@@ -93,6 +101,7 @@ async function findContact({ user, phoneNumber }) {
     if (phoneNumberObj.valid) {
         phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
     }
+
     const personInfo = await axios.get(
         `${process.env.REDTAIL_API_SERVER}/contacts/search_basic?phone_number=${phoneNumberWithoutCountryCode}`,
         {
@@ -190,31 +199,61 @@ async function createContact({ user, phoneNumber, newContactName }) {
     }
 }
 
-async function createCallLog({ user, contactInfo, callLog, note, additionalSubmission, aiNote, transcript }) {
+async function getUserList({ user, authHeader }) {
+    const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
+    const userListResp = await axios.get(
+        `${process.env.REDTAIL_API_SERVER}/lists/database_users`,
+        {
+            headers: { 'Authorization': overrideAuthHeader }
+        });
+    const userList = userListResp.data.database_users.map(user => ({
+        id: user.id,
+        name: `${user.first_name} ${user.last_name}`
+    }));
+    return userList;
+}
+
+async function createCallLog({ user, contactInfo, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails, hashedAccountId }) {
     const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
 
-    let description = '';
-    if (user.userSettings?.addCallLogNote?.value ?? true) { description = upsertCallAgentNote({ body: description, note }); }
-    description += '<b>Call details</b><ul>';
     const subject = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
-    if (user.userSettings?.addCallSessionId?.value ?? false) { description = upsertCallSessionId({ body: description, id: callLog.sessionId }); }
-    if (user.userSettings?.addCallLogSubject?.value ?? true) { description = upsertCallSubject({ body: description, subject }); }
-    if (user.userSettings?.addCallLogContactNumber?.value ?? true) { description = upsertContactPhoneNumber({ body: description, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
-    if (user.userSettings?.addCallLogDateTime?.value ?? true) { description = upsertCallDateTime({ body: description, startTime: callLog.startTime, timezoneOffset: user.userSettings?.redtailCustomTimezone?.value ?? 0 }); }
-    if (user.userSettings?.addCallLogDuration?.value ?? true) { description = upsertCallDuration({ body: description, duration: callLog.duration }); }
-    if (user.userSettings?.addCallLogResult?.value ?? true) { description = upsertCallResult({ body: description, result: callLog.result }); }
-    if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { description = upsertCallRecording({ body: description, recordingLink: callLog.recording.link }); }
-    description += '</ul>';
-    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { description = upsertAiNote({ body: description, aiNote }); }
-    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { description = upsertTranscript({ body: description, transcript }); }
-
     let extraDataTracking = {
         withSmartNoteLog: !!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true),
         withTranscript: !!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)
     };
+    if (user.userSettings?.redtailCustomTimezone?.value ?? false) {
+        composedLogDetails = await overrideDateTimeInComposedLogDetails({ composedLogDetails, startTime: callLog.startTime, user });
+    }
+
+    let assigneeId = null;
+    if (additionalSubmission?.isAssignedToUser) {
+        if (additionalSubmission.adminAssignedUserToken) {
+            try {
+                const unAuthData = jwt.decodeJwt(additionalSubmission.adminAssignedUserToken);
+                const assigneeUser = await UserModel.findByPk(unAuthData.id);
+                if (assigneeUser) {
+                    assigneeId = assigneeUser.platformAdditionalInfo.id;
+                }
+            }
+            catch (e) {
+                console.log('Error decoding admin assigned user token', e);
+            }
+
+            if (!assigneeId) {
+                const adminConfig = await AdminConfigModel.findByPk(hashedAccountId);
+                assigneeId = adminConfig.userMappings?.find(mapping => mapping.rcExtensionId === additionalSubmission.adminAssignedUserRcId)?.crmUserId;
+            }
+        }
+
+        if (!assigneeId) {
+            const adminConfig = await AdminConfigModel.findByPk(hashedAccountId);
+            assigneeId = adminConfig.userMappings?.find(mapping => mapping.rcExtensionId === additionalSubmission.adminAssignedUserRcId)?.crmUserId;
+        }
+    }
+
     const postBody = {
         subject,
-        description,
+        description: composedLogDetails,
         start_date: moment(callLog.startTime).utc().toISOString(),
         end_date: moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString(),
         activity_code_id: 3,
@@ -226,6 +265,16 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
             }
         ]
     }
+
+    if (assigneeId) {
+        postBody.attendees = [
+            {
+                type: "Crm::Activity::Attendee::User",
+                user_id: Number(assigneeId)
+            }
+        ];
+    }
+
     const addLogRes = await axios.post(
         `${process.env.REDTAIL_API_SERVER}/activities`,
         postBody,
@@ -247,7 +296,7 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
     const completeLogRes = await axios.put(
         `${process.env.REDTAIL_API_SERVER}/activities/${addLogRes.data.activity.id}`,
         {
-            'completed': true
+            completed: true
         },
         {
             headers: { 'Authorization': overrideAuthHeader }
@@ -266,33 +315,33 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
     };
 }
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript }) {
+async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript, additionalSubmission, composedLogDetails, existingCallLogDetails, hashedAccountId }) {
     const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
     const existingRedtailLogId = existingCallLog.thirdPartyLogId;
-    const getLogRes = await axios.get(
-        `${process.env.REDTAIL_API_SERVER}/activities/${existingRedtailLogId}`,
-        {
-            headers: { 'Authorization': overrideAuthHeader }
-        });
-    let logBody = getLogRes.data.activity.description;
-    if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
-    if (!!existingCallLog.sessionId && (user.userSettings?.addCallSessionId?.value ?? false)) { logBody = upsertCallSessionId({ body: logBody, id: existingCallLog.sessionId }); }
-    if (!!subject && (user.userSettings?.addCallLogSubject?.value ?? true)) { logBody = upsertCallSubject({ body: logBody, subject }); }
-    if (!!startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) { logBody = upsertCallDateTime({ body: logBody, startTime, timezoneOffset: user.userSettings?.redtailCustomTimezone?.value ?? 0 }); }
-    if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
-    if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
-    if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink }); }
-    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
-    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
-    let putBody = {};
 
+    // Use passed existingCallLogDetails to avoid duplicate API call
+    let getLogRes = null;
+    if (existingCallLogDetails) {
+        getLogRes = { data: existingCallLogDetails };
+    } else {
+        // Fallback to API call if details not provided
+        getLogRes = await axios.get(
+            `${process.env.REDTAIL_API_SERVER}/activities/${existingRedtailLogId}`,
+            {
+                headers: { 'Authorization': overrideAuthHeader }
+            });
+    }
+
+    let putBody = {};
     if (subject) {
         putBody.subject = subject;
     }
-    putBody.description = logBody;
+    if (user.userSettings?.redtailCustomTimezone?.value ?? false) {
+        composedLogDetails = await overrideDateTimeInComposedLogDetails({ composedLogDetails, startTime: startTime, user });
+    }
+    putBody.description = composedLogDetails;
     putBody.start_date = moment(startTime).utc().toISOString();
     putBody.end_date = moment(startTime).utc().add(duration, 'seconds').toISOString();
-
     const putLogRes = await axios.put(
         `${process.env.REDTAIL_API_SERVER}/activities/${existingRedtailLogId}`,
         putBody,
@@ -309,9 +358,26 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     };
 }
 
+async function upsertCallDisposition({ user, existingCallLog, authHeader, dispositions }) {
+    const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
+    const existingRedtailLogId = existingCallLog.thirdPartyLogId;
+    const categoryId = dispositions.category;
+    const upsertDispositionRes = await axios.put(
+        `${process.env.REDTAIL_API_SERVER}/activities/${existingRedtailLogId}`,
+        {
+            category_id: categoryId
+        },
+        {
+            headers: { 'Authorization': overrideAuthHeader }
+        });
+    return {
+        logId: existingRedtailLogId
+    };
+}
+
 async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
     const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
-    const userName = user.id;
+    const userName = user.id.split('-')[0];
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
     let subject = '';
     let description = '';
@@ -386,7 +452,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader }) {
     const overrideAuthHeader = getAuthHeader({ userKey: user.platformAdditionalInfo.userResponse.user_key });
     const existingLogId = existingMessageLog.thirdPartyLogId;
-    const userName = user.id;
+    const userName = user.id.split('-')[0];
     const getLogRes = await axios.get(
         `${process.env.REDTAIL_API_SERVER}/activities/${existingLogId}`,
         {
@@ -424,20 +490,32 @@ async function getCallLog({ user, callLogId, authHeader }) {
             headers: { 'Authorization': overrideAuthHeader, 'include': 'linked_contacts' }
         });
     const logBody = getLogRes.data.activity.description;
-    const note = logBody.match(/<br>(.+?)<br><br>/)?.length > 1 ? logBody.match(/<br>(.+?)<br><br>/)[1] : '';
+    // const note = logBody.match(/<br>(.+?)<br><br>/)?.length > 1 ? logBody.match(/<br>(.+?)<br><br>/)[1] : '';
+    const note = logBody.match(/<b>Agent notes<\/b><br>(.+?)<br><br>/s)?.[1] || '';
     return {
         callLogInfo: {
             subject: getLogRes.data.activity.subject,
+            fullLogResponse: getLogRes.data,
             note,
+            fullBody: logBody,
             contactName: `${getLogRes.data.activity.linked_contacts[0].first_name} ${getLogRes.data.activity.linked_contacts[0].last_name}`,
+            dispositions: {
+                category: getLogRes.data.activity.category_id
+            }
         }
     }
 }
 
 function formatContact(rawContactInfo, categories) {
+    const first = (rawContactInfo.first_name || '').trim();
+    const middle = (rawContactInfo.middle_name || '').trim();
+    const last = (rawContactInfo.last_name || '').trim();
+    const parts = [first, middle, last].filter(Boolean);
+    const fullName = (parts.join(' ') || rawContactInfo.full_name || '').trim();
+
     return {
         id: rawContactInfo.id,
-        name: `${rawContactInfo.full_name}`,
+        name: fullName,
         phone: rawContactInfo.phoneNumber,
         title: rawContactInfo.job_title ?? "",
         type: 'contact',
@@ -450,133 +528,6 @@ function formatContact(rawContactInfo, categories) {
             })
         }
     }
-}
-
-function upsertCallAgentNote({ body, note }) {
-    if (!note) {
-        return body;
-    }
-    const noteRegex = RegExp('<b>Agent notes</b><br>([\\s\\S]+?)<br><br>');
-    if (noteRegex.test(body)) {
-        body = body.replace(noteRegex, `<b>Agent notes</b><br>${note}<br><br>`);
-    }
-    else {
-        body += `<b>Agent notes</b><br>${note}<br><br>`;
-    }
-    return body;
-}
-function upsertCallSubject({ body, subject }) {
-    const subjectRegex = RegExp('<li><b>Summary</b>: (.+?)(?:</li>|</ul>)');
-    if (subjectRegex.test(body)) {
-        body = body.replace(subjectRegex, (match, p1) => `<li><b>Summary</b>: ${subject}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
-    } else {
-        body += `<li><b>Summary</b>: ${subject}</li>`;
-    }
-    return body;
-}
-
-function upsertCallSessionId({ body, id }) {
-    const idRegex = RegExp('<li><b>Session Id</b>: (.+?)(?:<li>|</ul>)');
-    if (idRegex.test(body)) {
-        body = body.replace(idRegex, (match, p1) => `<li><b>Session Id</b>: ${id}${p1.endsWith('</ul>') ? '</ul>' : '<li>'}`);
-    } else {
-        body += `<li><b>Session Id</b>: ${id}<li>`;
-    }
-    return body;
-}
-
-function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
-    const phoneNumberRegex = RegExp(`<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: (.+?)(?:</li>|</ul>)`);
-    if (phoneNumberRegex.test(body)) {
-        body = body.replace(phoneNumberRegex, (match, p1) => `<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: ${phoneNumber}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
-    } else {
-        body += `<li><b>${direction === 'Outbound' ? 'Recipient' : 'Caller'} phone number</b>: ${phoneNumber}</li>`;
-    }
-    return body;
-}
-
-function upsertCallDateTime({ body, startTime, timezoneOffset }) {
-    const dateTimeRegex = RegExp('<li><b>Date/time</b>: (.+?)(?:</li>|</ul>)');
-    if (dateTimeRegex.test(body)) {
-        const updatedDateTime = moment(startTime).utcOffset(Number(timezoneOffset)).format('YYYY-MM-DD hh:mm:ss A');
-        body = body.replace(dateTimeRegex, (match, p1) => `<li><b>Date/time</b>: ${updatedDateTime}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
-    } else {
-        body += `<li><b>Date/time</b>: ${moment(startTime).utcOffset(Number(timezoneOffset)).format('YYYY-MM-DD hh:mm:ss A')}</li>`;
-    }
-    return body;
-}
-
-function upsertCallDuration({ body, duration }) {
-    const durationRegex = RegExp('<li><b>Duration</b>: (.+?)(?:</li>|</ul>)');
-    if (durationRegex.test(body)) {
-        body = body.replace(durationRegex, (match, p1) => `<li><b>Duration</b>: ${secondsToHoursMinutesSeconds(duration)}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
-    } else {
-        body += `<li><b>Duration</b>: ${secondsToHoursMinutesSeconds(duration)}</li>`;
-    }
-    return body;
-}
-
-function upsertCallResult({ body, result }) {
-    const resultRegex = RegExp('<li><b>Result</b>: (.+?)(?:</li>|</ul>)');
-    if (resultRegex.test(body)) {
-        body = body.replace(resultRegex, (match, p1) => `<li><b>Result</b>: ${result}${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
-    } else {
-        body += `<li><b>Result</b>: ${result}</li>`;
-    }
-    return body;
-}
-
-function upsertCallRecording({ body, recordingLink }) {
-    const recordingLinkRegex = RegExp('<li><b>Call recording link</b>: (.+?)(?:</li>|</ul>)');
-    if (recordingLink) {
-        if (recordingLinkRegex.test(body)) {
-            body = body.replace(recordingLinkRegex, (match, p1) => `<li><b>Call recording link</b>: <a target="_blank" href=${recordingLink}>open</a>${p1.endsWith('</ul>') ? '</ul>' : '</li>'}`);
-        }
-        else {
-            let text = '';
-            // a real link
-            if (recordingLink.startsWith('http')) {
-                text = `<li><b>Call recording link</b>: <a target="_blank" href=${recordingLink}>open</a></li>`;
-            } else {
-                // placeholder
-                text = '<li><b>Call recording link</b>: (pending...)</li>';
-            }
-            if (body.indexOf('</ul>') === -1) {
-                body += text;
-            } else {
-                body = body.replace('</ul>', `${text}</ul>`);
-            }
-        }
-    }
-    return body;
-}
-
-function upsertAiNote({ body, aiNote }) {
-    if (!aiNote) {
-        return body;
-    }
-    const formattedAiNote = aiNote.replace(/\n+$/, '').replace(/(?:\r\n|\r|\n)/g, '<br>');
-    const aiNoteRegex = RegExp('<div><b>AI Note</b><br>(.+?)</div>');
-    if (aiNoteRegex.test(body)) {
-        body = body.replace(aiNoteRegex, `<div><b>AI Note</b><br>${formattedAiNote}</div>`);
-    } else {
-        body += `<div><b>AI Note</b><br>${formattedAiNote}</div><br>`;
-    }
-    return body;
-}
-
-function upsertTranscript({ body, transcript }) {
-    if (!transcript) {
-        return body;
-    }
-    const formattedTranscript = transcript.replace(/(?:\r\n|\r|\n)/g, '<br>');
-    const transcriptRegex = RegExp('<div><b>Transcript</b><br>(.+?)</div>');
-    if (transcriptRegex.test(body)) {
-        body = body.replace(transcriptRegex, `<div><b>Transcript</b><br>${formattedTranscript}</div>`);
-    } else {
-        body += `<div><b>Transcript</b><br>${formattedTranscript}</div><br>`;
-    }
-    return body;
 }
 
 async function updateCategoryToUserSetting({ user, authHeader }) {
@@ -604,11 +555,30 @@ async function updateCategoryToUserSetting({ user, authHeader }) {
     });
 }
 
+function overrideDateTimeInComposedLogDetails({ composedLogDetails, startTime, user }) {
+    if (!user.userSettings?.redtailCustomTimezone?.value) {
+        return composedLogDetails;
+    }
+    const adjustedTime = moment(startTime).utcOffset(Number(user.userSettings?.redtailCustomTimezone?.value));
+    const formattedTime = adjustedTime.format('YYYY-MM-DD hh:mm:ss A');
+    const dateTimeRegex = /<li><b>Date\/[Tt]ime<\/b>:\s*[^<]+<\/li>/i;
+    if (dateTimeRegex.test(composedLogDetails)) {
+        const replaceRegex = /(<li><b>Date\/[Tt]ime<\/b>:\s*)[^<]+(<\/li>)/i;
+        composedLogDetails = composedLogDetails.replace(
+            replaceRegex,
+            `$1${formattedTime}$2`
+        );
+    }
+    return composedLogDetails;
+}
+
 exports.getAuthType = getAuthType;
 exports.getBasicAuth = getBasicAuth;
 exports.getUserInfo = getUserInfo;
+exports.getUserList = getUserList;
 exports.createCallLog = createCallLog;
 exports.updateCallLog = updateCallLog;
+exports.upsertCallDisposition = upsertCallDisposition;
 exports.createMessageLog = createMessageLog;
 exports.updateMessageLog = updateMessageLog;
 exports.getCallLog = getCallLog;
