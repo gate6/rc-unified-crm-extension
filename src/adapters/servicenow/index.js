@@ -392,6 +392,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
             }
         };
     }
+
     const stateSelection = await axios.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
         {
