@@ -371,7 +371,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const companyData = await models.companies.findOne({
         where: {
             hostname: hostname,
-            status: 1
+            status: true
         }
     });
 
@@ -469,7 +469,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
             hostname: userInfo.hostname,
-            status: 1
+            status: true
         },
         raw: true
     })
@@ -497,7 +497,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const companyData = await models.companies.findOne({
         where: {
             hostname: hostname,
-            status: 1
+            status: true
         }
     });
 
@@ -776,7 +776,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
             hostname: hostname,
-            status: 1
+            status: true
         },
         raw: true
     })
@@ -881,7 +881,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const companyData = await models.companies.findOne({
         where: {
             hostname: hostname,
-            status: 1
+            status: true
         }
     });
 
