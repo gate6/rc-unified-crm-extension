@@ -275,7 +275,7 @@ async function getUserList({ user, authHeader }) {
 
     try {
         const userListResp = await axios.get(
-            `https://api-integration.servicetitan.io/settings/v2/tenant/${tenantId}/customi`,
+            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers`,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
@@ -318,9 +318,14 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
     }
     const contactId = contactInfo.id;
     let postBody = JSON.stringify({
-        "text": "test note for zubair"
+        "text": JSON.stringify({
+                subject,
+                description,
+                start_date: moment(callLog.startTime).utc().toISOString(),
+                end_date: moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()
+            })
     });
-    console.log('Creating call log with subject:', contactInfo, subject, additionalSubmission, note);
+    console.log('Creating call log with body:', postBody);
     const addNoteRes = await axios.post(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
         postBody,
@@ -351,20 +356,33 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
-    const existingServiceTitanLogId = existingCallLog.thirdPartyLogId;
 
-    const putBody = {
-        description: composedLogDetails,
-        createdOn: moment(startTime).utc().toISOString(),
-        duration: duration
-    };
-    if (subject) {
-        putBody.subject = subject;
+    let description = composedLogDetails;
+
+    if (note) {
+        description += `\n\n<b>Agent Notes</b><br>${note}`;
     }
 
-    await axios.put(
-        `https://api-integration.servicetitan.io/telecom/v2/tenant/${tenantId}/calls/${existingServiceTitanLogId}`,
-        putBody,
+    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+        description += `\n\n<b>AI Note</b><br>${aiNote}`;
+    }
+
+    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+        description += `\n\n<b>Transcript</b><br>${transcript}`;
+    }
+    const contactId = existingCallLog.contactId;
+    let postBody = JSON.stringify({
+        "text": JSON.stringify({
+                subject,
+                description,
+                start_date: moment(startTime).utc().toISOString(),
+                end_date: moment(startTime).utc().add(duration, 'seconds').toISOString()
+            })
+    });
+    console.log('Updating call log with body:', postBody);
+    const addNoteRes = await axios.post(
+        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+        postBody,
         {
             headers: {
                 'Authorization': `Bearer ${auth}`,
@@ -372,12 +390,18 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
                 'Content-Type': 'application/json'
             }
         });
+
     return {
-        updatedNote: putBody.description,
+        logId: addNoteRes.data.id,
+        updatedNote: description,
         returnMessage: {
-            message: 'Call log updated.',
+            message: 'Call log note created',
             messageType: 'success',
             ttl: 2000
+        },
+        extraDataTracking: {
+            withSmartNoteLog: !!aiNote,
+            withTranscript: !!transcript
         }
     };
 }
@@ -386,25 +410,34 @@ async function upsertCallDisposition({ user, existingCallLog, authHeader, dispos
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+    const customers_id = existingCallLog.contactId;
     const existingServiceTitanLogId = existingCallLog.thirdPartyLogId;
     const disposition = dispositions.category; // Assuming category holds the disposition string
 
     // ServiceTitan API for calls doesn't support PATCH, so we must PUT the whole object.
     // First, we get the existing call log.
     const getLogRes = await axios.get(
-        `https://api-integration.servicetitan.io/telecom/v2/tenant/${tenantId}/calls/${existingServiceTitanLogId}`,
+        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${customers_id}/notes/`,
         {
             headers: {
                 'Authorization': `Bearer ${auth}`,
                 'ST-App-Key': stAppKey
             }
         });
+        const existingLog = {};
 
-    const existingLog = getLogRes.data;
-    existingLog.disposition = disposition;
+        if (Array.isArray(logData.data)) {
+            for (let log of logData.data) {
+                if (log.id == callLogId) {
+                    existingLog = JSON.parse(log.text);
+                }
+                break;
+            }
+        }
+        existingLog.disposition = disposition;
 
     await axios.put(
-        `https://api-integration.servicetitan.io/telecom/v2/tenant/${tenantId}/calls/${existingServiceTitanLogId}`,
+        `https://api-integration.servicetitan.io/telecom/v2/tenant/${tenantId}/calls/`,
         existingLog,
         {
             headers: {
@@ -441,14 +474,18 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             description = `Fax document link: ${faxDocLink}`;
             break;
     }
-
-    const postBody = {
-        subject: subject,
-        body: description
-    };
-
+    const contactId = contactInfo.id;
+    let postBody = JSON.stringify({
+        "text": JSON.stringify({
+                subject,
+                description,
+                start_date: moment(message.creationTime).utc().toISOString(),
+                end_date: moment(message.creationTime).utc().toISOString(),
+            })
+    });
+    console.log('Creating message log with body:', postBody);
     const addLogRes = await axios.post(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/contacts/${contactInfo.id}/notes`,
+        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
         postBody,
         {
             headers: {
@@ -487,17 +524,46 @@ async function getCallLog({ user, callLogId, contactId, authHeader }) {
         });
 
     const logData = getLogRes.data;
-    var note = "";
-    for (let logdata of logData.data) {
-        if (logdata.id == callLogId) {
-            note = logdata.text;
+    let note = '';
+    let subject = '';
+    let full_data = {};
+    let start_date = '';
+    let end_date = '';
+    if (Array.isArray(logData.data)) {
+        for (let log of logData.data) {
+            if (log.id == callLogId) {
+            try {
+                // Unserialize the JSON string in log.text
+                const parsedText = JSON.parse(log.text);
+
+                // Assign extracted values
+                subject = parsedText.subject || '';
+                note = (
+                    parsedText.description?.includes('<b>Agent notes</b>')
+                        ? parsedText.description
+                            .split('<b>Agent notes</b>')[1]
+                            ?.split('<b>Call details</b>')[0]
+                            ?.replaceAll('<br>', '')
+                            ?.trim()
+                        : parsedText.description || ''
+                    ) || '';
+                start_date = parsedText.start_date || '';
+                end_date = parsedText.end_date || '';
+                full_data = parsedText;
+            } catch (err) {
+                console.error('Error parsing note text:', err);
+                note = log.text; // fallback to raw
+            }
             break;
+            }
         }
     }
     console.log('Fetched call log data:', note);
     return {
         callLogInfo: {
-            note: note
+            subject,
+            fullLogResponse: full_data,
+            note,
         }
     }
 }
