@@ -4,6 +4,7 @@ const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const jwt = require('@app-connect/core/lib/jwt');
 const { UserModel } = require('@app-connect/core/models/userModel');
+const { CallLogModel } = require('@app-connect/core/models/CallLogModel');
 const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
 const qs = require('qs');
 function getAuthType() {
@@ -200,9 +201,9 @@ async function createContact({ user, phoneNumber, newContactName }) {
                     name: `${firstName} ${lastName}`.trim(),
                     address: {
                         street: 'street',
-                        city: 'city',
-                        state: 'NY',
-                        zip: 'zip',
+                        city: 'Phoenix',
+                        state: 'AZ',
+                        zip: '85001',
                         country: 'USA'
                     },
                     contacts: [
@@ -216,9 +217,9 @@ async function createContact({ user, phoneNumber, newContactName }) {
             ],
             address: {
                 street: 'street',
-                city: 'city',
-                state: 'NY',
-                zip: 'zip',
+                city: 'Phoenix',
+                state: 'AZ',
+                zip: '85001',
                 country: 'USA'
             },
             contacts: [
@@ -390,7 +391,19 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
                 'Content-Type': 'application/json'
             }
         });
-
+    let logID_db = await CallLogModel.findOne({
+        where: {
+            thirdPartyLogId: existingCallLog.thirdPartyLogId,
+            contactId: existingCallLog.contactId
+        }})
+    if (logID_db) {
+        logID_db.sessionId = existingCallLog.sessionId;
+        logID_db.platform = existingCallLog.platform;
+        logID_db.userId = existingCallLog.userId;
+        logID_db.contactId = existingCallLog.contactId;
+        logID_db.thirdPartyLogId =  addNoteRes.data.id;
+        await logID_db.save();
+    }
     return {
         logId: addNoteRes.data.id,
         updatedNote: description,
@@ -407,48 +420,12 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 }
 
 async function upsertCallDisposition({ user, existingCallLog, authHeader, dispositions }) {
-    const auth = await getRefreshedAuthToken(user);
-    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
-    const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
-    const customers_id = existingCallLog.contactId;
-    const existingServiceTitanLogId = existingCallLog.thirdPartyLogId;
-    const disposition = dispositions.category; // Assuming category holds the disposition string
-
-    // ServiceTitan API for calls doesn't support PATCH, so we must PUT the whole object.
-    // First, we get the existing call log.
-    const getLogRes = await axios.get(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${customers_id}/notes/`,
-        {
-            headers: {
-                'Authorization': `Bearer ${auth}`,
-                'ST-App-Key': stAppKey
-            }
-        });
-        const existingLog = {};
-
-        if (Array.isArray(logData.data)) {
-            for (let log of logData.data) {
-                if (log.id == callLogId) {
-                    existingLog = JSON.parse(log.text);
-                }
-                break;
-            }
+    return{
+        returnMessage: {
+            message: 'Call log note updated with disposition',
+            messageType: 'success',
+            ttl: 2000
         }
-        existingLog.disposition = disposition;
-
-    await axios.put(
-        `https://api-integration.servicetitan.io/telecom/v2/tenant/${tenantId}/calls/`,
-        existingLog,
-        {
-            headers: {
-                'Authorization': `Bearer ${auth}`,
-                'ST-App-Key': stAppKey,
-                'Content-Type': 'application/json'
-            }
-        });
-
-    return {
-        logId: existingServiceTitanLogId
     };
 }
 

@@ -16,6 +16,7 @@ const redtail = require('./adapters/redtail');
 const testCRM = require('./adapters/testCRM');
 const googleSheetsExtra = require('./adapters/googleSheets/extra.js');
 const servicenow = require('./adapters/servicenow');
+const servicetitan = require('./adapters/servicetitan');
 
 // Register adapters
 adapterRegistry.setDefaultManifest(require('./adapters/manifest.json'));
@@ -28,6 +29,7 @@ adapterRegistry.registerAdapter('insightly', insightly);
 adapterRegistry.registerAdapter('netsuite', netsuite);
 adapterRegistry.registerAdapter('pipedrive', pipedrive);
 adapterRegistry.registerAdapter('redtail', redtail);
+adapterRegistry.registerAdapter('servicetitan', servicetitan);
 adapterRegistry.registerAdapter('servicenow', servicenow, require('./adapters/servicenow/manifest.json'));
 adapterRegistry.registerAdapter('testCRM', testCRM, require('./adapters/testCRM/manifest.json'));
 

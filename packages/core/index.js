@@ -948,7 +948,7 @@ function createCoreRouter() {
                 }
                 const { id: userId, platform } = decodedToken;
                 platformName = platform;
-                const { successful, logs, returnMessage, extraDataTracking } = await logCore.getCallLog({ userId, sessionIds: req.query.sessionIds, platform, requireDetails: req.query.requireDetails === 'true' });
+                const { successful, logs, returnMessage, extraDataTracking } = await logCore.getCallLog({ userId, sessionIds: req.query.sessionIds, platform, contactId: req.query.contactId, requireDetails: req.query.requireDetails === 'true' });
                 res.status(200).send({ successful, logs, returnMessage });
                 success = true;
                 if (extraDataTracking) {
