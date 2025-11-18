@@ -515,6 +515,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
                 'Authorization': `Bearer ${auth}`,
                 'ST-App-Key': stAppKey,
                 'Content-Type': 'application/json'
+                
             }
         });
         let messageLogID_db = await messageLogModel.findOne({
