@@ -11,7 +11,7 @@ async function saveUserInfo(userObj, accessToken, hostname, companyId) {
 
         let id = userObj.id;
         //Check Current user exist or not
-        const existingUser = await models.customer.findByPk({
+        const existingUser = await models.customer.findOne({
             where: {
                sysId: id
             }
