@@ -5,6 +5,7 @@ const { parsePhoneNumber } = require('awesome-phonenumber');
 const jwt = require('@app-connect/core/lib/jwt');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const { CallLogModel } = require('@app-connect/core/models/CallLogModel');
+const { messageLogModel } = require('@app-connect/core/models/messageLogModel');
 const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
 const qs = require('qs');
 function getAuthType() {
@@ -103,7 +104,6 @@ async function findContact({ user, phoneNumber, isExtension }) {
     if (phoneNumberObj.valid) {
         phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
     }
-    console.log('Searching for phone number:', phoneNumberWithoutCountryCode);
     const personInfo = await axios.get(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}`,
         {
@@ -163,7 +163,6 @@ async function findContactWithName({ user, name }) {
                 matchedContactInfo.push(formatContact(rawPersonInfo));
             }
         }
-        console.log('Matched contacts by name:', matchedContactInfo);
         return {
             successful: true,
             matchedContactInfo
@@ -190,7 +189,6 @@ async function createContact({ user, phoneNumber, newContactName }) {
 
     const [firstName, ...lastNameParts] = newContactName.trim().split(' ');
     const lastName = lastNameParts.join(' ') || firstName;
-    console.log('Creating contact with name:', firstName, lastName, 'and phone:', parsedPhone);
     try {
         const payload = {
             name: `${firstName} ${lastName}`.trim(),
@@ -326,7 +324,6 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
                 end_date: moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()
             })
     });
-    console.log('Creating call log with body:', postBody);
     const addNoteRes = await axios.post(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
         postBody,
@@ -380,7 +377,6 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
                 end_date: moment(startTime).utc().add(duration, 'seconds').toISOString()
             })
     });
-    console.log('Updating call log with body:', postBody);
     const addNoteRes = await axios.post(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
         postBody,
@@ -460,7 +456,6 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
                 end_date: moment(message.creationTime).utc().toISOString(),
             })
     });
-    console.log('Creating message log with body:', postBody);
     const addLogRes = await axios.post(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
         postBody,
@@ -483,11 +478,71 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 }
 
 async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader }) {
-    // The ServiceTitan API does not support updating a note.
-    // The best practice is to create a new note for the new message.
-    return createMessageLog({ user, contactInfo, authHeader, message });
+    const auth = await getRefreshedAuthToken(user);
+    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
+    const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+
+    let subject = '';
+    let description = '';
+    switch (messageType) {
+        case 'SMS':
+            subject = `SMS conversation with ${contactInfo.name}`;
+            description = `SMS from ${message.direction === 'Inbound' ? contactInfo.name : 'user'}: ${message.subject}`;
+            break;
+        case 'Voicemail':
+            subject = `Voicemail from ${contactInfo.name}`;
+            description = `Voicemail recording link: ${recordingLink}`;
+            break;
+        case 'Fax':
+            subject = `Fax from ${contactInfo.name}`;
+            description = `Fax document link: ${faxDocLink}`;
+            break;
+    }
+    const contactId = contactInfo.id;
+    let postBody = JSON.stringify({
+        "text": JSON.stringify({
+                subject,
+                description,
+                start_date: moment(message.creationTime).utc().toISOString(),
+                end_date: moment(message.creationTime).utc().toISOString(),
+            })
+    });
+    const addLogRes = await axios.post(
+        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+        postBody,
+        {
+            headers: {
+                'Authorization': `Bearer ${auth}`,
+                'ST-App-Key': stAppKey,
+                'Content-Type': 'application/json'
+            }
+        });
+        let messageLogID_db = await messageLogModel.findOne({
+        where: {
+            thirdPartyLogId: existingMessageLog.thirdPartyLogId,
+        }})
+    if (messageLogID_db) {
+        messageLogID_db.userId = existingMessageLog.userId;
+        messageLogID_db.platform = existingMessageLog.platform;
+        messageLogID_db.thirdPartyLogId =  addLogRes.data.id;
+        await messageLogID_db.save();
+    }
+
+    return {
+        logId: addLogRes.data.id,
+        returnMessage: {
+            message: 'Message logged as a note',
+            messageType: 'success',
+            ttl: 1000
+        }
+    };
 }
-async function getCallLog({ user, callLogId, contactId, authHeader }) {
+async function getCallLog({ user, callLogId, authHeader }) {
+    let existingCallLogDetails = await CallLogModel.findOne({
+        where: {
+            thirdPartyLogId: callLogId,
+        }});
+    let contactId = existingCallLogDetails.dataValues.contactId;
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
@@ -535,7 +590,6 @@ async function getCallLog({ user, callLogId, contactId, authHeader }) {
             }
         }
     }
-    console.log('Fetched call log data:', note);
     return {
         callLogInfo: {
             subject,
