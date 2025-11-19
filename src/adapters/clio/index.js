@@ -1,10 +1,12 @@
-/* eslint-disable no-control-regex */
+
 /* eslint-disable no-param-reassign */
 const axios = require('axios');
-const moment = require('moment');
+const moment = require('moment-timezone');
 const url = require('url');
 const { parsePhoneNumber } = require('awesome-phonenumber');
-const { secondsToHoursMinutesSeconds } = require('../../lib/util');
+const jwt = require('@app-connect/core/lib/jwt');
+const { UserModel } = require('@app-connect/core/models/userModel');
+const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
 
 function getAuthType() {
     return 'oauth';
@@ -51,10 +53,19 @@ async function getUserInfo({ authHeader, hostname }) {
                 'Authorization': authHeader
             }
         });
-        const id = userInfoResponse.data.data.id.toString();
+        const id = `${userInfoResponse.data.data.id.toString()}-clio`;
         const name = userInfoResponse.data.data.name;
         const timezoneName = userInfoResponse.data.data.time_zone;
-        const timezoneOffset = 0;
+        // Convert timezone name to offset in minutes (e.g., "America/New_York" -> -300 or -240 depending on DST)
+        let timezoneOffset = 0;
+        try {
+            if (timezoneName) {
+                timezoneOffset = moment.tz(timezoneName).utcOffset() / 60;
+            }
+        } catch (error) {
+            timezoneOffset = 0; // Default to UTC if conversion fails
+        }
+
         return {
             successful: true,
             platformUserInfo: {
@@ -118,7 +129,13 @@ async function unAuthorize({ user }) {
     }
 }
 
-async function findContact({ user, authHeader, phoneNumber, overridingFormat }) {
+async function findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension }) {
+    if (isExtension === 'true') {
+        return {
+            successful: false,
+            matchedContactInfo: []
+        }
+    }
     const numberToQueryArray = [];
     let extraDataTracking = {};
     const numberFromRc = phoneNumber.replace(' ', '+');
@@ -160,7 +177,9 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat }) 
                         headers: { 'Authorization': authHeader }
                     });
                 let matters = matterInfo.data.data.length > 0 ? matterInfo.data.data.map(m => { return { const: m.id, title: m.display_number, description: m.description, status: m.status } }) : null;
-                matters = matters?.filter(m => m.status !== 'Closed');
+                if (!user.userSettings?.clioSeeClosedMatters?.value) {
+                    matters = matters?.filter(m => m.status !== 'Closed');
+                }
                 let associatedMatterInfo = await axios.get(
                     `https://${user.hostname}/api/v4/relationships.json?contact_id=${result.id}&fields=matter{id,display_number,description,status}`,
                     {
@@ -315,10 +334,28 @@ async function createContact({ user, authHeader, phoneNumber, newContactName }) 
     }
 }
 
-async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript }) {
+async function getUserList({ user, authHeader }) {
+    const userListResponse = await axios.get(`https://${user.hostname}/api/v4/users.json?enabled=true&order=name(asc)&fields=id,name,email`, {
+        headers: { 'Authorization': authHeader }
+    });
+
+    const userList = [];
+    if (userListResponse?.data?.data?.length > 0) {
+        for (const user of userListResponse.data.data) {
+            userList.push({
+                id: user.id,
+                name: user.name ?? `${user.first_name} ${user.last_name}`,
+                email: user.email
+            });
+        }
+    }
+    return userList;
+}
+
+async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails, hashedAccountId }) {
     const sender = callLog.direction === 'Outbound' ?
         {
-            id: user.id,
+            id: user.id.split('-')[0],
             type: 'User'
         } :
         {
@@ -331,34 +368,60 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             type: 'Contact'
         } :
         {
-            id: user.id,
+            id: user.id.split('-')[0],
             type: 'User'
         }
-    let body = '\n';
-    if (user.userSettings?.addCallSessionId?.value ?? false) { body = upsertCallSessionId({ body, id: callLog.sessionId }); }
-    if (user.userSettings?.addCallLogContactNumber?.value ?? false) { body = upsertContactPhoneNumber({ body, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
-    if (user.userSettings?.addCallLogResult?.value ?? true) { body = upsertCallResult({ body, result: callLog.result }); }
-    if (user.userSettings?.addCallLogNote?.value ?? true) { body = upsertCallAgentNote({ body, note }); }
-    if (user.userSettings?.addCallLogDuration?.value ?? true) { body = upsertCallDuration({ body, duration: callLog.duration }); }
-    if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { body = upsertCallRecording({ body, recordingLink: callLog.recording.link }); }
-    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { body = upsertAiNote({ body, aiNote }); }
-    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { body = upsertTranscript({ body, transcript }); }
+
+    let assigneeId = null;
+    if (additionalSubmission?.isAssignedToUser) {
+        if (additionalSubmission.adminAssignedUserToken) {
+            try {
+                const unAuthData = jwt.decodeJwt(additionalSubmission.adminAssignedUserToken);
+                const assigneeUser = await UserModel.findByPk(unAuthData.id);
+                if (assigneeUser) {
+                    assigneeId = assigneeUser.platformAdditionalInfo.id;
+                }
+            }
+            catch (e) {
+                console.log('Error decoding admin assigned user token', e);
+            }
+        }
+
+        if (!assigneeId) {
+            const adminConfig = await AdminConfigModel.findByPk(hashedAccountId);
+            assigneeId = adminConfig.userMappings?.find(mapping => mapping.rcExtensionId === additionalSubmission.adminAssignedUserRcId)?.crmUserId;
+        }
+    }
+
+    if (assigneeId) {
+        switch (callLog.direction) {
+            case 'Outbound':
+                sender.id = assigneeId;
+                break;
+            case 'Inbound':
+                receiver.id = assigneeId;
+                break;
+        }
+    }
 
     let extraDataTracking = {
         withSmartNoteLog: !!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true),
         withTranscript: !!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)
     };
+    if (composedLogDetails === '') {
+        composedLogDetails = 'No details available';
+    }
     const postBody = {
         data: {
             subject: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phone}]`,
-            body,
+            body: composedLogDetails,
             type: 'PhoneCommunication',
             received_at: moment(callLog.startTime).toISOString(),
             senders: [sender],
             receivers: [receiver],
             notification_event_subscribers: [
                 {
-                    user_id: user.id
+                    user_id: user.id.split('-')[0]
                 }
             ]
         }
@@ -366,6 +429,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     if (additionalSubmission && additionalSubmission.matters) {
         postBody.data['matter'] = { id: additionalSubmission.matters };
     }
+
     const addLogRes = await axios.post(
         `https://${user.hostname}/api/v4/communications.json`,
         postBody,
@@ -382,7 +446,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             date: moment(callLog.startTime).toISOString(),
             type: 'TimeEntry',
             non_billable: additionalSubmission.nonBillable,
-            note: body
+            note: composedLogDetails
         }
     }
     const addTimerRes = await axios.post(
@@ -407,35 +471,36 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     };
 }
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript }) {
+async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript, additionalSubmission, composedLogDetails, existingCallLogDetails, hashedAccountId }) {
     const existingClioLogId = existingCallLog.thirdPartyLogId.split('.')[0];
     let extraDataTracking = {};
-    const getLogRes = await axios.get(
-        `https://${user.hostname}/api/v4/communications/${existingClioLogId}.json?fields=body,id`,
-        {
-            headers: { 'Authorization': authHeader }
-        });
-    let logBody = getLogRes.data.data.body;
+    // Use passed existingCallLogDetails to avoid duplicate API call
+    let getLogRes = null;
+    if (existingCallLogDetails) {
+        getLogRes = { data: { data: existingCallLogDetails } };
+    } else {
+        // Fallback to API call if details not provided
+        getLogRes = await axios.get(
+            `https://${user.hostname}/api/v4/communications/${existingClioLogId}.json?fields=body,id`,
+            {
+                headers: { 'Authorization': authHeader }
+            });
+    }
+
     let patchBody = {};
 
-    if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
-    if (!!existingCallLog.sessionId && (user.userSettings?.addCallSessionId?.value ?? false)) { logBody = upsertCallSessionId({ body: logBody, id: existingCallLog.sessionId }); }
-    if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
-    if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
-    if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink: decodeURIComponent(recordingLink) }); }
-    if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
-    if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
     patchBody = {
         data: {
-            body: logBody
+            body: composedLogDetails
         }
     }
     if (subject) { patchBody.data.subject = subject; }
     if (startTime) { patchBody.data.received_at = moment(startTime).toISOString(); }
     // duration - update Timer
     if (duration) {
+        const logId = existingCallLogDetails?.id || getLogRes.data.data.id;
         const getTimerRes = await axios.get(
-            `https://${user.hostname}/api/v4/activities?communication_id=${getLogRes.data.data.id}&fields=quantity,id`,
+            `https://${user.hostname}/api/v4/activities?communication_id=${logId}&fields=quantity,id`,
             {
                 headers: { 'Authorization': authHeader }
             }
@@ -444,7 +509,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             const patchTimerBody = {
                 data: {
                     quantity: duration,
-                    note: logBody,
+                    note: composedLogDetails,
                 }
             }
             if (startTime) {
@@ -456,6 +521,27 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
                 {
                     headers: { 'Authorization': authHeader }
                 });
+        }
+    }
+
+    let assigneeId = null;
+    if (additionalSubmission?.isAssignedToUser) {
+        const adminConfig = await AdminConfigModel.findByPk(hashedAccountId);
+        assigneeId = adminConfig.userMappings?.find(mapping => mapping.rcExtensionId === additionalSubmission.adminAssignedUserRcId)?.crmUserId;
+    }
+
+    if (assigneeId) {
+        if (getLogRes.data.data.senders[0].type === 'User') {
+            patchBody.data.senders = [{
+                id: assigneeId,
+                type: 'User'
+            }];
+        }
+        else if (getLogRes.data.data.receivers[0].type === 'User') {
+            patchBody.data.receivers = [{
+                id: assigneeId,
+                type: 'User'
+            }];
         }
     }
     const patchLogRes = await axios.patch(
@@ -521,7 +607,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     }
     const receiver =
     {
-        id: user.id,
+        id: user.id.split('-')[0],
         type: 'User'
     }
     const userInfoResponse = await axios.get(`https://${user.hostname}/api/v4/users/who_am_i.json?fields=name`, {
@@ -628,7 +714,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             receivers: [receiver],
             notification_event_subscribers: [
                 {
-                    user_id: user.id
+                    user_id: user.id.split('-')[0]
                 }
             ]
         }
@@ -711,11 +797,13 @@ async function getCallLog({ user, callLogId, authHeader }) {
     let extraDataTracking = {};
     const formattedLogId = callLogId.split('.')[0];
     const getLogRes = await axios.get(
-        `https://${user.hostname}/api/v4/communications/${formattedLogId}.json?fields=subject,body,matter,senders,receivers`,
+        `https://${user.hostname}/api/v4/communications/${formattedLogId}.json?fields=subject,body,matter,senders,receivers,id`,
         {
             headers: { 'Authorization': authHeader }
         });
-    const note = getLogRes.data.data.body.split('- Note: ')[1]?.split('\n')[0];
+    //const note = getLogRes.data.data.body.split('- Note: ')[1]?.split('\n')[0];
+    const noteRegex = /- (?:Note|Agent notes): ([\s\S]*?)(?=\n- [A-Z][a-zA-Z\s/]*:|\n$|$)/;
+    const note = getLogRes.data.data.body.match(noteRegex)?.[1]?.trim();
     const contactId = getLogRes.data.data.senders[0].type == 'Person' ?
         getLogRes.data.data.senders[0].id :
         getLogRes.data.data.receivers[0].id;
@@ -733,6 +821,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
         callLogInfo: {
             subject: getLogRes.data.data.subject,
             note,
+            fullBody: getLogRes?.data?.data?.body,
+            fullLogResponse: getLogRes.data.data,
             contactName: contactRes.data.data.name,
             dispositions: {
                 matters: getLogRes.data.data.matter?.id
@@ -741,94 +831,10 @@ async function getCallLog({ user, callLogId, authHeader }) {
         extraDataTracking
     }
 }
-
-function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
-    const phoneNumberRegex = RegExp('- Contact Number: (.+?)\n');
-    if (phoneNumberRegex.test(body)) {
-        body = body.replace(phoneNumberRegex, `- Contact Number: ${phoneNumber}\n`);
-    } else {
-        body += `- Contact Number: ${phoneNumber}\n`;
-    }
-    return body;
-}
-function upsertCallResult({ body, result }) {
-    const resultRegex = RegExp('- Result: (.+?)\n');
-    if (resultRegex.test(body)) {
-        body = body.replace(resultRegex, `- Result: ${result}\n`);
-    } else {
-        body += `- Result: ${result}\n`;
-    }
-    return body;
-}
-
-function upsertCallAgentNote({ body, note }) {
-    if (!note) {
-        return body;
-    }
-    const noteRegex = RegExp('- Note: ([\\s\\S]+?)\n');
-    if (noteRegex.test(body)) {
-        body = body.replace(noteRegex, `- Note: ${note}\n`);
-    }
-    else {
-        body += `- Note: ${note}\n`;
-    }
-    return body;
-}
-
-function upsertCallSessionId({ body, id }) {
-    const sessionIdRegex = RegExp('- Session Id: (.+?)\n');
-    if (sessionIdRegex.test(body)) {
-        body = body.replace(sessionIdRegex, `- Session Id: ${id}\n`);
-    } else {
-        body += `- Session Id: ${id}\n`;
-    }
-    return body;
-}
-
-function upsertCallDuration({ body, duration }) {
-    const durationRegex = RegExp('- Duration: (.+?)?\n');
-    if (durationRegex.test(body)) {
-        body = body.replace(durationRegex, `- Duration: ${secondsToHoursMinutesSeconds(duration)}\n`);
-    } else {
-        body += `- Duration: ${secondsToHoursMinutesSeconds(duration)}\n`;
-    }
-    return body;
-}
-
-
-function upsertCallRecording({ body, recordingLink }) {
-    const recordingLinkRegex = RegExp('- Call recording link: (.+?)\n');
-    if (!!recordingLink && recordingLinkRegex.test(body)) {
-        body = body.replace(recordingLinkRegex, `- Call recording link: ${recordingLink}\n`);
-    } else if (recordingLink) {
-        body += `- Call recording link: ${recordingLink}\n`;
-    }
-    return body;
-}
-
-function upsertAiNote({ body, aiNote }) {
-    const aiNoteRegex = RegExp('- AI Note:([\\s\\S]*?)--- END');
-    const clearedAiNote = aiNote.replace(/\n+$/, '');
-    if (aiNoteRegex.test(body)) {
-        body = body.replace(aiNoteRegex, `- AI Note:\n${clearedAiNote}\n--- END`);
-    } else {
-        body += `- AI Note:\n${clearedAiNote}\n--- END\n`;
-    }
-    return body;
-}
-
-function upsertTranscript({ body, transcript }) {
-    const transcriptRegex = RegExp('- Transcript:([\\s\\S]*?)--- END');
-    if (transcriptRegex.test(body)) {
-        body = body.replace(transcriptRegex, `- Transcript:\n${transcript}\n--- END`);
-    } else {
-        body += `- Transcript:\n${transcript}\n--- END\n`;
-    }
-    return body;
-}
 exports.getAuthType = getAuthType;
 exports.getOauthInfo = getOauthInfo;
 exports.getUserInfo = getUserInfo;
+exports.getUserList = getUserList;
 exports.createCallLog = createCallLog;
 exports.updateCallLog = updateCallLog;
 exports.upsertCallDisposition = upsertCallDisposition;
