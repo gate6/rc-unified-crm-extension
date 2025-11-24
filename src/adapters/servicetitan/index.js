@@ -8,6 +8,7 @@ const { CallLogModel } = require('@app-connect/core/models/CallLogModel');
 const { messageLogModel } = require('@app-connect/core/models/messageLogModel');
 const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
 const qs = require('qs');
+
 function getAuthType() {
     return 'apiKey';
 }
@@ -75,7 +76,6 @@ async function getUserInfo({ authHeader, additionalInfo }) {
 }
 
 async function unAuthorize({ user }) {
-    // remove user credentials
     user.accessToken = '';
     user.refreshToken = '';
     await user.save();
@@ -177,7 +177,6 @@ async function findContactWithName({ user, name }) {
     }
 }
 
-
 async function createContact({ user, phoneNumber, newContactName }) {
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -240,7 +239,7 @@ async function createContact({ user, phoneNumber, newContactName }) {
                 },
             }
         );
-        
+
         const createdContact = response.data;
 
         return {
@@ -295,50 +294,117 @@ async function getUserList({ user, authHeader }) {
     }
 }
 
+async function fetchJobs({ user, params = {} }) {
+    // Generic helper to fetch jobs from ServiceTitan JPM API
+    // params: an object of query parameters (e.g., { customerId, jobId, status })
+    try {
+        const auth = await getRefreshedAuthToken(user);
+        const tenantId = user.dataValues.platformAdditionalInfo.tenant;
+        const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+
+        const resp = await axios.get(
+            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${auth}`,
+                    'ST-App-Key': stAppKey
+                },
+                params
+            }
+        );
+
+        // ServiceTitan responses typically put results under `data` key
+        return resp.data?.data || [];
+    } catch (err) {
+        console.error('fetchJobs error:', err?.response?.data || err.message);
+        return [];
+    }
+}
 
 async function createCallLog({ user, contactInfo, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails, hashedAccountId }) {
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-    const subject = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+    // Fetch jobs of this customer
+    const jobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
+
+    const subject = callLog.customSubject
+        ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+
     let description = composedLogDetails;
 
-    if (note) {
-        description += `\n\n<b>Agent Notes</b><br>${note}`;
-    }
-
-    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+    if (note) description += `\n\n<b>Agent Notes</b><br>${note}`;
+    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
         description += `\n\n<b>AI Note</b><br>${aiNote}`;
+    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
+        description += `\n\n<b>Transcript</b><br>${transcript}`;
+
+    const contactId = contactInfo.id;
+
+    const noteBody = JSON.stringify({
+        text: JSON.stringify({
+            subject,
+            description,
+            start_date: moment(callLog.startTime).utc().toISOString(),
+            end_date: moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()
+        })
+    });
+
+    let addNoteRes;
+    let logType = 'note';
+
+    // ============================================
+    // CASE 1 → NO JOB FOUND → Create a CRM Note Only
+    // ============================================
+    if (!jobs || jobs.length === 0) {
+
+        addNoteRes = await axios.post(
+            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+            noteBody,
+            {
+                headers: {
+                    'Authorization': `Bearer ${auth}`,
+                    'ST-App-Key': stAppKey,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
     }
 
-    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-        description += `\n\n<b>Transcript</b><br>${transcript}`;
-    }
-    const contactId = contactInfo.id;
-    let postBody = JSON.stringify({
-        "text": JSON.stringify({
-                subject,
-                description,
-                start_date: moment(callLog.startTime).utc().toISOString(),
-                end_date: moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()
-            })
-    });
-    const addNoteRes = await axios.post(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
-        postBody,
-        {
-            headers: {
-                'Authorization': `Bearer ${auth}`,
-                'ST-App-Key': stAppKey,
-                'Content-Type': 'application/json'
+    // ============================================
+    // CASE 2 → JOB EXISTS → Update Job Summary
+    // ============================================
+    else {
+        // pick latest job using highest id
+        const latestJob = jobs.reduce((max, job) =>
+            job.id > max.id ? job : max
+        );
+
+        // Update summary with full description UI se bheja hua
+        const updateBody = {
+            summary: description
+        };
+
+        addNoteRes = await axios.patch(
+            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${latestJob.id}`,
+            updateBody,
+            {
+                headers: {
+                    'Authorization': `Bearer ${auth}`,
+                    'ST-App-Key': stAppKey,
+                    'Content-Type': 'application/json'
+                }
             }
-        });
+        );
+        logType = 'job';
+    }
 
     return {
-        logId: addNoteRes.data.id,
+        logId: `${addNoteRes.data.id}_${logType}`,
         returnMessage: {
-            message: 'Call log note created',
+            message: 'Call log handled',
             messageType: 'success',
             ttl: 2000
         },
@@ -357,54 +423,95 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
     let description = composedLogDetails;
 
-    if (note) {
-        description += `\n\n<b>Agent Notes</b><br>${note}`;
-    }
-
-    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+    if (note) description += `\n\n<b>Agent Notes</b><br>${note}`;
+    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
         description += `\n\n<b>AI Note</b><br>${aiNote}`;
-    }
-
-    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
         description += `\n\n<b>Transcript</b><br>${transcript}`;
-    }
+
     const contactId = existingCallLog.contactId;
-    let postBody = JSON.stringify({
-        "text": JSON.stringify({
+
+    let [realId, logType] = existingCallLog.thirdPartyLogId.split('_');
+    logType = logType || 'note'; // fallback
+
+    let newLogId;
+
+    // --------------------------- NOTE UPDATE --------------------------
+    if (logType === 'note') {
+
+        const postBody = JSON.stringify({
+            text: JSON.stringify({
                 subject,
                 description,
                 start_date: moment(startTime).utc().toISOString(),
                 end_date: moment(startTime).utc().add(duration, 'seconds').toISOString()
             })
-    });
-    const addNoteRes = await axios.post(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
-        postBody,
-        {
-            headers: {
-                'Authorization': `Bearer ${auth}`,
-                'ST-App-Key': stAppKey,
-                'Content-Type': 'application/json'
+        });
+
+        const addNoteRes = await axios.post(
+            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+            postBody,
+            {
+                headers: {
+                    'Authorization': `Bearer ${auth}`,
+                    'ST-App-Key': stAppKey,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        newLogId = `${addNoteRes.data.id}_note`;
+
+        let logID_db = await CallLogModel.findOne({
+            where: {
+                thirdPartyLogId: existingCallLog.thirdPartyLogId,
+                contactId: contactId
             }
         });
-    let logID_db = await CallLogModel.findOne({
-        where: {
-            thirdPartyLogId: existingCallLog.thirdPartyLogId,
-            contactId: existingCallLog.contactId
-        }})
-    if (logID_db) {
-        logID_db.sessionId = existingCallLog.sessionId;
-        logID_db.platform = existingCallLog.platform;
-        logID_db.userId = existingCallLog.userId;
-        logID_db.contactId = existingCallLog.contactId;
-        logID_db.thirdPartyLogId =  addNoteRes.data.id;
-        await logID_db.save();
+
+        if (logID_db) {
+            logID_db.thirdPartyLogId = newLogId;
+            await logID_db.save();
+        }
     }
+
+    // --------------------------- JOB UPDATE --------------------------
+    else {
+
+        const updateBody = { summary: description };
+
+        await axios.patch(
+            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${realId}`,
+            updateBody,
+            {
+                headers: {
+                    'Authorization': `Bearer ${auth}`,
+                    'ST-App-Key': stAppKey,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        newLogId = `${realId}_job`;
+
+        let logID_db = await CallLogModel.findOne({
+            where: {
+                thirdPartyLogId: existingCallLog.thirdPartyLogId,
+                contactId: contactId
+            }
+        });
+
+        if (logID_db) {
+            logID_db.thirdPartyLogId = newLogId;
+            await logID_db.save();
+        }
+    }
+
     return {
-        logId: addNoteRes.data.id,
+        logId: newLogId,
         updatedNote: description,
         returnMessage: {
-            message: 'Call log note created',
+            message: 'Call log updated',
             messageType: 'success',
             ttl: 2000
         },
@@ -416,7 +523,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 }
 
 async function upsertCallDisposition({ user, existingCallLog, authHeader, dispositions }) {
-    return{
+    return {
         returnMessage: {
             message: 'Call log note updated with disposition',
             messageType: 'success',
@@ -447,15 +554,17 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             description = `Fax document link: ${faxDocLink}`;
             break;
     }
+
     const contactId = contactInfo.id;
     let postBody = JSON.stringify({
         "text": JSON.stringify({
-                subject,
-                description,
-                start_date: moment(message.creationTime).utc().toISOString(),
-                end_date: moment(message.creationTime).utc().toISOString(),
-            })
+            subject,
+            description,
+            start_date: moment(message.creationTime).utc().toISOString(),
+            end_date: moment(message.creationTime).utc().toISOString(),
+        })
     });
+
     const addLogRes = await axios.post(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
         postBody,
@@ -498,15 +607,17 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
             description = `Fax document link: ${faxDocLink}`;
             break;
     }
+
     const contactId = contactInfo.id;
     let postBody = JSON.stringify({
         "text": JSON.stringify({
-                subject,
-                description,
-                start_date: moment(message.creationTime).utc().toISOString(),
-                end_date: moment(message.creationTime).utc().toISOString(),
-            })
+            subject,
+            description,
+            start_date: moment(message.creationTime).utc().toISOString(),
+            end_date: moment(message.creationTime).utc().toISOString(),
+        })
     });
+
     const addLogRes = await axios.post(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
         postBody,
@@ -515,17 +626,19 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
                 'Authorization': `Bearer ${auth}`,
                 'ST-App-Key': stAppKey,
                 'Content-Type': 'application/json'
-                
             }
         });
-        let messageLogID_db = await messageLogModel.findOne({
+
+    let messageLogID_db = await messageLogModel.findOne({
         where: {
             thirdPartyLogId: existingMessageLog.thirdPartyLogId,
-        }})
+        }
+    });
+
     if (messageLogID_db) {
         messageLogID_db.userId = existingMessageLog.userId;
         messageLogID_db.platform = existingMessageLog.platform;
-        messageLogID_db.thirdPartyLogId =  addLogRes.data.id;
+        messageLogID_db.thirdPartyLogId = addLogRes.data.id;
         await messageLogID_db.save();
     }
 
@@ -538,66 +651,100 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         }
     };
 }
+
 async function getCallLog({ user, callLogId, authHeader }) {
-    let existingCallLogDetails = await CallLogModel.findOne({
-        where: {
-            thirdPartyLogId: callLogId,
-        }});
-    let contactId = existingCallLogDetails.dataValues.contactId;
+    const [realId, logType = 'note'] = callLogId.split('_');
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
-    const getLogRes = await axios.get(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
-        {
-            headers: {
-                'Authorization': `Bearer ${auth}`,
-                'ST-App-Key': stAppKey
-            }
-        });
 
-    const logData = getLogRes.data;
-    let note = '';
     let subject = '';
+    let note = '';
     let full_data = {};
-    let start_date = '';
-    let end_date = '';
-    if (Array.isArray(logData.data)) {
-        for (let log of logData.data) {
-            if (log.id == callLogId) {
-            try {
-                // Unserialize the JSON string in log.text
-                const parsedText = JSON.parse(log.text);
 
-                // Assign extracted values
-                subject = parsedText.subject || '';
-                note = (
-                    parsedText.description?.includes('<b>Agent notes</b>')
-                        ? parsedText.description
-                            .split('<b>Agent notes</b>')[1]
-                            ?.split('<b>Call details</b>')[0]
-                            ?.replaceAll('<br>', '')
-                            ?.trim()
-                        : parsedText.description || ''
-                    ) || '';
-                start_date = parsedText.start_date || '';
-                end_date = parsedText.end_date || '';
-                full_data = parsedText;
-            } catch (err) {
-                console.error('Error parsing note text:', err);
-                note = log.text; // fallback to raw
+    try {
+        if (logType === 'job') {
+            const jobRes = await axios.get(
+                `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${realId}`,
+                {
+                    headers: { 'Authorization': `Bearer ${auth}`, 'ST-App-Key': stAppKey },
+                }
+            );
+
+            const jobData = jobRes.data;
+            if (jobData) {
+                subject = jobData.name || `Job #${jobData.id}`;
+                const summary = jobData.summary || '';
+
+                const agentNotesMarker = '<b>Agent Notes</b><br>';
+                const notesIndex = summary.indexOf(agentNotesMarker);
+
+                if (notesIndex !== -1) {
+                    const notesSection = summary.substring(notesIndex + agentNotesMarker.length);
+                    const nextSectionIndex = notesSection.indexOf('\n\n<b>');
+                    note = (nextSectionIndex !== -1 ? notesSection.substring(0, nextSectionIndex) : notesSection).trim();
+                }
+
+                full_data = { subject, description: summary };
             }
-            break;
+        } else { // 'note' type
+            const existingCallLogDetails = await CallLogModel.findOne({
+                where: { thirdPartyLogId: callLogId },
+            });
+
+            if (!existingCallLogDetails) {
+                console.error(`Could not find call log with thirdPartyLogId: ${callLogId}`);
+                return { callLogInfo: { subject: '', note: '', fullLogResponse: {} } };
+            }
+
+            const { contactId } = existingCallLogDetails.dataValues;
+            const getLogRes = await axios.get(
+                `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+                {
+                    headers: { 'Authorization': `Bearer ${auth}`, 'ST-App-Key': stAppKey },
+                }
+            );
+
+            const logData = getLogRes.data;
+            if (Array.isArray(logData.data)) {
+                const targetLog = logData.data.find(log => log.id == realId);
+                if (targetLog) {
+                    try {
+                        const parsedText = JSON.parse(targetLog.text);
+                        subject = parsedText.subject || '';
+                        const description = parsedText.description || '';
+
+                        const agentNotesMarker = '<b>Agent Notes</b><br>';
+                        const notesIndex = description.indexOf(agentNotesMarker);
+
+                        if (notesIndex !== -1) {
+                            const notesSection = description.substring(notesIndex + agentNotesMarker.length);
+                            const nextSectionIndex = notesSection.indexOf('\n\n<b>');
+                            note = (nextSectionIndex !== -1 ? notesSection.substring(0, nextSectionIndex) : notesSection).trim();
+                        } else {
+                            note = description;
+                        }
+
+                        full_data = parsedText;
+                    } catch (err) {
+                        console.error('Error parsing note text:', err);
+                        note = targetLog.text;
+                    }
+                }
             }
         }
+    } catch (error) {
+        console.error(`Failed to get call log for ${callLogId}:`, error?.response?.data || error.message);
     }
+
     return {
         callLogInfo: {
             subject,
             fullLogResponse: full_data,
             note,
-        }
-    }
+        },
+    };
 }
 
 function formatContact(rawContactInfo) {
@@ -615,12 +762,10 @@ async function getRefreshedAuthToken(user) {
     const { platformAdditionalInfo } = user.dataValues;
     const { client_id, client_secret, expiresAt } = platformAdditionalInfo;
 
-    // Check if the token is expired or will expire in the next minute
     if (Date.now() < expiresAt) {
         return user.dataValues.accessToken;
     }
 
-    // Token is expired, get a new one
     const tokenUrl = 'https://auth-integration.servicetitan.io/connect/token';
     const data = {
         grant_type: 'client_credentials',
@@ -642,7 +787,6 @@ async function getRefreshedAuthToken(user) {
     const expiresIn = authResponse.data.expires_in;
     const newExpiresAt = Date.now() + ((expiresIn - 60) * 1000);
 
-    // Update user's token and expiry info in the database
     user.accessToken = newAccessToken;
     user.platformAdditionalInfo = {
         ...platformAdditionalInfo,
