@@ -1,5 +1,5 @@
 {
-  "serverUrl": "https://unified-crm-extension.labs.ringcentral.com",
+  "serverUrl": "https://unpicaresque-rob-supersilently.ngrok-free.dev",
   "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
   "author": {
     "name": "RingCentral Labs",
@@ -1813,6 +1813,9 @@
           "videoLink": "https://youtu.be/pQgdsAR1UCI"
         }
       },
+      "contactPageUrl": "https://integration.servicetitan.com/#/customer/{contactId}",
+      "logPageUrl": "https://integration.servicetitan.com/#/customer/{contactId}",
+      "callPopUrl": "https://integration.servicetitan.com/#/customer/{contactId}",
       "settings": [
         {
           "id": "callLogDetails",
