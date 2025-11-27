@@ -335,6 +335,7 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
 
     let description = composedLogDetails;
 
+    if (note) description += `\n\n<b>Subject</b><br>${subject}`;
     if (note) description += `\n\n<b>Agent Notes</b><br>${note}`;
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
         description += `\n\n<b>AI Note</b><br>${aiNote}`;
@@ -422,7 +423,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     let description = composedLogDetails;
-
+    if (note) description += `\n\n<b>Subject</b><br>${subject}`;
     if (note) description += `\n\n<b>Agent Notes</b><br>${note}`;
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
         description += `\n\n<b>AI Note</b><br>${aiNote}`;
@@ -674,12 +675,17 @@ async function getCallLog({ user, callLogId, authHeader }) {
 
             const jobData = jobRes.data;
             if (jobData) {
-                subject = jobData.name || `Job #${jobData.id}`;
                 const summary = jobData.summary || '';
 
+                const subjectMarker = '<b>Subject</b><br>';
+                const subjectIndex = summary.indexOf(subjectMarker);
                 const agentNotesMarker = '<b>Agent Notes</b><br>';
                 const notesIndex = summary.indexOf(agentNotesMarker);
-
+                if (subjectIndex !== -1) {
+                    const subjectSection = summary.substring(subjectIndex + subjectMarker.length);
+                    const subjectSectionIndex = subjectSection.indexOf('\n\n<b>');
+                    subject = (subjectSectionIndex !== -1 ? subjectSection.substring(0, subjectSectionIndex) : subjectSection).trim();
+                }
                 if (notesIndex !== -1) {
                     const notesSection = summary.substring(notesIndex + agentNotesMarker.length);
                     const nextSectionIndex = notesSection.indexOf('\n\n<b>');
