@@ -78,7 +78,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
 
         const accessToken = authResponse.data.access_token;
 
-        // 5️⃣ Success response
+        // Success response
         return {
             successful: true,
             platformUserInfo: {
