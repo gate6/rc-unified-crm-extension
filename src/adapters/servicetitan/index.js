@@ -94,7 +94,7 @@ async function getUserInfo({ authHeader, additionalInfo }) {
             },
             returnMessage: {
                 messageType: 'success',
-                message: 'Connected via username/password.',
+                message: 'Connected to Service Titan.',
                 ttl: 1000
             }
         };
