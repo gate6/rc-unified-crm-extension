@@ -8,6 +8,10 @@ const { CallLogModel } = require('@app-connect/core/models/CallLogModel');
 const { messageLogModel } = require('@app-connect/core/models/messageLogModel');
 const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
 const qs = require('qs');
+const bcrypt = require('bcrypt');
+const { sequelize } = require('../servicenow-models/sequelize');
+const { initModels } = require('../servicenow-models/init-models');
+const models = initModels(sequelize);
 
 function getAuthType() {
     return 'apiKey';
@@ -17,61 +21,95 @@ function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}`).toString('base64');
 }
 
+
 async function getUserInfo({ authHeader, additionalInfo }) {
     try {
+        const { username, password } = additionalInfo;
+
+        // Fetch company using username only
+        const company = await models.companies.findOne({
+            where: { username }
+        });
+
+        if (!company) {
+            return {
+                successful: false,
+                returnMessage: {
+                    messageType: 'warning',
+                    message: 'Invalid username or password.',
+                    ttl: 3000
+                }
+            };
+        }
+
+        // Compare bcrypt password
+        const match = await bcrypt.compare(password, company.password);
+        if (!match) {
+            return {
+                successful: false,
+                returnMessage: {
+                    messageType: 'warning',
+                    message: 'Invalid username or password.',
+                    ttl: 3000
+                }
+            };
+        }
+
+        // Extract ST credentials
+        const client_id = company.clientId;
+        const client_secret = company.clientSecret;
+        const st_app_key = company.licenseKeyId;
+        const tenant = process.env.SERVICETITAN_TENANT;
+
+        // Get ST access token
         const tokenUrl = 'https://auth-integration.servicetitan.io/connect/token';
+
         const data = {
             grant_type: 'client_credentials',
-            client_id: additionalInfo.client_id,
-            client_secret: additionalInfo.client_secret
+            client_id,
+            client_secret
         };
+
         const authResponse = await axios.post(
             tokenUrl,
             qs.stringify(data),
-            {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                }
-            }
+            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
-        const overridingApiKey = authResponse.data.access_token;
-        const id = additionalInfo.client_id;
-        additionalInfo.expiresAt = Date.now() + ((authResponse.data.expires_in - 60) * 1000);
+
+        const accessToken = authResponse.data.access_token;
+
+        // 5️⃣ Success response
         return {
             successful: true,
             platformUserInfo: {
-                id,
-                overridingApiKey,
-                platformAdditionalInfo: additionalInfo
+                id: `st-${company.id}`,
+                overridingApiKey: accessToken,
+                platformAdditionalInfo: {
+                    client_id,
+                    client_secret,
+                    st_app_key,
+                    tenant,
+                    expiresAt: Date.now() + ((authResponse.data.expires_in - 60) * 1000)
+                }
             },
             returnMessage: {
                 messageType: 'success',
-                message: 'Connected to Service Titan.',
+                message: 'Connected via username/password.',
                 ttl: 1000
             }
-        }
-    }
-    catch (e) {
+        };
+
+    } catch (error) {
+        console.error("Auth error:", error);
+
         return {
             successful: false,
             returnMessage: {
                 messageType: 'warning',
-                message: 'Could not load user information Please check your credentials.',
-                details: [
-                    {
-                        title: 'Details',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: `Service Titan was unable to fetch information for the currently logged in user. Please check your permissions in Service Titan and make sure you have permission to access and read user information.`
-                            }
-                        ]
-                    }
-                ],
+                message: 'Failed to authenticate with ServiceTitan.',
                 ttl: 3000
             }
-        }
+        };
     }
 }
 

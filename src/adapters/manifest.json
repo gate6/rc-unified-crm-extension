@@ -1766,31 +1766,19 @@
                 }
               },
               {
-                "const": "client_id",
-                "title": "Client Id",
+                "const": "username",
+                "title": "Username",
                 "type": "string",
                 "required": true
               },
               {
-                "const": "client_secret",
-                "title": "Client Secret",
+                "const": "password",
+                "title": "Password",
                 "type": "string",
                 "required": true,
                 "uiSchema": {
                   "ui:widget": "password"
                 }
-              },
-              {
-                "const": "tenant",
-                "title": "Tenant ID",
-                "type": "string",
-                "required": true
-              },
-              {
-                "const": "st_app_key",
-                "title": "ST-App-Key",
-                "type": "string",
-                "required": true
               }
             ]
           }
