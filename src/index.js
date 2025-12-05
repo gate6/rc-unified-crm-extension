@@ -29,7 +29,7 @@ adapterRegistry.registerAdapter('insightly', insightly);
 adapterRegistry.registerAdapter('netsuite', netsuite);
 adapterRegistry.registerAdapter('pipedrive', pipedrive);
 adapterRegistry.registerAdapter('redtail', redtail);
-adapterRegistry.registerAdapter('servicetitan', servicetitan);
+adapterRegistry.registerAdapter('servicetitan', servicetitan, require('./adapters/servicetitan/manifest.json'));
 adapterRegistry.registerAdapter('servicenow', servicenow, require('./adapters/servicenow/manifest.json'));
 adapterRegistry.registerAdapter('testCRM', testCRM, require('./adapters/testCRM/manifest.json'));
 
