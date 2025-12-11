@@ -586,7 +586,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             break;
         case 'Voicemail':
             subject = `Voicemail from ${contactInfo.name}`;
-            description = `Voicemail recording link: ${recordingLink}`;
+            description = `Voicemail recording link: ${recordingLink}\n`;
             break;
         case 'Fax':
             subject = `Fax from ${contactInfo.name}`;
@@ -597,10 +597,10 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const contactId = contactInfo.id;
     let postBody = JSON.stringify({
         "text": JSON.stringify({
-            subject,
-            description,
             start_date: moment(message.creationTime).utc().toISOString(),
             end_date: moment(message.creationTime).utc().toISOString(),
+            subject,
+            description,
         })
     });
 
