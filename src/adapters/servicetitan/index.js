@@ -12,6 +12,11 @@ const bcrypt = require('bcrypt');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = initModels(sequelize);
+const fs = require('fs');
+const path = require('path');
+
+const manifestPath = path.join(__dirname, 'manifest.json');
+const manifestData = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
 function getAuthType() {
     return 'apiKey';
@@ -22,91 +27,72 @@ function getBasicAuth({ apiKey }) {
 }
 
 
-async function getUserInfo({ authHeader, additionalInfo }) {
+async function getUserInfo() {
     try {
-        const { username, password } = additionalInfo;
+        // Load values directly from manifest.json root
+        const clientId = manifestData.clientId;
+        const clientSecret = manifestData.clientSecret;
+        const tenantId = manifestData.tenantId;
+        const stAppKey = manifestData.stAppKey;
 
-        // Fetch company using username only
-        const company = await models.companies.findOne({
-            where: { username }
-        });
-
-        if (!company) {
+        if (!clientId || !clientSecret || !tenantId || !stAppKey) {
+            console.error("Missing ST config in manifest.json");
             return {
                 successful: false,
                 returnMessage: {
-                    messageType: 'warning',
-                    message: 'Invalid username or password.',
+                    messageType: "error",
+                    message: "ServiceTitan config missing in manifest file.",
                     ttl: 3000
                 }
             };
         }
 
-        // Compare bcrypt password
-        const match = await bcrypt.compare(password, company.password);
-        if (!match) {
-            return {
-                successful: false,
-                returnMessage: {
-                    messageType: 'warning',
-                    message: 'Invalid username or password.',
-                    ttl: 3000
-                }
-            };
-        }
+        // ST TOKEN GENERATION
+        const tokenUrl = "https://auth-integration.servicetitan.io/connect/token";
 
-        // Extract ST credentials
-        const client_id = company.clientId;
-        const client_secret = company.clientSecret;
-        const st_app_key = company.licenseKeyId;
-        const tenant = process.env.SERVICETITAN_TENANT;
-
-        // Get ST access token
-        const tokenUrl = 'https://auth-integration.servicetitan.io/connect/token';
-
-        const data = {
-            grant_type: 'client_credentials',
-            client_id,
-            client_secret
+        const tokenPayload = {
+            grant_type: "client_credentials",
+            client_id: clientId,
+            client_secret: clientSecret
         };
 
-        const authResponse = await axios.post(
+        const authRes = await axios.post(
             tokenUrl,
-            qs.stringify(data),
-            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+            qs.stringify(tokenPayload),
+            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
         );
 
-        const accessToken = authResponse.data.access_token;
+        const accessToken = authRes.data.access_token;
 
-        // Success response
+        // AUTO CONNECT RESPONSE
         return {
             successful: true,
             platformUserInfo: {
-                id: `st-${company.id}`,
+                id: `st-auto-user`,
                 overridingApiKey: accessToken,
                 platformAdditionalInfo: {
-                    client_id,
-                    client_secret,
-                    st_app_key,
-                    tenant,
-                    expiresAt: Date.now() + ((authResponse.data.expires_in - 60) * 1000)
+                    client_id: clientId,
+                    client_secret: clientSecret,
+                    st_app_key: stAppKey,
+                    tenant: tenantId,
+                    expiresAt: Date.now() + ((authRes.data.expires_in - 60) * 1000)
                 }
             },
             returnMessage: {
-                messageType: 'success',
-                message: 'Connected to Service Titan.',
-                ttl: 1000
+                messageType: "success",
+                message: "Connected to ServiceTitan.",
+                ttl: 1500
             }
         };
 
-    } catch (error) {
-        console.error("Auth error:", error);
+    } catch (err) {
+        console.error("AUTO ST LOGIN ERROR:", err?.response?.data || err.message);
 
         return {
             successful: false,
             returnMessage: {
-                messageType: 'warning',
-                message: 'Failed to authenticate with ServiceTitan.',
+                messageType: "error",
+                message: "Automatic ServiceTitan authentication failed.",
                 ttl: 3000
             }
         };
