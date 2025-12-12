@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "serverUrl": "https://neck-kai-zone-ham.trycloudflare.com",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6",
@@ -32,27 +32,12 @@
                         "content": [
                             {
                                 "const": "description",
-                                "description": "Please enter your Service Titan CRM credentials below",
+                                "description": "Please click connect to enable ServiceTitan integration.",
                                 "type": "string",
                                 "uiSchema": {
                                     "ui:field": "typography",
                                     "ui:variant": "body2",
                                     "ui:align": "center"
-                                }
-                            },
-                            {
-                                "const": "username",
-                                "title": "Username",
-                                "type": "string",
-                                "required": true
-                            },
-                            {
-                                "const": "password",
-                                "title": "Password",
-                                "type": "string",
-                                "required": true,
-                                "uiSchema": {
-                                    "ui:widget": "password"
                                 }
                             }
                         ]
@@ -172,5 +157,9 @@
             ]
         }
     },
-    "version": "1.6.6"
+    "version": "1.6.6",
+    "clientId": "cid.3v9vse751hd45srl9ydp899di",
+    "clientSecret": "cs1.toedyrk0f7ry6o0584wecldolfw8brkenufvfwy7ff9ym87154",
+    "tenantId": "985994799",
+    "stAppKey": "ak1.ersvt406wq6uiufl4rm8aw5nj"
 }
