@@ -372,7 +372,7 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
         text: `<b>${subject}</b><br>` +
                 `${description} <br>`+
                 `start_date: ${moment(callLog.startTime).utc().toISOString()}`+
-                `end_date: ${moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()}`+
+                `end_date: ${moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()}`
     }
     // const noteBody = {
     //     text: JSON.stringify({
