@@ -360,16 +360,14 @@ async function fetchJobs({ user, params = {} }) {
                     'ST-App-Key': stAppKey
                 },
                 params: jobParams,
-                paramsSerializer: {
-                    serialize: params =>
-                        Object.entries(params)
+                paramsSerializer: params =>
+                    Object.entries(params)
                         .flatMap(([key, val]) =>
-                            Array.isArray(val)
-                            ? val.map(v => `${key}=${v}`)
-                            : `${key}=${val}`
+                        Array.isArray(val)
+                            ? val.map(v => `${key}=${encodeURIComponent(v)}`)
+                            : `${key}=${encodeURIComponent(val)}`
                         )
                         .join('&')
-                }
             }
         );
 
