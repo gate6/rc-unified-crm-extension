@@ -516,7 +516,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
     description = stripHtml(description)
 
-    const subject = existingCallLog?.customSubject
+    let subject = existingCallLog?.customSubject
         ?? `${existingCallLog?.direction} Call ${existingCallLog?.direction === 'Outbound' ? 'to' : 'from'} ${existingCallLog?.name ?? 'Customer'}`;
 
     // if (note) description += `\n\nSubject</b><br>${subject}`;
