@@ -326,6 +326,24 @@ async function fetchJobs({ user, params = {} }) {
         const tenantId = user.dataValues.platformAdditionalInfo.tenant;
         const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
+        // Fetch statuses
+        const statusResp = await axios.get(
+            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/job-statuses`,
+            { 
+                headers: {
+                        'Authorization': `Bearer ${auth}`,
+                        'ST-App-Key': stAppKey
+                    } 
+            }
+        );
+
+        // Exclude unwanted
+        const allowedStatusIds = statusResp.data.data
+        .filter(s => !['Completed', 'Canceled'].includes(s.name))
+        .map(s => s.id);
+
+        params['statusIds'] = allowedStatusIds
+
         const resp = await axios.get(
             `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs`,
             {
