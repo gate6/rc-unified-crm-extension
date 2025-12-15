@@ -319,62 +319,25 @@ async function getUserList({ user, authHeader }) {
 }
 
 async function fetchJobs({ user, params = {} }) {
-    // Generic helper to fetch jobs from ServiceTitan JPM API
-    // params: an object of query parameters (e.g., { customerId, jobId, status })
     try {
         const auth = await getRefreshedAuthToken(user);
         const tenantId = user.dataValues.platformAdditionalInfo.tenant;
         const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-        // Fetch statuses
-        const statusResp = await axios.get(
-            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/job-statuses`,
-            { 
-                headers: {
-                        'Authorization': `Bearer ${auth}`,
-                        'ST-App-Key': stAppKey
-                    } 
-            }
-        );
-
-        // Exclude unwanted
-        const allowedStatusIds = statusResp.data.data
-        .filter(s => !['Completed', 'Canceled'].includes(s.name))
-        .map(s => s.id);
-
-        const jobParams = {
-            page: 1,
-            pageSize: 50,
-            ...params
-        };
-
-        if (allowedStatusIds.length) {
-            jobParams.statusIds = allowedStatusIds;
-        }
-
         const resp = await axios.get(
-            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs`,
+            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
                     'ST-App-Key': stAppKey
-                },
-                params: jobParams,
-                paramsSerializer: params =>
-                    Object.entries(params)
-                        .flatMap(([key, val]) =>
-                        Array.isArray(val)
-                            ? val.map(v => `${key}=${encodeURIComponent(v)}`)
-                            : `${key}=${encodeURIComponent(val)}`
-                        )
-                        .join('&')
+                }
             }
         );
 
         // ServiceTitan responses typically put results under `data` key
         return resp.data?.data || [];
     } catch (err) {
-        console.error('fetchJobs error:', err?.response?.data || err.message);
+        console.error('fetchJobs error:', err?.response?.data, err?.response, err);
         return [];
     }
 }
