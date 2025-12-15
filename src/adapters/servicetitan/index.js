@@ -363,6 +363,15 @@ async function fetchJobs({ user, params = {} }) {
     }
 }
 
+function stripHtml(html = '') {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/?[^>]+(>|$)/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+}
+
+
 async function createCallLog({ user, contactInfo, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails, hashedAccountId }) {
 
     const auth = await getRefreshedAuthToken(user);
@@ -377,20 +386,21 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
 
     let description = composedLogDetails;
 
+    description = stripHtml(description)
+
     // if (note) description += `<li><b>Subject</b><br>${subject}</li>`;
-    if (note) description += `Agent Notes ${note}`;
+    if (note) description += `Agent Notes ${note}\n`;
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
-        description += `AI Note ${aiNote}`;
+        description += `AI Note ${aiNote}\n`;
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
-        description += `Transcript ${transcript}`;
+        description += `Transcript ${transcript}\n`;
 
     const contactId = contactInfo.id;
 
+    const logTime = (callLog?.startTime && callLog?.duration) ? `start_date: ${moment(callLog.startTime).utc().toISOString()} \nend_date: ${moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()}` : ''
+
     const noteBody = {
-        text: `${subject}\n\n` +
-                `${description}`
-                // +`start_date: ${moment(callLog.startTime).utc().toISOString()}`+
-                // `end_date: ${moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()}`
+        text: `${subject}\n\n` + `${description}\n\n` + logTime
     }
     // const noteBody = {
     //     text: JSON.stringify({
