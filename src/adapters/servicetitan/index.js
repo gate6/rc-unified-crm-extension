@@ -796,7 +796,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
                 const targetLog = logData.data.find(log => log.id == realId);
                 if (targetLog) {
                     try {
-                        const parsedText = JSON.parse(targetLog.text);
+                        let parsedText = targetLog.text;
+                        try { parsedText = JSON.parse(targetLog.text); } catch {}
                         subject = parsedText.subject || '';
                         const description = parsedText.description || '';
 
