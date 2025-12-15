@@ -516,9 +516,6 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
     description = stripHtml(description)
 
-    subject = existingCallLog?.customSubject
-        ?? `${existingCallLog?.direction} Call ${existingCallLog?.direction === 'Outbound' ? 'to' : 'from'} ${existingCallLog?.name ?? 'Customer'}`;
-
     // if (note) description += `\n\nSubject</b><br>${subject}`;
     if (note) description += `Agent Notes ${note}\n`;
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
@@ -540,7 +537,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         const logTime = (startTime && duration) ? `start time: ${moment(startTime).utc().toISOString()} \nend time: ${moment(startTime).utc().add(duration, 'seconds').toISOString()}` : ''
 
         const postBody = {
-            text: `${subject}\n\n` + `${description}\n\n` + logTime
+            text: `${description}\n\n` + logTime
         }
 
         const addNoteRes = await axios.post(
