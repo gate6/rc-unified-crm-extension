@@ -378,17 +378,17 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
     let description = composedLogDetails;
 
     // if (note) description += `<li><b>Subject</b><br>${subject}</li>`;
-    if (note) description += `<li><b>Agent Notes</b><br>${note}</li>`;
+    if (note) description += `Agent Notes ${note}`;
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
-        description += `<li><b>AI Note</b><br>${aiNote}</li>`;
+        description += `AI Note ${aiNote}`;
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
-        description += `<li><b>Transcript</b><br>${transcript}</li>`;
+        description += `Transcript ${transcript}`;
 
     const contactId = contactInfo.id;
 
     const noteBody = {
-        text: `<b>${subject}</b><br>` +
-                `<ul>${description} </ul><br>`
+        text: `${subject}\n\n` +
+                `${description}`
                 // +`start_date: ${moment(callLog.startTime).utc().toISOString()}`+
                 // `end_date: ${moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()}`
     }
