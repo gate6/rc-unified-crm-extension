@@ -412,7 +412,7 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
         description += `AI Note ${aiNote}\n`;
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
-        description += `Transcript ${transcript}\n`;
+        description += `\nTranscript ${transcript}\n`;
     if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { description = upsertCallRecording({ body: description, recordingLink: callLog.recording.link }); }
 
     const contactId = contactInfo.id;
@@ -521,7 +521,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
         description += `AI Note ${aiNote}\n`;
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
-        description += `Transcript ${transcript}\n`;
+        description += `\nTranscript ${transcript}\n`;
      if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { description = upsertCallRecording({ body: description, recordingLink: decodeURIComponent(recordingLink) }); }
 
     const contactId = existingCallLog.contactId;
