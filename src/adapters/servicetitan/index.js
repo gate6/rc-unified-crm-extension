@@ -351,7 +351,17 @@ async function fetchJobs({ user, params = {} }) {
                     'Authorization': `Bearer ${auth}`,
                     'ST-App-Key': stAppKey
                 },
-                params
+                params,
+                paramsSerializer: {
+                    serialize: params =>
+                        Object.entries(params)
+                        .flatMap(([key, val]) =>
+                            Array.isArray(val)
+                            ? val.map(v => `${key}=${v}`)
+                            : `${key}=${val}`
+                        )
+                        .join('&')
+                }
             }
         );
 
