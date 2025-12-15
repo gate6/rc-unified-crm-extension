@@ -394,10 +394,11 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
         description += `AI Note ${aiNote}\n`;
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
         description += `Transcript ${transcript}\n`;
+    if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { body = upsertCallRecording({ body, recordingLink: callLog.recording.link }); }
 
     const contactId = contactInfo.id;
 
-    const logTime = (callLog?.startTime && callLog?.duration) ? `start_date: ${moment(callLog.startTime).utc().toISOString()} \nend_date: ${moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()}` : ''
+    const logTime = (callLog?.startTime && callLog?.duration) ? `start time: ${moment(callLog.startTime).utc().toISOString()} \nend time: ${moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()}` : ''
 
     const noteBody = {
         text: `${subject}\n\n` + `${description}\n\n` + logTime
@@ -474,6 +475,15 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
     };
 }
 
+function upsertCallRecording({ body, recordingLink }) {
+    const recordingLinkRegex = RegExp('- Call recording link: (.+?)\n');
+    if (!!recordingLink && recordingLinkRegex.test(body)) {
+        body = body.replace(recordingLinkRegex, `- Call recording link: ${recordingLink}\n`);
+    } else if (!!recordingLink) {
+        body += `- Call recording link: ${recordingLink}\n`;
+    }
+    return body;
+}
 
 async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript, additionalSubmission, composedLogDetails, existingCallLogDetails, hashedAccountId }) {
     const auth = await getRefreshedAuthToken(user);
@@ -490,6 +500,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         description += `AI Note ${aiNote}\n`;
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
         description += `Transcript ${transcript}\n`;
+     if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink: decodeURIComponent(recordingLink) }); }
 
     const contactId = existingCallLog.contactId;
 
@@ -501,14 +512,11 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // --------------------------- NOTE UPDATE --------------------------
     if (logType === 'note') {
 
-        const postBody = JSON.stringify({
-            text: JSON.stringify({
-                subject,
-                description,
-                start_date: moment(startTime).utc().toISOString(),
-                end_date: moment(startTime).utc().add(duration, 'seconds').toISOString()
-            })
-        });
+        const logTime = (startTime && duration) ? `start time: ${moment(startTime).utc().toISOString()} \nend time: ${moment(startTime).utc().add(duration, 'seconds').toISOString()}` : ''
+
+        const postBody = {
+            text: `${subject}\n\n` + `${description}\n\n` + logTime
+        }
 
         const addNoteRes = await axios.post(
             `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
