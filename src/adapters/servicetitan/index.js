@@ -417,7 +417,7 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
     // ============================================
     // CASE 1 → NO JOB FOUND → Create a CRM Note Only
     // ============================================
-    // if (!jobs || jobs.length === 0) {
+    if (!jobs || jobs.length === 0) {
 
         addNoteRes = await axios.post(
             `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
@@ -430,35 +430,35 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
                 }
             }
         );
-    // }
+    }
 
     // ============================================
     // CASE 2 → JOB EXISTS → Update Job Summary
     // ============================================
-    // else {
-    //     // pick latest job using highest id
-    //     const latestJob = jobs.reduce((max, job) =>
-    //         job.id > max.id ? job : max
-    //     );
+    else {
+        // pick latest job using highest id
+        const latestJob = jobs.reduce((max, job) =>
+            job.id > max.id ? job : max
+        );
 
-    //     // Update summary with full description UI se bheja hua
-    //     const updateBody = {
-    //         summary: description
-    //     };
+        // Update summary with full description UI se bheja hua
+        const updateBody = {
+            summary: description
+        };
 
-    //     addNoteRes = await axios.patch(
-    //         `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${latestJob.id}`,
-    //         updateBody,
-    //         {
-    //             headers: {
-    //                 'Authorization': `Bearer ${auth}`,
-    //                 'ST-App-Key': stAppKey,
-    //                 'Content-Type': 'application/json'
-    //             }
-    //         }
-    //     );
-    //     logType = 'job';
-    // }
+        addNoteRes = await axios.patch(
+            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${latestJob.id}`,
+            updateBody,
+            {
+                headers: {
+                    'Authorization': `Bearer ${auth}`,
+                    'ST-App-Key': stAppKey,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+        logType = 'job';
+    }
 
     return {
         logId: `${addNoteRes.data.id}_${logType}`,
@@ -481,12 +481,15 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     let description = composedLogDetails;
-    if (note) description += `\n\n<b>Subject</b><br>${subject}`;
-    if (note) description += `\n\n<b>Agent Notes</b><br>${note}`;
+
+    description = stripHtml(description)
+
+    // if (note) description += `\n\nSubject</b><br>${subject}`;
+    if (note) description += `Agent Notes ${note}\n`;
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
-        description += `\n\n<b>AI Note</b><br>${aiNote}`;
+        description += `AI Note ${aiNote}\n`;
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
-        description += `\n\n<b>Transcript</b><br>${transcript}`;
+        description += `Transcript ${transcript}\n`;
 
     const contactId = existingCallLog.contactId;
 
