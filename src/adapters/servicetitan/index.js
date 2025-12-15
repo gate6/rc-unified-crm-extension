@@ -403,6 +403,7 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
         ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
 
     let description = composedLogDetails;
+    console.log("description", description)
 
     description = stripHtml(description)
 
@@ -509,8 +510,14 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     let description = composedLogDetails;
+    console.log("update description", description)
+    console.log("existingCallLog", existingCallLog)
+    console.log("existingCallLogDetails", existingCallLogDetails)
 
     description = stripHtml(description)
+
+    const subject = existingCallLog?.customSubject
+        ?? `${existingCallLog?.direction} Call ${existingCallLog?.direction === 'Outbound' ? 'to' : 'from'} ${existingCallLog?.name ?? 'Customer'}`;
 
     // if (note) description += `\n\nSubject</b><br>${subject}`;
     if (note) description += `Agent Notes ${note}\n`;
