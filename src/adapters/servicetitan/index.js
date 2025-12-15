@@ -342,7 +342,15 @@ async function fetchJobs({ user, params = {} }) {
         .filter(s => !['Completed', 'Canceled'].includes(s.name))
         .map(s => s.id);
 
-        params['statusIds'] = allowedStatusIds
+        const jobParams = {
+            page: 1,
+            pageSize: 50,
+            ...params
+        };
+
+        if (allowedStatusIds.length) {
+            jobParams.statusIds = allowedStatusIds;
+        }
 
         const resp = await axios.get(
             `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs`,
@@ -351,7 +359,7 @@ async function fetchJobs({ user, params = {} }) {
                     'Authorization': `Bearer ${auth}`,
                     'ST-App-Key': stAppKey
                 },
-                params,
+                params: jobParams,
                 paramsSerializer: {
                     serialize: params =>
                         Object.entries(params)
