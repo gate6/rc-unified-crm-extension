@@ -26,77 +26,176 @@ function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}`).toString('base64');
 }
 
+async function getUserInfo(authHeader) {
+  const { hostname, additionalInfo } = authHeader;
+  const email = additionalInfo?.email;
 
-async function getUserInfo() {
-    try {
-        // Load values directly from manifest.json root
-        const clientId = manifestData.clientId;
-        const clientSecret = manifestData.clientSecret;
-        const tenantId = manifestData.tenantId;
-        const stAppKey = manifestData.stAppKey;
+  try {
+    const company = await models.companies.findOne({
+      where: { hostname },
+      include: [{ model: models.customer, as: 'customers', required: false }],
+      raw: false,
+      logging: false
+    });
 
-        if (!clientId || !clientSecret || !tenantId || !stAppKey) {
-            console.error("Missing ST config in manifest.json");
-            return {
-                successful: false,
-                returnMessage: {
-                    messageType: "error",
-                    message: "ServiceTitan config missing in manifest file.",
-                    ttl: 3000
-                }
-            };
+    // Company not found
+    if (!company) {
+      return {
+        successful: false,
+        platformUserInfo: {
+          id: "",
+          name: "",
+          timezoneName: "",
+          timezoneOffset: "",
+          platformAdditionalInfo: {}
+        },
+        returnMessage: {
+          messageType: 'danger',
+          message: 'Could not find the company details.',
+          ttl: 3000
         }
+      };
+    }
 
-        // ST TOKEN GENERATION
-        const tokenUrl = "https://auth-integration.servicetitan.io/connect/token";
+    const {
+      clientId,
+      clientSecret,
+      maxAllowedUsers,
+      status,
+      customers = []
+    } = company;
 
-        const tokenPayload = {
-            grant_type: "client_credentials",
-            client_id: clientId,
-            client_secret: clientSecret
-        };
+    const tenantId = manifestData.tenantId;
+    const stAppKey = manifestData.stAppKey;
 
-        const authRes = await axios.post(
-            tokenUrl,
-            qs.stringify(tokenPayload),
-            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-        );
+    // Config validation
+    if (!clientId || !clientSecret || !tenantId || !stAppKey) {
+      return {
+        successful: false,
+        returnMessage: {
+          messageType: 'error',
+          message: 'ServiceTitan configuration incomplete.',
+          ttl: 3000
+        }
+      };
+    }
 
-        const accessToken = authRes.data.access_token;
+    // License inactive
+    if (status !== true) {
+      return {
+        successful: false,
+        platformUserInfo: {
+          id: "",
+          name: "",
+          timezoneName: "",
+          timezoneOffset: "",
+          platformAdditionalInfo: {}
+        },
+        returnMessage: {
+          messageType: 'danger',
+          message: 'You do not have an active license. Please contact us.',
+          ttl: 3000
+        }
+      };
+    }
 
-        // AUTO CONNECT RESPONSE
-        return {
-            successful: true,
-            platformUserInfo: {
-                id: `st-auto-user`,
-                overridingApiKey: accessToken,
-                platformAdditionalInfo: {
-                    client_id: clientId,
-                    client_secret: clientSecret,
-                    st_app_key: stAppKey,
-                    tenant: tenantId,
-                    expiresAt: Date.now() + ((authRes.data.expires_in - 60) * 1000)
-                }
-            },
-            returnMessage: {
-                messageType: "success",
-                message: "Connected to ServiceTitan.",
-                ttl: 1500
-            }
-        };
-
-    } catch (err) {
-        console.error("AUTO ST LOGIN ERROR:", err?.response?.data || err.message);
-
+    // Check existing user
+    let customer = customers.find(c => c.email === email);
+    // Generate ServiceTitan token
+    const accessToken = await generateServiceTitanToken(clientId, clientSecret);
+    // Create user if not exists
+    if (!customer) {
+      if (customers.length >= maxAllowedUsers) {
         return {
             successful: false,
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
             returnMessage: {
-                messageType: "error",
-                message: "Automatic ServiceTitan authentication failed.",
+                messageType: 'danger',
+                message: `You are not having an active license. Please contact us.`,
                 ttl: 3000
             }
         };
+      }
+
+      await models.customer.create({
+        sysId: `st-user-${email}`,
+        email,
+        companyId: company.id,
+        hostname: hostname,
+        accessToken: accessToken,
+        tokenExpiry: Date.now() + ((900 - 60) * 1000),
+        platformAdditionalInfo: {
+          client_id: clientId,
+          client_secret: clientSecret,
+          st_app_key: stAppKey,
+          tenant: tenantId,
+          expiresAt: Date.now() + ((900 - 60) * 1000) // 15 min - 1 min buffer
+        },
+        status: true,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
     }
+
+    return {
+      successful: true,
+      platformUserInfo: {
+        id: `st-user-${email}`,
+        name: email,
+        email,
+        overridingApiKey: accessToken,
+        platformAdditionalInfo: {
+          client_id: clientId,
+          client_secret: clientSecret,
+          st_app_key: stAppKey,
+          tenant: tenantId,
+          expiresAt: Date.now() + ((900 - 60) * 1000) // 15 min - 1 min buffer
+        }
+      },
+      returnMessage: {
+        messageType: 'success',
+        message: 'Successfully connected to ServiceTitan.',
+        ttl: 3000
+      }
+    };
+
+  } catch (err) {
+    console.error('AUTO ST LOGIN ERROR:', err?.response?.data || err.message);
+
+    return {
+      successful: false,
+      returnMessage: {
+        messageType: 'error',
+        message: 'Automatic ServiceTitan authentication failed.',
+        ttl: 3000
+      }
+    };
+  }
+}
+
+
+// Helper function to generate ServiceTitan token
+async function generateServiceTitanToken(clientId, clientSecret) {
+    const tokenUrl = "https://auth-integration.servicetitan.io/connect/token";
+    const tokenPayload = {
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret
+    };
+
+    const authRes = await axios.post(
+        tokenUrl,
+        qs.stringify(tokenPayload),
+        { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
+
+    return authRes.data.access_token;
 }
 
 async function unAuthorize({ user }) {
