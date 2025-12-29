@@ -31,6 +31,12 @@ adapterRegistry.registerAdapter('pipedrive', pipedrive);
 adapterRegistry.registerAdapter('redtail', redtail);
 adapterRegistry.registerAdapter('servicetitan', servicetitan, require('./adapters/servicetitan/manifest.json'));
 adapterRegistry.registerAdapter('servicenow', servicenow, require('./adapters/servicenow/manifest.json'));
+adapterRegistry.registerAdapter('servicenow-powertest2', servicenow, require('./adapters/servicenow-powertest2/manifest.json'));
+adapterRegistry.registerAdapter('servicenow-kerridgecs', servicenow, require('./adapters/servicenow-kerridgecs/manifest.json'));
+adapterRegistry.registerAdapter('servicenow-spiegsa', servicenow, require('./adapters/servicenow-spiegsa/manifest.json'));
+adapterRegistry.registerAdapter('servicenow-ven06766', servicenow, require('./adapters/servicenow-ven06766/manifest.json'));
+adapterRegistry.registerAdapter('servicenow-cmscpidev', servicenow, require('./adapters/servicenow-cmscpidev/manifest.json'));
+adapterRegistry.registerAdapter('servicenow-cmscpi', servicenow, require('./adapters/servicenow-cmscpi/manifest.json'));
 adapterRegistry.registerAdapter('testCRM', testCRM, require('./adapters/testCRM/manifest.json'));
 
 // Create Express app with core functionality
