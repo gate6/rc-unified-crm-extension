@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "serverUrl": "https://driver-worlds-makers-slideshow.trycloudflare.com",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6",
@@ -163,9 +163,5 @@
             ]
         }
     },
-    "version": "1.6.6",
-    "clientId": "cid.3v9vse751hd45srl9ydp899di",
-    "clientSecret": "cs1.toedyrk0f7ry6o0584wecldolfw8brkenufvfwy7ff9ym87154",
-    "tenantId": "985994799",
-    "stAppKey": "ak1.ersvt406wq6uiufl4rm8aw5nj"
+    "version": "1.6.6"
 }
