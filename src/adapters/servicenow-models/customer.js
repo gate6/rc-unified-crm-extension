@@ -22,11 +22,11 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: true
     },
     accessToken: {
-      type: DataTypes.STRING(2000),
+      type: DataTypes.STRING(20000),
       allowNull: true
     },
     refreshToken: {
-      type: DataTypes.STRING(2000),
+      type: DataTypes.STRING(20000),
       allowNull: true
     },
     tokenExpiry: {
