@@ -182,7 +182,7 @@ async function getUserInfo(authHeader) {
 
 // Helper function to generate ServiceTitan token
 async function generateServiceTitanToken(clientId, clientSecret) {
-    const tokenUrl = "https://auth-integration.servicetitan.io/connect/token";
+    const tokenUrl = process.env.SERVICETITAN_ACCESS_TOKEN_URI;
     const tokenPayload = {
         grant_type: "client_credentials",
         client_id: clientId,
@@ -924,7 +924,7 @@ async function getRefreshedAuthToken(user) {
         return user.dataValues.accessToken;
     }
 
-    const tokenUrl = 'https://auth-integration.servicetitan.io/connect/token';
+    const tokenUrl = process.env.SERVICETITAN_ACCESS_TOKEN_URI;
     const data = {
         grant_type: 'client_credentials',
         client_id: client_id,
