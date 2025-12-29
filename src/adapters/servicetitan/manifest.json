@@ -30,15 +30,21 @@
                     "page": {
                         "title": "Service Titan",
                         "content": [
-                            {
+                             {
                                 "const": "description",
-                                "description": "Please click connect to enable ServiceTitan integration.",
+                                "description": "Please enter your Service Titan CRM credentials below",
                                 "type": "string",
                                 "uiSchema": {
                                     "ui:field": "typography",
                                     "ui:variant": "body2",
                                     "ui:align": "center"
                                 }
+                            },
+                            {
+                                "const": "email",
+                                "title": "Email",
+                                "type": "string",
+                                "required": true
                             }
                         ]
                     }
