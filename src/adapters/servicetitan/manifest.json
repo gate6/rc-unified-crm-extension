@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://driver-worlds-makers-slideshow.trycloudflare.com",
+    "serverUrl": "https://rc-crmapi.test.gate6.com",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6",
