@@ -12,11 +12,6 @@ const bcrypt = require('bcrypt');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = initModels(sequelize);
-const fs = require('fs');
-const path = require('path');
-
-const manifestPath = path.join(__dirname, 'manifest.json');
-const manifestData = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
 function getAuthType() {
     return 'apiKey';
@@ -62,11 +57,10 @@ async function getUserInfo(authHeader) {
       clientSecret,
       maxAllowedUsers,
       status,
+      tenantId,
+      apiKey : stAppKey,
       customers = []
     } = company;
-
-    const tenantId = manifestData.tenantId;
-    const stAppKey = manifestData.stAppKey;
 
     // Config validation
     if (!clientId || !clientSecret || !tenantId || !stAppKey) {
