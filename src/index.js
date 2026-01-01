@@ -31,6 +31,7 @@ adapterRegistry.registerAdapter('pipedrive', pipedrive);
 adapterRegistry.registerAdapter('redtail', redtail);
 adapterRegistry.registerAdapter('servicetitan', servicetitan, require('./adapters/servicetitan/manifest.json'));
 adapterRegistry.registerAdapter('servicenow', servicenow, require('./adapters/servicenow/manifest.json'));
+adapterRegistry.registerAdapter('servicenow-dev226973', servicenow, require('./adapters/servicenow-dev226973/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-powertest2', servicenow, require('./adapters/servicenow-powertest2/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-kerridgecs', servicenow, require('./adapters/servicenow-kerridgecs/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-spiegsa', servicenow, require('./adapters/servicenow-spiegsa/manifest.json'));
