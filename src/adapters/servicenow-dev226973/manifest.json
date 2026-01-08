@@ -1,0 +1,269 @@
+{
+    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
+    "author": {
+        "name": "Gate6",
+        "websiteUrl": "https://www.gate6.com/",
+        "iconUrl": "https://www.gate6.com/images/gate6.png",
+        "supportUrl": "https://www.gate6.com/contact-us/"
+    },
+    "platforms": {
+        "servicenow": {
+            "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+            "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
+            "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
+            "urlIdentifier": "*service-now.com*",
+            "name": "servicenow",
+            "displayName": "servicenow",
+            "enableExtensionNumberLoggingSetting": true,
+            "clickToDialMatchAllNumbers": true,
+            "requestConfig": {
+                "timeout": 30
+            },
+            "auth": {
+                "type": "oauth",
+                "apiKey": {
+                    "page": {
+                        "title": "test CRM",
+                        "content": [
+                            {
+                                "const": "apiKey",
+                                "title": "apiKey",
+                                "type": "string",
+                                "required": true
+                            }
+                        ]
+                    }
+                },
+                "oauth": {
+                    "authUrl": "https://dev226973.service-now.com/oauth_auth.do",
+                    "clientId": "078940fa67f14fabade2dcc29d5581b5",
+                    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
+                    "customState": "",
+                    "scope": ""
+                }
+            },
+            "customState": "",
+            "scope": "",
+            "canOpenLogPage": true,
+            "contactPageUrl": "https://dev226973.service-now.com/customer_contact.do?sys_id={contactId}",
+            "logPageUrl": "https://dev226973.service-now.com/interaction.do?sys_id={logId}",
+            "callPopUrl": "https://dev226973.service-now.com/interaction_list.do?sysparm_query=opened_for={contactId}",
+            "embeddedOnCrmPage": {
+                "welcomePage": {
+                    "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
+                    "videoLink": "https://youtu.be/pQgdsAR1UCI"
+                }
+            },
+            "settings": [
+                {
+                    "id": "serviceNowState",
+                    "type": "section",
+                    "name": "serviceNow Interaction State Options",
+                    "items": [
+                        {
+                            "id": "stateMatchWarning",
+                            "name": "Info: note action matching warning",
+                            "type": "warning",
+                            "value": "Note action value match ignores cases and spaces"
+                        },
+                        {
+                            "id": "serviceNowInboundCallState",
+                            "type": "inputField",
+                            "name": "Default action for inbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowOutboundCallState",
+                            "type": "inputField",
+                            "name": "Default action for outbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowMessageState",
+                            "type": "inputField",
+                            "name": "Default action for SMS",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowVoicemailState",
+                            "type": "inputField",
+                            "name": "Default action for voicemails",
+                            "placeholder": "Enter action value"
+                        }
+                    ]
+                },
+                {
+                    "id": "serviceNowType",
+                    "type": "section",
+                    "name": "serviceNow Interaction Type options",
+                    "items": [
+                        {
+                            "id": "typeMatchWarning",
+                            "name": "Info: note action matching warning",
+                            "type": "warning",
+                            "value": "Note action value match ignores cases and spaces"
+                        },
+                        {
+                            "id": "serviceNowInboundCallType",
+                            "type": "inputField",
+                            "name": "Default action for inbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowOutboundCallType",
+                            "type": "inputField",
+                            "name": "Default action for outbound calls",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowMessageType",
+                            "type": "inputField",
+                            "name": "Default action for SMS",
+                            "placeholder": "Enter action value"
+                        },
+                        {
+                            "id": "serviceNowVoicemailType",
+                            "type": "inputField",
+                            "name": "Default action for voicemails",
+                            "placeholder": "Enter action value"
+                        }
+                    ]
+                }
+            ],
+            "page": {
+                "callLog": {
+                    "additionalFields": [
+                        {
+                            "const": "state",
+                            "title": "State",
+                            "type": "selection",
+                            "contactDependent": true,
+                            "allowCustomValue": true,
+                            "defaultSettingId": "serviceNowState",
+                            "defaultSettingValues": {
+                                "inboundCall": {
+                                    "settingId": "serviceNowInboundCallState"
+                                },
+                                "outboundCall": {
+                                    "settingId": "serviceNowOutboundCallState"
+                                }
+                            }
+                        },
+                        {
+                            "const": "type",
+                            "title": "Type",
+                            "type": "selection",
+                            "contactDependent": true,
+                            "allowCustomValue": true,
+                            "defaultSettingId": "serviceNowType",
+                            "defaultSettingValues": {
+                                "inboundCall": {
+                                    "settingId": "serviceNowInboundCallType"
+                                },
+                                "outboundCall": {
+                                    "settingId": "serviceNowOutboundCallType"
+                                }
+                            }
+                        }
+                    ]
+                },
+                "messageLog": {
+                    "additionalFields": [
+                        {
+                            "const": "matters",
+                            "title": "Matter",
+                            "type": "selection",
+                            "contactDependent": true
+                        },
+                        {
+                            "const": "state",
+                            "title": "State",
+                            "type": "selection",
+                            "contactDependent": true
+                        },
+                        {
+                            "const": "type",
+                            "title": "Type",
+                            "type": "selection",
+                            "contactDependent": true
+                        }
+                    ]
+                },
+                "feedback": {
+                    "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}",
+                    "elements": [
+                        {
+                            "const": "pageDescription",
+                            "title": "RingCentral CRM Extension is currently in beta. We welcome any problem reports, feedback, ideas and feature requests you may have.",
+                            "type": "string",
+                            "bold": false
+                        },
+                        {
+                            "const": "scoreDescription",
+                            "title": "How likely are you to recommend the Unified CRM Extension to a friend or colleague?",
+                            "type": "string",
+                            "bold": true
+                        },
+                        {
+                            "const": "score",
+                            "title": "Score from 1 to 10",
+                            "type": "selection",
+                            "selections": [
+                                {
+                                    "const": "1",
+                                    "title": "1"
+                                },
+                                {
+                                    "const": "2",
+                                    "title": "2"
+                                },
+                                {
+                                    "const": "3",
+                                    "title": "3"
+                                },
+                                {
+                                    "const": "4",
+                                    "title": "4"
+                                },
+                                {
+                                    "const": "5",
+                                    "title": "5"
+                                },
+                                {
+                                    "const": "6",
+                                    "title": "6"
+                                },
+                                {
+                                    "const": "7",
+                                    "title": "7"
+                                },
+                                {
+                                    "const": "8",
+                                    "title": "8"
+                                },
+                                {
+                                    "const": "9",
+                                    "title": "9"
+                                },
+                                {
+                                    "const": "10",
+                                    "title": "10"
+                                }
+                            ],
+                            "required": true
+                        },
+                        {
+                            "const": "feedback",
+                            "title": "Feedback",
+                            "type": "inputField",
+                            "placeholder": "Please share your feedback...",
+                            "required": true
+                        }
+                    ]
+                }
+            }
+        }
+    },
+    "version": "1.6.12"
+}

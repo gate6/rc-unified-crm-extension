@@ -1,5 +1,72 @@
 # Release notes
 
+## 1.6.6:
+
+- New: Server-side call logging now supports user mapping configuration in the admin tab, allowing admin users to log calls on behalf of other users
+- Fix: Redtail now properly displays middle names
+- Fix: Server-side call logging now displays RingCentral user names in the correct order within log details
+- Fix: Server-side call logging now shows the correct RingCentral user name instead of displaying the Caller ID
+
+## 1.6.5:
+
+- New: Support call journey in call logging details with server side logging
+- Better: Tabs orders updated
+- Fix: Date/Time display issue
+
+## 1.6.4:
+- New Add RingCentral user name and phone number in call details settings
+- Better: Server-side call logging can now upload agent notes from the Chrome extension immediately after the call
+- Better: More intuitive date time user setting format
+- Fix: Return error message if server-side call logging is already created
+
+## 1.6.3:
+
+- New: Date time format in call details settings
+- Better: When doing server-side call logging, agent notes input from Chrome extension won't be overwritten by system
+- Better: When doing server-side call logging, agent notes input from Chrome extension will be auto uploaded
+- Fix: User report tab can now be toggled ON/OFF
+- Fix: Time format now follows operating system setting 
+- Bullhorn: Server-side call logging will only use API user session if it's configured with username and password
+
+## 1.6.2:
+
+- Fix: User session auth button now shows correct state
+- Fix: Auto log is not disabled by admin-only server side logging anymore
+- Fix: Playload too large issue
+
+## 1.6.1:
+
+- New: Support to logging AI notes for no admin users in server side logging
+- Fix: User report not showing number under dark theme
+- Fix: User setting shows '(admin)' for all users
+- Fix: User session refresh issue
+
+## 1.6.0:
+
+- New: User report tab to see calls and SMS messages made within selected date range
+- New: Clio option to see CLOSED matters (enable in User settings -> Clio options)
+- Fix: Pipedrive & Netsuite user session issue
+- Fix: Server side logging call duration stuck in 'pending' state
+
+## 1.5.8:
+
+- Fix: Error on showing a window-size warning message
+- Fix: Disconnected users shown as connected
+- Fix: Redtail disposition issue
+- Better: Every 5min, retroatively check recording links at pending state and update them to call logs
+- Better: More stable user session
+- Better: User settings sync message suppressed
+- Better: Webpage embed (Click-to-dial and Quick-access-button) urls setting is renamed to 'Enabled domains' under General -> Appearance
+
+## 1.5.7:
+
+- New: Bullhorn admin users can submit API username and password to avoid Bullhorn session expired in server side logging
+- New: Bullhorn server side logging supports to assign call notes to bullhorn user by RingCentral users' email mapping
+- Better: Message logs within the CRM are now consistently displayed in chronological order
+- Better: Added functionality to log Sales Orders and Opportunities in NetSuite with individual contacts in addition to customers.
+- Fix: wrong alert message when user click enter button in contact searching page
+- Fix: PipeDrive server side auto logging has 2 minutes delay
+
 ## 1.5.6:
 
 - New: Users can now log messages in Google Sheets. A new sheet titled "Message Logs" will be created for that.
@@ -7,8 +74,6 @@
 - Better: Improve user settings presentation
 - Fix: Bullhorn retroactive call log mistakenly putting 'pending note...' in Note Action
 - Fix: AI notes are now attached when doing retroactive call logging
-- Better: Message logs within the CRM are now consistently displayed in chronological order
-- Better: Added functionality to log Sales Orders and Opportunities in NetSuite with individual contacts in addition to customers.
 
 ## 1.5.5:
 
