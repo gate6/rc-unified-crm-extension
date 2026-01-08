@@ -31,6 +31,14 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    apiKey: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    tenantId: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
     username: {
       type: DataTypes.STRING(255),
       allowNull: true
