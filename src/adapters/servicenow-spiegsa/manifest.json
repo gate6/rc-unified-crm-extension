@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "serverUrl": "https://rcservicenowapi.gate6.com",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6",
@@ -16,6 +16,7 @@
             "name": "servicenow",
             "displayName": "servicenow",
             "enableExtensionNumberLoggingSetting": true,
+            "clickToDialMatchAllNumbers": true,
             "requestConfig": {
                 "timeout": 30
             },
@@ -35,8 +36,8 @@
                     }
                 },
                 "oauth": {
-                    "authUrl": "https://dev265460.service-now.com/oauth_auth.do",
-                    "clientId": "3f895581676a491397c46fa1917be779",
+                    "authUrl": "https://spiegsa.service-now.com/oauth_auth.do",
+                    "clientId": "7d6d10e0b3d84232a2c0206fcb2ac182",
                     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
                     "customState": "",
                     "scope": ""
@@ -45,8 +46,9 @@
             "customState": "",
             "scope": "",
             "canOpenLogPage": true,
-            "contactPageUrl": "https://dev265460.service-now.com/customer_contact.do?sys_id={contactId}",
-            "logPageUrl": "https://dev265460.service-now.com/interaction.do?sys_id={logId}",
+            "contactPageUrl": "https://spiegsa.service-now.com/customer_contact.do?sys_id={contactId}",
+            "logPageUrl": "https://spiegsa.service-now.com/interaction.do?sys_id={logId}",
+            "callPopUrl": "https://spiegsa.service-now.com/interaction_list.do?sysparm_query=opened_for={contactId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
                     "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",

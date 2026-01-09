@@ -3,14 +3,14 @@ const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
 const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById } = require('../servicenow-core/interaction');
-const { UserModel } = require('../../models/userModel');
+const { UserModel } = require('@app-connect/core/models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
 const Sequelize = require('sequelize');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { raw } = require('mysql2');
 const models = initModels(sequelize);
-const { secondsToHoursMinutesSeconds } = require('../../lib/util');
+const { secondsToHoursMinutesSeconds } = require('@app-connect/core/lib/util');
 const fs = require("fs");
 const path = require("path");
 const FormData = require("form-data");
@@ -65,6 +65,7 @@ async function getOauthInfo(requestData) {
     //         failMessage: 'RingCentral Account ID Missing'
     //     }; 
     // }
+    console.log("getOauthInfo requestData", requestData);
 
     const companyData = await models.companies.findOne({
         where: {
@@ -104,8 +105,6 @@ async function getOauthInfo(requestData) {
     //     attributes:['id','rcAccountId'],
     //     raw: true
     // })
-
-    // console.log("isRcIdPresent", isRcIdPresent)
 
     // if(!isRcIdPresent){
     //     return {
@@ -338,9 +337,10 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     // ----------------------------------------
 
     const numberToQueryArray = [];
+    console.log("authHeader", authHeader)
 
     if (overridingFormat === '') {
-        numberToQueryArray.push(phoneNumber.trim());
+        numberToQueryArray.push(phoneNumber.replace(/^\+/, ''));
     }
     else {
         const formats = overridingFormat.split(',');
@@ -366,10 +366,12 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
+    console.log("hostname", hostname)
+
     const companyData = await models.companies.findOne({
         where: {
             hostname: hostname,
-            status: 1
+            status: true
         }
     });
 
@@ -410,8 +412,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     // You can use parsePhoneNumber functions to further parse the phone number
     const matchedContactInfo = [];
-    const contactTable = (companyData?.contactTable == 'user' || isExtension) ? 'table/sys_user' : 'contact';
-
+    const isExtensionBool = isExtension === true || isExtension === 'true';
+    const contactTable = (companyData?.contactTable?.trim().toLowerCase() == 'user' || isExtensionBool) ? 'table/sys_user' : 'contact';
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
@@ -443,13 +445,9 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     //---CHECK.3: In console, if contact info is printed---
     //-----------------------------------------------------
     return {
-        matchedContactInfo,
-        returnMessage: {
-            messageType: 'success',
-            message: 'Successfully found contact.',
-            ttl: 3000
-        }
-    };  //[{id, name, phone, additionalInfo}]
+        successful: true,
+        matchedContactInfo
+    };
 }
 
 async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript }) {
@@ -471,7 +469,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
             hostname: userInfo.hostname,
-            status: 1
+            status: true
         },
         raw: true
     })
@@ -499,7 +497,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const companyData = await models.companies.findOne({
         where: {
             hostname: hostname,
-            status: 1
+            status: true
         }
     });
 
@@ -529,18 +527,21 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         }
     });
 
-    const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
+    // const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
 
     const postBody = {
         short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phoneNumber}]`,
-        work_notes: body ? `${workNotes} ${body}` : workNotes
+        work_notes: body //? `${workNotes} ${body}` : workNotes
     }
+
+    postBody.assigned_to = caller_id.data.result.id;
+
+    console.log("additionalSubmission", additionalSubmission)
 
     if (additionalSubmission && additionalSubmission.state){
     
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
         postBody.state =  returnedState ? returnedState : await findStateValueByName(hostname, authHeader, additionalSubmission.state);
-        postBody.assigned_to = caller_id.data.result.id;
         postBody.opened_for = contactInfo.id;
 
         if (additionalSubmission.type) {
@@ -563,7 +564,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         const fileName = `downloaded_audio_${timestamp}`;
         const s3Key = `${fileName}.mp3`;
         const s3Url = await downloadAudioFile(callLog?.recording?.downloadUrl, process.env.S3_BUCKET, s3Key);
-        await uploadToServiceNow(s3Url, instanceId, authHeader, addLogRes?.data?.result?.sys_id, fileName);
+        await uploadToServiceNow(s3Url, hostname, authHeader, addLogRes?.data?.result?.sys_id, fileName);
     }
 
     //----------------------------------------------------------------------------
@@ -577,6 +578,17 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             ttl: 3000
         }
     };
+}
+
+async function upsertCallDisposition({ user, existingCallLog, authHeader, callDisposition }) {
+    const existingLogId = existingCallLog.thirdPartyLogId;
+    if (callDisposition?.dispositionItem) {
+        // If has disposition item, check existence. If existing, update it, otherwise create it.
+        console.log("callDisposition", callDisposition?.dispositionItem);
+    }
+    return {
+        logId: existingLogId
+    }
 }
 
 function upsertCallAgentNote({ body, note }) {
@@ -700,7 +712,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         {
             headers: { 'Authorization': authHeader }
         });
-    const originalNote = getLogRes?.data?.result?.work_notes;
+    const originalNote = getLogRes?.data?.result?.work_notes ?? '';
     let patchBody = {};
 
     let logBody = originalNote;
@@ -713,7 +725,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
     patchBody = {
             short_description: subject,
-            work_notes: recordingLink ? logBody + `\nCall Recording Link: \n${recordingLink}` : logBody
+            work_notes: logBody
     }
 
     const patchLog = await axios.patch(
@@ -725,11 +737,12 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     );
 
     if (recordingDownloadLink) {
+        console.log("Downloading Recorded File...");
         const timestamp = moment().format("DD-MM-YYYY_HH_MM_SS");
         const fileName = `downloaded_audio_${timestamp}`;
         const s3Key = `${fileName}.mp3`;
         const s3Url = await downloadAudioFile(recordingDownloadLink, process.env.S3_BUCKET, s3Key);
-        await uploadToServiceNow(s3Url, instanceId, authHeader, existingLogId, fileName)
+        await uploadToServiceNow(s3Url, hostname, authHeader, existingLogId, fileName)
     }
 
     const patchLogRes = {
@@ -763,7 +776,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
             hostname: hostname,
-            status: 1
+            status: true
         },
         raw: true
     })
@@ -868,7 +881,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const companyData = await models.companies.findOne({
         where: {
             hostname: hostname,
-            status: 1
+            status: true
         }
     });
 
@@ -934,7 +947,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
     };
     const s3 = new AWS.S3(s3Values);
 
-    console.log("s3Values", s3Values);
+    console.log("Downloading Audio File...");
 
     try {
 
@@ -960,16 +973,16 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
         return uploadResult.Location;
 
     } catch (error) {
-        console.error("Error downloading or uploading audio:", error);
+        console.log("Error downloading or uploading audio:", error);
     }
 }
 
-async function uploadToServiceNow(s3Url, instanceId, accessToken, sys_id, fileName) {
-    const serviceNowURL = `https://${instanceId}.service-now.com/api/now/attachment/upload`;
+async function uploadToServiceNow(s3Url, hostname, accessToken, sys_id, fileName) {
+    const serviceNowURL = `https://${hostname}/api/now/attachment/upload`;
 
     try {
         const s3Key = decodeURIComponent(new URL(s3Url).pathname.substring(1));
-        console.log("Extracted S3 Key:", s3Key);
+        console.log("Extracted S3 Key, Uploading to ServiceNow...");
 
         const fileStream = await s3Helper.getObject(s3Key, "audio");
 
@@ -991,7 +1004,7 @@ async function uploadToServiceNow(s3Url, instanceId, accessToken, sys_id, fileNa
         console.log("File deleted from S3:", s3Key);
 
     } catch (error) {
-        console.error("Error uploading file:", error.response ? error.response.data : error.message);
+        console.log("Error uploading file:", error.response ? error.response.data : error.message);
     }
 }
 
@@ -1007,3 +1020,4 @@ exports.updateMessageLog = updateMessageLog;
 exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
+exports.upsertCallDisposition = upsertCallDisposition;
