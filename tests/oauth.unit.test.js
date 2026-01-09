@@ -1,13 +1,15 @@
 const { checkAndRefreshAccessToken } = require('@app-connect/core/lib/oauth');
+const dotenv = require('dotenv');
+dotenv.config();
 const { UserModel } = require('@app-connect/core/models/userModel');
 const { Lock } = require('@app-connect/core/models/dynamo/lockSchema');
-const { adapterRegistry } = require('@app-connect/core');
+const { connectorRegistry } = require('@app-connect/core');
 const nock = require('nock');
 const { encode } = require('@app-connect/core/lib/encode');
 
-adapterRegistry.setDefaultManifest(require('../src/adapters/manifest.json'));
-adapterRegistry.registerAdapter('bullhorn', require('../src/adapters/bullhorn'));
-adapterRegistry.registerAdapter('pipedrive', require('../src/adapters/pipedrive'));
+connectorRegistry.setDefaultManifest(require('../src/connectors/manifest.json'));
+connectorRegistry.registerConnector('bullhorn', require('../src/connectors/bullhorn'));
+connectorRegistry.registerConnector('pipedrive', require('../src/connectors/pipedrive'));
 
 // Mock the Lock model
 jest.mock('@app-connect/core/models/dynamo/lockSchema', () => ({
@@ -37,7 +39,7 @@ beforeEach(() => {
     Lock.create.mockReset();
     Lock.delete.mockReset();
     nock.cleanAll();
-    adapterRegistry.getManifest('default').platforms.pipedrive.auth.useTokenRefreshLock = true;
+    connectorRegistry.getManifest('default').platforms.pipedrive.auth.useTokenRefreshLock = true;
 });
 
 // Clear test data in db
@@ -48,7 +50,7 @@ afterEach(async () => {
         }
     });
     nock.cleanAll();
-    delete adapterRegistry.getManifest('default').platforms.pipedrive.auth.useTokenRefreshLock;
+    delete connectorRegistry.getManifest('default').platforms.pipedrive.auth.useTokenRefreshLock;
 });
 
 describe('oauth manage', () => {
@@ -366,7 +368,7 @@ describe('oauth manage', () => {
                 platform: 'bullhorn',
                 tokenExpiry: '2025-01-01T00:00:00.000Z',
                 platformAdditionalInfo: {
-                    restUrl: 'https://rest.bullhorn.com',
+                    restUrl: 'https://rest.bullhorn.com/',
                     bhRestToken: 'bhRestToken123'
                 }
             });
@@ -396,7 +398,7 @@ describe('oauth manage', () => {
                 platform: 'bullhorn',
                 tokenExpiry: '2025-01-01T00:00:00.000Z',
                 platformAdditionalInfo: {
-                    restUrl: 'https://rest.bullhorn.com',
+                    restUrl: 'https://rest.bullhorn.com/',
                     bhRestToken: 'bhRestToken123',
                     tokenUrl: 'https://auth.bullhorn.com/token',
                     loginUrl: 'https://auth.bullhorn.com'
@@ -426,7 +428,7 @@ describe('oauth manage', () => {
                 .query(true)
                 .reply(200, {
                     BhRestToken: 'newBhRestToken',
-                    restUrl: 'https://rest.bullhorn.com'
+                    restUrl: 'https://rest.bullhorn.com/'
                 });
 
             // Act
@@ -448,7 +450,7 @@ describe('oauth manage', () => {
                 platform: 'bullhorn',
                 tokenExpiry: '2025-01-01T00:00:00.000Z',
                 platformAdditionalInfo: {
-                    restUrl: 'https://rest.bullhorn.com',
+                    restUrl: 'https://rest.bullhorn.com/',
                     bhRestToken: 'bhRestToken123',
                     tokenUrl: 'https://auth.bullhorn.com/token',
                     loginUrl: 'https://auth.bullhorn.com'
@@ -476,7 +478,7 @@ describe('oauth manage', () => {
                 .query(true)
                 .reply(200, {
                     BhRestToken: 'newBhRestToken',
-                    restUrl: 'https://rest.bullhorn.com'
+                    restUrl: 'https://rest.bullhorn.com/'
                 });
 
             // Act
@@ -501,7 +503,7 @@ describe('oauth manage', () => {
                 platform: 'bullhorn',
                 tokenExpiry: '2025-01-01T00:00:00.000Z',
                 platformAdditionalInfo: {
-                    restUrl: 'https://rest.bullhorn.com',
+                    restUrl: 'https://rest.bullhorn.com/',
                     bhRestToken: 'bhRestToken123',
                     tokenUrl: 'https://auth.bullhorn.com/token',
                     loginUrl: 'https://auth.bullhorn.com',
@@ -546,7 +548,7 @@ describe('oauth manage', () => {
                 .query(true)
                 .reply(200, {
                     BhRestToken: 'newBhRestToken',
-                    restUrl: 'https://rest.bullhorn.com'
+                    restUrl: 'https://rest.bullhorn.com/'
                 });
 
             // Act
@@ -571,7 +573,7 @@ describe('oauth manage', () => {
                 platform: 'bullhorn',
                 tokenExpiry: '2025-01-01T00:00:00.000Z',
                 platformAdditionalInfo: {
-                    restUrl: 'https://rest.bullhorn.com',
+                    restUrl: 'https://rest.bullhorn.com/',
                     bhRestToken: 'bhRestToken123',
                     tokenUrl: 'https://auth.bullhorn.com/token',
                     loginUrl: 'https://auth.bullhorn.com',
@@ -626,7 +628,7 @@ describe('oauth manage', () => {
                 platform: 'bullhorn',
                 tokenExpiry: '2025-01-01T00:00:00.000Z',
                 platformAdditionalInfo: {
-                    restUrl: 'https://rest.bullhorn.com',
+                    restUrl: 'https://rest.bullhorn.com/',
                     bhRestToken: 'bhRestToken123',
                     tokenUrl: 'https://auth.bullhorn.com/token',
                     loginUrl: 'https://auth.bullhorn.com',
@@ -679,7 +681,7 @@ describe('oauth manage', () => {
                 platform: 'bullhorn',
                 tokenExpiry: '2025-01-01T00:00:00.000Z',
                 platformAdditionalInfo: {
-                    restUrl: 'https://rest.bullhorn.com',
+                    restUrl: 'https://rest.bullhorn.com/',
                     bhRestToken: 'bhRestToken123',
                     tokenUrl: 'https://auth.bullhorn.com/token',
                     loginUrl: 'https://auth.bullhorn.com'

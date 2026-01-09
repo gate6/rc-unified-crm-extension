@@ -5,7 +5,7 @@ App Connect's framework currently supports two different authentication modaliti
 * [OAuth](#connecting-to-a-crm-via-oauth). This is the most common form of authentication and authorization supported by most CRMs. 
 * [API keys](#connecting-to-a-crm-using-an-api-key). This less common method typically requires a CRM user to retrieve an auth string, often called an "API key," and saving it within the framework. This key is then transmitted with each API request to the CRM. 
 
-Start by editing the `platforms` object within your adapter's [manifest](manifest.md), and setting the `type` property under `auth` to either:
+Start by editing the `platforms` object within your connector's [manifest](manifest.md), and setting the `type` property under `auth` to either:
 
 * `oauth`
 * `apiKey`
@@ -14,7 +14,7 @@ Start by editing the `platforms` object within your adapter's [manifest](manifes
 
 When implementing OAuth, you will need to login to the target CRM as a developer to retrieve a client ID and client secret. Every CRM is different, so please consult the CRM's API documentation to learn how to generate these two values to uniquely identify your application that will be calling the CRM's APIs. 
 
-Once you have obtained these values, you will need to set the following values in your adapter's manifest:
+Once you have obtained these values, you will need to set the following values in your connector's manifest:
 
 | Name                             | Type   | Description |
 |----------------------------------|--------|-------------|
@@ -42,7 +42,7 @@ It should suffice standard OAuth use cases. If there's any special case, please 
 
 ### Implement server endpoints
 
-Within your adapter's `index.js` file, implement the following methods.
+Within your connector's `index.js` file, implement the following methods.
 
 * [`getAuthType`](interfaces/getAuthType.md)
 * [`getOauthInfo`](interfaces/getOauthInfo.md)
@@ -56,24 +56,12 @@ To auth a user via an API key, you need to present them with a form in which the
 
 ### Setup the auth page in the extension
 
-**Sample CRM adapter**
-
-=== "manifest.json"
-
-    ```js 
-    {!> src/adapters/testCRM/manifest.json [ln:22-36] !}
-    ```
-
-=== "Rendered page"
-
-    ![Auth page](../img/test-auth-page.png){ .md-200 }
-
-**Insightly adapter**
+**Insightly connector**
 
 === "manifest.json"
 
     ```js
-    {!> src/adapters/manifest.json [ln:262-294] !}
+    {!> src/connectors/manifest.json [ln:199-231] !}
     ```
 
 === "Rendered page"
@@ -82,7 +70,7 @@ To auth a user via an API key, you need to present them with a form in which the
 
 ### Implement server endpoints
 
-Within your adapter's `index.js` file, implement the following methods.
+Within your connector's `index.js` file, implement the following methods.
 
 * [`getAuthType`](interfaces/getAuthType.md)
 * [`getOauthInfo`](interfaces/getOauthInfo.md)
@@ -94,7 +82,7 @@ Just as one needs to log someone in, they need to log someone out.
 
 ### Implement server endpoints
 
-Within your adapter's `index.js` file, implement the following methods.
+Within your connector's `index.js` file, implement the following methods.
 
 * [`unAuthorize`](interfaces/unAuthorize.md)
 
@@ -102,8 +90,8 @@ Within your adapter's `index.js` file, implement the following methods.
 
 Now that the necessary server endpoints have been implemented, and the manifest updated, let's test authorization. 
 
-1. Refresh and or save the [Custom CRM config url](../users/developer-options.md#loading-custom-crm-adapter) setting under the extension's options. 
-   2. Access the Chrome extension. 
-3. Log out and log back into your CRM using the "Connect" button under the Settings tab, or by going through the appropriate CRM login and authorization flow for your adapter.
+1. Go to the [Developer Options](../users/developer-options.md) and click "Clear platform info." This will clear within App Connect any link to an existing CRM. It is not quite a "factory reset" but it is close. 
+2. Refresh and reload the App Connect window. When complete, you should be prompted to select the CRM you wish to connect to.  
+3. Connect to the CRM you are testing.
 4. Finally, check to see if any user info was saved in the database (`CHECK.1`)
 

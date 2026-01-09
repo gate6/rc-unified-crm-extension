@@ -2,10 +2,10 @@ name: Publish documentation
 on:
   push:
     branches:
-      - stable
+      - main
   pull_request:
     branches:
-      - stable
+      - main
       
 permissions:
   contents: write
@@ -27,4 +27,6 @@ jobs:
       - run: echo "Start"
       - run: pip install mkdocs-material 
       - run: pip install mdx_include 
+      - run: pip install mkdocs-badges
+      - run: pip install mkdocs-exclude
       - run: mkdocs gh-deploy --force
