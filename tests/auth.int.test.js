@@ -2,9 +2,9 @@ const request = require('supertest');
 const nock = require('nock');
 const platforms = require('./platformInfo.json');
 const { getServer } = require('../src/index');
-const jwt = require('../src/lib/jwt');
-const { UserModel } = require('../src/models/userModel');
-const oauth = require('../src/lib/oauth');
+const jwt = require('@app-connect/core/lib/jwt');
+const { UserModel } = require('@app-connect/core/models/userModel');
+const oauth = require('@app-connect/core/lib/oauth');
 
 // create test data
 const userId = 'userId';
@@ -48,7 +48,7 @@ describe('auth tests', () => {
 
                     // Assert
                     expect(res.status).toEqual(400);
-                    expect(res.error.text).toEqual('Missing callbackUri');
+                    expect(res.text).toEqual('Missing callbackUri');
                 })
                 test('no platform - error', async () => {
                     // Act
@@ -56,7 +56,7 @@ describe('auth tests', () => {
 
                     // Assert
                     expect(res.status).toEqual(400);
-                    expect(res.error.text).toEqual('Missing platform name');
+                    expect(res.text).toEqual('Missing platform name');
                 })
                 test('oauth callback - successful', async () => {
                     for (const platform of platforms) {
@@ -98,7 +98,7 @@ describe('auth tests', () => {
                         
                         // Verify JWT token contains correct data
                         const decodedToken = jwt.decodeJwt(res.body.jwtToken);
-                        expect(decodedToken.id).toEqual(platformUserId);
+                        expect(decodedToken.id).toEqual(`${platformUserId}-${platform.name}`);
                         expect(decodedToken.platform).toEqual(platform.name);
 
                         // Clean up
@@ -145,7 +145,7 @@ describe('auth tests', () => {
 
                 // Assert
                 expect(res.status).toEqual(400);
-                expect(res.error.text).toEqual('Please go to Settings and authorize CRM platform');
+                expect(res.text).toEqual('Please go to Settings and authorize CRM platform');
             });
         });
         describe('logout', () => {

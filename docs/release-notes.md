@@ -1,5 +1,190 @@
 # Release notes
 
+## 1.7.9
+
+- Better: Contact match speed optimized
+- Better: Minor improvements on calldown list 
+- New: Clio supports Company as new Contact type
+- Fix: Google Sheet and NetSuite warning notifications
+
+## 1.7.8
+
+- New: Error report feature on support page
+- New: Google Sheets admin now can setup target sheet for all users
+- Better: Calldown list supports better edit feature
+- Better: Connctor selection list can be opened back again
+- Fix: Call log record is shown with a wrong number after the call
+
+## 1.7.7
+
+- New: Admin report company stats now support grouping
+- New: Users can open back the platform selection page from user setting page
+
+## 1.7.6
+
+- New: Support to upload image in message as files in Clio
+- Fix: Duplicated contact pop when complete warm transfer
+- Fix: Multi-region auth
+
+## 1.7.5
+
+- Fix: A not found issue for call note cache
+- Better: Embedded URL list now defaults to all domain. (Meaning quick access button and click-to-dial widget will be rendered on all web pages by default)
+
+## 1.7.4
+
+- New: Auto restart server-side logging when call log details setting changed
+- New: Support to change quick access button size
+- New: Support to open log form when during a call
+- Fix: An edge case of unwanted call log in call queue scenario
+
+## 1.7.3
+
+- New: AI Conversation Expert (ACE) data logging in server side logging
+- New: New phone setting item to group phone related settings
+- Better: HUD enabled by default
+- Fix: A small issue on contact search feature
+- Fix: A small issue on embedded URLs
+- Fix: Server-side logging logged calls cannot be edited for the first attempt
+
+## 1.7.1
+
+- Better: Click-to-SMS now adds recipients so you can easily add multiple recipients
+- New: Auto log setting for voicemail
+- Fix: Remove open all matches in Call-pop since it's not natively supported by Bullhorn
+
+## 1.7.0
+
+Release notes page: https://appconnect.labs.ringcentral.com/2.0/
+
+## 1.6.17
+
+- Better: Contact match speed optimized
+- New: Clio supports Company as new Contact type
+- Fix: Google Sheet and NetSuite warning notifications
+
+## 1.6.16
+
+- Fix: Call log record is shown with a wrong number after the call
+
+## 1.6.15
+
+- Fix: Call log record is shown with a wrong number after the call
+
+## 1.6.14
+
+- Fix: Clio authorization issue of mistaking Clio land page as user dashboard page
+- Fix: Duplicated contact pop when complete warm transfer
+
+## 1.6.13
+
+- Fix: A not found issue for call note cache
+- Better: Embedded URL list now defaults to all domain. (Meaning quick access button and click-to-dial widget will be rendered on all web pages by default)
+
+## 1.6.12
+
+- New: Support AI Conversation Expert (ACE) logging with server-side logging
+- Fix: An edge case of unwanted call log in call queue scenario
+
+## 1.6.11
+
+- Fix: A small issue on contact search feature
+- Fix: A small issue on embedded URLs
+
+## 1.6.10
+
+- Better: Click-to-SMS now adds recipients so you can easily add multiple recipients
+- New: Auto log setting for voicemail
+- Fix: Remove open all matches in Call-pop since it's not natively supported by Bullhorn
+
+## 1.6.9
+
+- New: Server-side logging now supports multiple RingCentral users to be mapped under one CRM user
+- Fix: Google Sheets cannot select existing sheet
+- Fix: Server-side logging user mapping not working properly when running under multi-site scenarios
+
+## 1.6.8:
+
+- New: For Clio, Insightly and NetSuite, a new link on number formatter setting page to its working logic explanation in user guide  
+- Fix: Bullhorn server-side logging now returns warning message if api user password is wrong
+- Fix: Server-side logging, if it's created by one admin, the other admin will be able to see its status
+- Fix: Conference calls show wrong warning message
+
+## 1.6.7:
+
+- New: Clio now supports image/video media link in message logs
+- New: NetSuite salesOrder/opportunity association with native transaction field in phone call
+- New: NetSuite now supports Vendor as new contact type
+- Fix: Wrong default microphone device in some cases
+- Fix: Bullhorn user mapping now gets the full user list
+
+## 1.6.6:
+
+- New: Server-side call logging now supports user mapping configuration in the admin tab, allowing admin users to log calls on behalf of other users
+- Fix: Redtail now properly displays middle names
+- Fix: Server-side call logging now displays RingCentral user names in the correct order within log details
+- Fix: Server-side call logging now shows the correct RingCentral user name instead of displaying the Caller ID
+
+## 1.6.5:
+
+- New: Support call journey in call logging details with server side logging
+- Better: Tabs orders updated
+- Fix: Date/Time display issue
+
+## 1.6.4:
+- New Add RingCentral user name and phone number in call details settings
+- Better: Server-side call logging can now upload agent notes from the Chrome extension immediately after the call
+- Better: More intuitive date time user setting format
+- Fix: Return error message if server-side call logging is already created
+
+## 1.6.3:
+
+- New: Date time format in call details settings
+- Better: When doing server-side call logging, agent notes input from Chrome extension won't be overwritten by system
+- Better: When doing server-side call logging, agent notes input from Chrome extension will be auto uploaded
+- Fix: User report tab can now be toggled ON/OFF
+- Fix: Time format now follows operating system setting 
+- Bullhorn: Server-side call logging will only use API user session if it's configured with username and password
+
+## 1.6.2:
+
+- Fix: User session auth button now shows correct state
+- Fix: Auto log is not disabled by admin-only server side logging anymore
+- Fix: Playload too large issue
+
+## 1.6.1:
+
+- New: Support to logging AI notes for no admin users in server side logging
+- Fix: User report not showing number under dark theme
+- Fix: User setting shows '(admin)' for all users
+- Fix: User session refresh issue
+
+## 1.6.0:
+
+- New: User report tab to see calls and SMS messages made within selected date range
+- New: Clio option to see CLOSED matters (enable in User settings -> Clio options)
+- Fix: Pipedrive & Netsuite user session issue
+- Fix: Server side logging call duration stuck in 'pending' state
+
+## 1.5.8:
+
+- Fix: Error on showing a window-size warning message
+- Fix: Disconnected users shown as connected
+- Fix: Redtail disposition issue
+- Better: Every 5min, retroatively check recording links at pending state and update them to call logs
+- Better: More stable user session
+- Better: User settings sync message suppressed
+- Better: Webpage embed (Click-to-dial and Quick-access-button) urls setting is renamed to 'Enabled domains' under General -> Appearance
+
+## 1.5.7:
+
+- New: Bullhorn admin users can submit API username and password to avoid Bullhorn session expired in server side logging
+- New: Bullhorn server side logging supports to assign call notes to bullhorn user by RingCentral users' email mapping
+- Better: Message logs within the CRM are now consistently displayed in chronological order
+- Better: Added functionality to log Sales Orders and Opportunities in NetSuite with individual contacts in addition to customers.
+- Fix: wrong alert message when user click enter button in contact searching page
+- Fix: PipeDrive server side auto logging has 2 minutes delay
+
 ## 1.5.6:
 
 - New: Users can now log messages in Google Sheets. A new sheet titled "Message Logs" will be created for that.
@@ -7,8 +192,6 @@
 - Better: Improve user settings presentation
 - Fix: Bullhorn retroactive call log mistakenly putting 'pending note...' in Note Action
 - Fix: AI notes are now attached when doing retroactive call logging
-- Better: Message logs within the CRM are now consistently displayed in chronological order
-- Better: Added functionality to log Sales Orders and Opportunities in NetSuite with individual contacts in addition to customers.
 
 ## 1.5.5:
 

@@ -1,8 +1,8 @@
 const request = require('supertest');
 const { getServer } = require('../src/index');
-const { UserModel } = require('../src/models/userModel');
+const { UserModel } = require('@app-connect/core/models/userModel');
 const platforms = require('../tests/platformInfo.json');
-const jwt = require('../src/lib/jwt');
+const jwt = require('@app-connect/core/lib/jwt');
 
 const extensionId = 'extensionId';
 const accountId = 'accountId';
@@ -39,32 +39,6 @@ afterAll(async () => {
 });
 
 describe('misc tests', () => {
-    describe('get manifest', ()=>{
-        test('get manifest- no platformName - return default', async()=>{
-            // Act
-            const res = await request(getServer()).get('/crmManifest');
-
-            // Assert
-            expect(res.status).toEqual(200);
-            expect(res.body.author.name).toEqual('RingCentral Labs');
-        })
-        test('get manifest- has platformName - return platform manifest', async()=>{
-            // Act
-            const res = await request(getServer()).get('/crmManifest?platformName=testCRM');
-
-            // Assert
-            expect(res.status).toEqual(200);
-            expect(res.body.author.name).toEqual('Test Developer');
-        })
-        test('get manifest- has platformName but not valid - return error', async()=>{
-            // Act
-            const res = await request(getServer()).get('/crmManifest?platformName=unknownCRM');
-
-            // Assert
-            expect(res.status).toEqual(400);
-            expect(res.text).toEqual('Platform not found');
-        })
-    });
     describe('user info hash', () => {
         test('extensionId hash', async () => {
             // Act
@@ -83,7 +57,7 @@ describe('misc tests', () => {
 
             // Assert
             expect(res.status).toEqual(400);
-            expect(res.error.text).toEqual('Please go to Settings and authorize CRM platform');
+            expect(res.text).toEqual('Please go to Settings and authorize CRM platform');
         });
         test('bad jwt - 400', async () => {
             // Act

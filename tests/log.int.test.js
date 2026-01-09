@@ -1,11 +1,13 @@
 const request = require('supertest');
+const dotenv = require('dotenv');
+dotenv.config();
 const nock = require('nock');
 const { getServer } = require('../src/index');
-const jwt = require('../src/lib/jwt');
+const jwt = require('@app-connect/core/lib/jwt');
 const platforms = require('./platformInfo.json');
-const { CallLogModel } = require('../src/models/callLogModel');
-const { MessageLogModel } = require('../src/models/messageLogModel');
-const { UserModel } = require('../src/models/userModel');
+const { CallLogModel } = require('@app-connect/core/models/callLogModel');
+const { MessageLogModel } = require('@app-connect/core/models/messageLogModel');
+const { UserModel } = require('@app-connect/core/models/userModel');
 
 // create test data
 const userId = 'userId';
@@ -96,7 +98,7 @@ describe('call&message log tests', () => {
 
                 // Assert
                 expect(res.status).toEqual(400);
-                expect(res.error.text).toEqual('Please go to Settings and authorize CRM platform');
+                expect(res.text).toEqual('Please go to Settings and authorize CRM platform');
             });
         });
         describe('post jwt validation', () => {
@@ -113,7 +115,7 @@ describe('call&message log tests', () => {
 
                 // Assert
                 expect(res.status).toEqual(400);
-                expect(res.error.text).toEqual('Please go to Settings and authorize CRM platform');
+                expect(res.text).toEqual('Please go to Settings and authorize CRM platform');
             });
         });
         describe('patch jwt validation', () => {
@@ -130,7 +132,7 @@ describe('call&message log tests', () => {
 
                 // Assert
                 expect(res.status).toEqual(400);
-                expect(res.error.text).toEqual('Please go to Settings and authorize CRM platform');
+                expect(res.text).toEqual('Please go to Settings and authorize CRM platform');
             });
         });
         describe('get call log', () => {
@@ -334,16 +336,16 @@ describe('call&message log tests', () => {
                         recordingLink
                     }
                     const platformGetLogScope = nock(platform.domain)
+                        .persist()
                         .get(`${platform.callLogPath}/${thirdPartyLogId}`)
-                        .once()
                         .reply(200, {
                             data: {
                                 note: '<p>[Note] 123</p>'
                             }
                         });
                     const platformPatchLogScope = nock(platform.domain)
+                        .persist()
                         .patch(`${platform.callLogPath}/${thirdPartyLogId}`)
-                        .once()
                         .reply(200);
 
 
@@ -357,8 +359,7 @@ describe('call&message log tests', () => {
                     expect(res.body.updatedNote).toContain(recordingLink);
 
                     // Clean up
-                    platformGetLogScope.done();
-                    platformPatchLogScope.done();
+                    nock.cleanAll();
                 }
             });
             test('existing call log - update note - successful', async () => {
@@ -374,16 +375,16 @@ describe('call&message log tests', () => {
                         note: newNote
                     }
                     const platformGetLogScope = nock(platform.domain)
+                        .persist()
                         .get(`${platform.callLogPath}/${thirdPartyLogId}`)
-                        .once()
                         .reply(200, {
                             data: {
                                 note: '</p><p>[Note] orginalNote</p>'
                             }
                         });
                     const platformPatchLogScope = nock(platform.domain)
+                        .persist()
                         .patch(`${platform.callLogPath}/${thirdPartyLogId}`)
-                        .once()
                         .reply(200);
 
 
@@ -397,8 +398,7 @@ describe('call&message log tests', () => {
                     expect(res.body.updatedNote).toContain(newNote);
 
                     // Clean up
-                    platformGetLogScope.done();
-                    platformPatchLogScope.done();
+                    nock.cleanAll();
                 }
             });
         });
@@ -418,7 +418,7 @@ describe('call&message log tests', () => {
 
                 // Assert
                 expect(res.status).toEqual(400);
-                expect(res.error.text).toEqual('Please go to Settings and authorize CRM platform');
+                expect(res.text).toEqual('Please go to Settings and authorize CRM platform');
             });
         });
 

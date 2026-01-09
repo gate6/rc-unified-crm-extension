@@ -1,15 +1,21 @@
 const axios = require('axios');
 const nock = require('nock');
-const { validateAdminRole, upsertAdminSettings, getAdminSettings, getServerLoggingSettings, updateServerLoggingSettings } = require('../src/core/admin');
-const { AdminConfigModel } = require('../src/models/adminConfigModel');
-const { encode } = require('../src/lib/encode');
+const { validateAdminRole, upsertAdminSettings, getAdminSettings, getServerLoggingSettings, updateServerLoggingSettings } = require('@app-connect/core/handlers/admin');
+const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
+const { encode } = require('@app-connect/core/lib/encode');
+const { connectorRegistry } = require('@app-connect/core');
+const oauth = require('@app-connect/core/lib/oauth');
+
+connectorRegistry.setDefaultManifest(require('../src/connectors/manifest.json'));
+connectorRegistry.registerConnector('bullhorn', require('../src/connectors/bullhorn'));
+connectorRegistry.registerConnector('pipedrive', require('../src/connectors/pipedrive'));
 
 jest.mock('axios');
-jest.mock('../src/models/adminConfigModel');
+jest.mock('@app-connect/core/models/adminConfigModel');
 
 describe('admin.js tests', () => {
     const originalSecretKey = process.env.APP_SERVER_SECRET_KEY;
-    
+
     beforeEach(() => {
         jest.clearAllMocks();
         // Set up environment variable for encryption
@@ -135,10 +141,10 @@ describe('admin.js tests', () => {
             jest.clearAllMocks();
         });
 
-        test('should get server logging settings successfully with bullhorn adapter', async () => {
+        test('should get server logging settings successfully with bullhorn connector', async () => {
             const testUsername = 'test_username';
             const testPassword = 'test_password';
-            
+
             const user = {
                 platform: 'bullhorn',
                 platformAdditionalInfo: {
@@ -155,7 +161,7 @@ describe('admin.js tests', () => {
             });
         });
 
-        test('should handle missing encoded credentials in bullhorn adapter', async () => {
+        test('should handle missing encoded credentials in bullhorn connector', async () => {
             const user = {
                 platform: 'bullhorn',
                 platformAdditionalInfo: {}
@@ -171,7 +177,7 @@ describe('admin.js tests', () => {
 
         test('should return empty object when platform module does not have getServerLoggingSettings', async () => {
             const user = {
-                platform: 'mock', // mock adapter doesn't have getServerLoggingSettings
+                platform: 'pipedrive', // pipedrive connector doesn't have getServerLoggingSettings
                 platformAdditionalInfo: {}
             };
 
@@ -197,14 +203,16 @@ describe('admin.js tests', () => {
             jest.clearAllMocks();
         });
 
-        test('should update server logging settings successfully with bullhorn adapter', async () => {
+        test('should update server logging settings successfully with bullhorn connector', async () => {
             const testUsername = 'new_username';
             const testPassword = 'new_password';
-            
+
             const mockUser = {
                 platform: 'bullhorn',
                 platformAdditionalInfo: {
-                    existingProperty: 'existingValue'
+                    existingProperty: 'existingValue',
+                    tokenUrl: 'https://auth.bullhorn.com/token',
+                    loginUrl: 'https://mock-api.bullhorn.com'
                 },
                 save: jest.fn().mockResolvedValue(true)
             };
@@ -213,6 +221,31 @@ describe('admin.js tests', () => {
                 apiUsername: testUsername,
                 apiPassword: testPassword
             };
+
+            // Mock axios calls for bullhornPasswordAuthorize
+            const mockedAxios = axios;
+            mockedAxios.get.mockResolvedValueOnce({
+                headers: {
+                    'location': 'https://example.com/callback?code=mock_auth_code'
+                }
+            });
+            mockedAxios.post.mockResolvedValueOnce({
+                data: {
+                    BhRestToken: 'mock_bh_rest_token',
+                    restUrl: 'https://rest.mock.com'
+                }
+            });
+
+            // Mock oauth.getOAuthApp for the oauth token exchange
+            oauth.getOAuthApp = jest.fn().mockReturnValue({
+                code: {
+                    getToken: jest.fn().mockResolvedValue({
+                        accessToken: 'mock_access_token',
+                        refreshToken: 'mock_refresh_token',
+                        expires: 3600
+                    })
+                }
+            });
 
             const result = await updateServerLoggingSettings({ user: mockUser, additionalFieldValues });
 
@@ -230,11 +263,23 @@ describe('admin.js tests', () => {
             });
         });
 
-        test('should handle empty credentials in bullhorn adapter', async () => {
+        test('should handle empty credentials in bullhorn connector', async () => {
             const mockUser = {
                 platform: 'bullhorn',
-                platformAdditionalInfo: {},
-                save: jest.fn().mockResolvedValue(true)
+                platformAdditionalInfo: {
+                    tokenUrl: 'https://auth.bullhorn.com/token',
+                    loginUrl: 'https://mock-api.bullhorn.com'
+                },
+                update: jest.fn().mockImplementation(function(updateData) {
+                    // Actually update the mockUser object
+                    if (updateData.platformAdditionalInfo) {
+                        this.platformAdditionalInfo = {
+                            ...this.platformAdditionalInfo,
+                            ...updateData.platformAdditionalInfo
+                        };
+                    }
+                    return Promise.resolve(true);
+                })
             };
 
             const additionalFieldValues = {
@@ -242,19 +287,56 @@ describe('admin.js tests', () => {
                 apiPassword: ''
             };
 
+            // Mock axios calls for bullhornPasswordAuthorize
+            const mockedAxios = axios;
+            mockedAxios.get.mockResolvedValueOnce({
+                headers: {
+                    'location': 'https://example.com/callback?code=mock_auth_code'
+                }
+            });
+            mockedAxios.post.mockResolvedValueOnce({
+                data: {
+                    BhRestToken: 'mock_bh_rest_token',
+                    restUrl: 'https://rest.mock.com'
+                }
+            });
+
+            // Mock oauth.getOAuthApp for the oauth token exchange
+            oauth.getOAuthApp = jest.fn().mockReturnValue({
+                code: {
+                    getToken: jest.fn().mockResolvedValue({
+                        accessToken: 'mock_access_token',
+                        refreshToken: 'mock_refresh_token',
+                        expires: 3600
+                    })
+                }
+            });
+
             const result = await updateServerLoggingSettings({ user: mockUser, additionalFieldValues });
 
-            expect(mockUser.save).toHaveBeenCalled();
+            expect(mockUser.update).toHaveBeenCalled();
             expect(mockUser.platformAdditionalInfo.encodedApiUsername).toBe('');
             expect(mockUser.platformAdditionalInfo.encodedApiPassword).toBe('');
             expect(result.successful).toBe(true);
         });
 
-        test('should handle partial credentials in bullhorn adapter', async () => {
+        test('should handle partial credentials in bullhorn connector', async () => {
             const mockUser = {
                 platform: 'bullhorn',
-                platformAdditionalInfo: {},
-                save: jest.fn().mockResolvedValue(true)
+                platformAdditionalInfo: {
+                    tokenUrl: 'https://auth.bullhorn.com/token',
+                    loginUrl: 'https://mock-api.bullhorn.com'
+                },
+                update: jest.fn().mockImplementation(function(updateData) {
+                    // Actually update the mockUser object
+                    if (updateData.platformAdditionalInfo) {
+                        this.platformAdditionalInfo = {
+                            ...this.platformAdditionalInfo,
+                            ...updateData.platformAdditionalInfo
+                        };
+                    }
+                    return Promise.resolve(true);
+                })
             };
 
             const additionalFieldValues = {
@@ -262,9 +344,34 @@ describe('admin.js tests', () => {
                 apiPassword: '' // empty password
             };
 
+            // Mock axios calls for bullhornPasswordAuthorize
+            const mockedAxios = axios;
+            mockedAxios.get.mockResolvedValueOnce({
+                headers: {
+                    'location': 'https://example.com/callback?code=mock_auth_code'
+                }
+            });
+            mockedAxios.post.mockResolvedValueOnce({
+                data: {
+                    BhRestToken: 'mock_bh_rest_token',
+                    restUrl: 'https://rest.mock.com'
+                }
+            });
+
+            // Mock oauth.getOAuthApp for the oauth token exchange
+            oauth.getOAuthApp = jest.fn().mockReturnValue({
+                code: {
+                    getToken: jest.fn().mockResolvedValue({
+                        accessToken: 'mock_access_token',
+                        refreshToken: 'mock_refresh_token',
+                        expires: 3600
+                    })
+                }
+            });
+
             const result = await updateServerLoggingSettings({ user: mockUser, additionalFieldValues });
 
-            expect(mockUser.save).toHaveBeenCalled();
+            expect(mockUser.update).toHaveBeenCalled();
             expect(mockUser.platformAdditionalInfo.encodedApiUsername).toBeDefined();
             expect(mockUser.platformAdditionalInfo.encodedApiPassword).toBe('');
             expect(result.successful).toBe(true);
@@ -272,7 +379,7 @@ describe('admin.js tests', () => {
 
         test('should return empty object when platform module does not have updateServerLoggingSettings', async () => {
             const mockUser = {
-                platform: 'mock', // mock adapter doesn't have updateServerLoggingSettings
+                platform: 'pipedrive', // mock connector doesn't have updateServerLoggingSettings
                 platformAdditionalInfo: {},
                 save: jest.fn().mockResolvedValue(true)
             };
@@ -308,7 +415,10 @@ describe('admin.js tests', () => {
         test('should handle user.save() error', async () => {
             const mockUser = {
                 platform: 'bullhorn',
-                platformAdditionalInfo: {},
+                platformAdditionalInfo: {
+                    tokenUrl: 'https://auth.bullhorn.com/token',
+                    loginUrl: 'https://mock-api.bullhorn.com'
+                },
                 save: jest.fn().mockRejectedValue(new Error('Database save failed'))
             };
 
@@ -316,6 +426,31 @@ describe('admin.js tests', () => {
                 apiUsername: 'test_user',
                 apiPassword: 'test_password'
             };
+
+            // Mock axios calls for bullhornPasswordAuthorize
+            const mockedAxios = axios;
+            mockedAxios.get.mockResolvedValueOnce({
+                headers: {
+                    'location': 'https://example.com/callback?code=mock_auth_code'
+                }
+            });
+            mockedAxios.post.mockResolvedValueOnce({
+                data: {
+                    BhRestToken: 'mock_bh_rest_token',
+                    restUrl: 'https://rest.mock.com'
+                }
+            });
+
+            // Mock oauth.getOAuthApp for the oauth token exchange
+            oauth.getOAuthApp = jest.fn().mockReturnValue({
+                code: {
+                    getToken: jest.fn().mockResolvedValue({
+                        accessToken: 'mock_access_token',
+                        refreshToken: 'mock_refresh_token',
+                        expires: 3600
+                    })
+                }
+            });
 
             await expect(updateServerLoggingSettings({ user: mockUser, additionalFieldValues })).rejects.toThrow('Database save failed');
         });
