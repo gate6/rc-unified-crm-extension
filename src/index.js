@@ -15,6 +15,8 @@ const insightly = require('./connectors/insightly');
 const netsuite = require('./connectors/netsuite');
 const pipedrive = require('./connectors/pipedrive');
 const redtail = require('./connectors/redtail');
+const servicenow = require('./connectors/servicenow');
+const serviceTitan = require('./connectors/servicetitan');
 const googleSheetsExtra = require('./connectors/googleSheets/extra.js');
 const adminCore = require('@app-connect/core/handlers/admin');
 
@@ -29,6 +31,15 @@ connectorRegistry.registerConnector('insightly', insightly);
 connectorRegistry.registerConnector('netsuite', netsuite);
 connectorRegistry.registerConnector('pipedrive', pipedrive);
 connectorRegistry.registerConnector('redtail', redtail);
+connectorRegistry.registerConnector('servicetitan', serviceTitan, require('./connectors/servicetitan/manifest.json'));
+connectorRegistry.registerConnector('servicenow', servicenow, require('./connectors/servicenow/manifest.json'));
+connectorRegistry.registerConnector('servicenow-dev226973', servicenow, require('./connectors/servicenow-dev226973/manifest.json'));
+connectorRegistry.registerConnector('servicenow-powertest2', servicenow, require('./connectors/servicenow-powertest2/manifest.json'));
+connectorRegistry.registerConnector('servicenow-kerridgecs', servicenow, require('./connectors/servicenow-kerridgecs/manifest.json'));
+connectorRegistry.registerConnector('servicenow-spiegsa', servicenow, require('./connectors/servicenow-spiegsa/manifest.json'));
+connectorRegistry.registerConnector('servicenow-ven06766', servicenow, require('./connectors/servicenow-ven06766/manifest.json'));
+connectorRegistry.registerConnector('servicenow-cmscpidev', servicenow, require('./connectors/servicenow-cmscpidev/manifest.json'));
+connectorRegistry.registerConnector('servicenow-cmscpi', servicenow, require('./connectors/servicenow-cmscpi/manifest.json'));
 connectorRegistry.registerConnector('proxy', proxyConnector);
 
 // Create Express app with core functionality
