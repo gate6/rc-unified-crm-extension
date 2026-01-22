@@ -696,13 +696,13 @@ const boardId = company.tenantId
       s3Key
     )
 
-    await uploadToMonday(
+    await uploadToMonday({
       s3Url,
-      resolvedAccessToken,
-      Number(contactInfo.id),
+      accessToken: resolvedAccessToken,
+      itemId: Number(contactInfo.id),
       fileName,
-      user
-    )
+      hostname: user.dataValues.hostname
+    })
   }
 
   return {
@@ -833,13 +833,13 @@ async function updateCallLog({existingCallLog, callLog, note, aiNote, transcript
       s3Key
     )
 
-    await uploadToMonday(
+    await uploadToMonday({
       s3Url,
-      resolvedAccessToken,
-      Number(existingCallLog.contactId),
+      accessToken: resolvedAccessToken,
+      itemId: Number(existingCallLog.contactId),
       fileName,
-      user
-    )
+      hostname: user.dataValues.hostname
+    })
   }
 
   return {
@@ -1172,10 +1172,19 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
 }
 
 
-async function uploadToMonday(s3Url, accessToken, itemId, fileName, user) {
-  const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname
-  })
+async function uploadToMonday({
+  s3Url,
+  accessToken,
+  itemId,
+  fileName,
+  hostname
+}) {
+  console.log('HOSTNAME : ', hostname)
+
+  if (!hostname) {
+    throw new Error('uploadToMonday: hostname is missing')
+  }
+  const company = await getCompanyByHostname({ hostname })
   const boardId = company.tenantId
 
   try {

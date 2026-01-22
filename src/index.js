@@ -17,7 +17,7 @@ const testCRM = require('./adapters/testCRM');
 const googleSheetsExtra = require('./adapters/googleSheets/extra.js');
 const servicenow = require('./adapters/servicenow');
 const servicetitan = require('./adapters/servicetitan');
-
+const monday = require('./adapters/monday');
 // Register adapters
 adapterRegistry.setDefaultManifest(require('./adapters/manifest.json'));
 adapterRegistry.setReleaseNotes(require('./releaseNotes.json'));
@@ -38,6 +38,7 @@ adapterRegistry.registerAdapter('servicenow-spiegsa', servicenow, require('./ada
 adapterRegistry.registerAdapter('servicenow-ven06766', servicenow, require('./adapters/servicenow-ven06766/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-cmscpidev', servicenow, require('./adapters/servicenow-cmscpidev/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-cmscpi', servicenow, require('./adapters/servicenow-cmscpi/manifest.json'));
+adapterRegistry.registerAdapter('monday', monday, require('./adapters/monday/manifest.json'));
 adapterRegistry.registerAdapter('testCRM', testCRM, require('./adapters/testCRM/manifest.json'));
 
 // Create Express app with core functionality
