@@ -434,8 +434,8 @@
       },
       "contactTypes": [
         {
-          "display": "Contact",
-          "value": "Contact"
+          "display": "Person",
+          "value": "Person"
         },
         {
           "display": "Company",
@@ -1402,6 +1402,14 @@
         {
           "display": "Vendor",
           "value": "vendor"
+        },
+        {
+          "display": "Lead",
+          "value": "lead"
+        },
+        {
+          "display": "Prospect",
+          "value": "prospect"
         }
       ],
       "page": {
@@ -1803,5 +1811,5 @@
       ]
     }
   },
-  "version": "1.6.17"
+  "version": "1.6.19"
 }
