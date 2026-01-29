@@ -33,9 +33,9 @@
       "customState": "",
       "scope": "",
       "canOpenLogPage": true,
-      "contactPageUrl": "https://{account}.monday.com/boards/{boardId}/pulses/{contactId}",
-      "logPageUrl": "https://{account}.monday.com/boards/{boardId}/pulses/{contactId}/updates/{logId}",
-      "callPopUrl": "https://{account}.monday.com/boards/{boardId}/pulses/{contactId}",
+      "contactPageUrl": "https://{hostname}/boards/{boardId}/pulses/{contactId}",
+      "logPageUrl": "https://{hostname}/boards/{boardId}/pulses/{contactId}",
+      "callPopUrl": "https://{hostname}/boards/{boardId}/pulses/{contactId}",
       "embeddedOnCrmPage": {
         "welcomePage": {
           "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
