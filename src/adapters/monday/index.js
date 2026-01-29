@@ -14,8 +14,8 @@ const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 
 
-const MONDAY_API_URL = 'https://api.monday.com/v2'
-const MONDAY_AUTHORIZE_URL = 'https://auth.monday.com/oauth2/authorize'
+const MONDAY_API_URL = process.env.MONDAY_API_URL;
+const MONDAY_AUTHORIZE_URL = process.env.MONDAY_AUTHORIZE_URL;
 var MONDAY_CLIENT_SECRET = '';
 var MONDAY_CLIENT_ID = '';
 var MONDAY_REDIRECT_URI = '';
@@ -79,7 +79,6 @@ async function getOrCreateCallLogsColumn({
 
   return newColumnId
 }
-
 
 async function getColumnIdByName({ accessToken, boardId, columnName }) {
   if (!columnName) {
@@ -459,7 +458,6 @@ async function findContact({ phoneNumber, accessToken, authHeader, user }) {
     boardId: boardId,
     columnName: 'Phone'
   })
-  console.log('phoneColumnId', phoneColumnId)
   if (!phoneColumnId) {
     return {
       successful: false,
@@ -535,7 +533,6 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
   hostname: user.dataValues.hostname
 })
 const boardId = company.tenantId
-console.log('boardId', boardId)
 
   const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
   const phoneColumnId = await getColumnIdByName({
@@ -716,8 +713,6 @@ const boardId = company.tenantId
   }
 }
 
-
-
 async function updateCallLog({existingCallLog, callLog, note, aiNote, transcript, recordingLink, duration, result, composedLogDetails, accessToken, authHeader, user}) {
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
@@ -852,8 +847,6 @@ async function updateCallLog({existingCallLog, callLog, note, aiNote, transcript
   }
 }
 
-
-
 async function getCallLog({ callLogId, accessToken, authHeader, user }) {
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
@@ -897,8 +890,6 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
   const rawBody = update.body || ''
 
   const { subject, agentNote } = parseMondayCallLogBody(rawBody)
-  console.log('subject', subject)
-  console.log('agentNote', agentNote)
   return {
     callLogInfo: {
       subject,           
@@ -913,7 +904,6 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
     }
   }
 }
-
 
 async function upsertCallDisposition({ existingCallLog }) {
   return { logId: existingCallLog.thirdPartyLogId }
@@ -1025,7 +1015,6 @@ async function createMessageLog({
   }
 }
 
-
 async function updateMessageLog({
   user,
   contactInfo,
@@ -1127,7 +1116,6 @@ async function updateMessageLog({
   }
 }
 
-
 async function getUserList() {
   return {
     successful: true,
@@ -1171,7 +1159,6 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
     }
 }
 
-
 async function uploadToMonday({
   s3Url,
   accessToken,
@@ -1179,7 +1166,6 @@ async function uploadToMonday({
   fileName,
   hostname
 }) {
-  console.log('HOSTNAME : ', hostname)
 
   if (!hostname) {
     throw new Error('uploadToMonday: hostname is missing')
@@ -1251,8 +1237,6 @@ async function uploadToMonday({
     throw error
   }
 }
-
-
 
 
 exports.getAuthType = getAuthType;
