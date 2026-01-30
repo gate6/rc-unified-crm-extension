@@ -80,6 +80,52 @@ async function getOrCreateCallLogsColumn({
   return newColumnId
 }
 
+async function getOrCreateFilesColumn({
+  accessToken,
+  boardId,
+  columnName = 'Files'
+}) {
+  let columnId = await getColumnIdByName({
+    accessToken,
+    boardId,
+    columnName
+  })
+
+  if (columnId) {
+    return columnId
+  }
+
+  const res = await mondayRequest(
+    accessToken,
+    `
+    mutation ($boardId: ID!, $title: String!) {
+      create_column(
+        board_id: $boardId,
+        title: $title,
+        column_type: file
+      ) {
+        id
+      }
+    }
+    `,
+    {
+      boardId: Number(boardId),
+      title: columnName
+    }
+  )
+
+  if (!res?.data?.create_column?.id) {
+    throw new Error('Failed to create "Files" column in Monday')
+  }
+
+  const newColumnId = res.data.create_column.id
+
+  // same cache pattern as Call Logs
+  columnIdCache.set(`${boardId}:${columnName}`, newColumnId)
+
+  return newColumnId
+}
+
 async function getColumnIdByName({ accessToken, boardId, columnName }) {
   if (!columnName) {
     return null
@@ -1176,10 +1222,9 @@ async function uploadToMonday({
   try {
     console.log('Uploading file to Monday...')
 
-    const filesColumnId = await getColumnIdByName({
+    const filesColumnId = await getOrCreateFilesColumn({
       accessToken,
-      boardId,
-      columnName: 'Files'
+      boardId
     })
 
     if (!filesColumnId) {
