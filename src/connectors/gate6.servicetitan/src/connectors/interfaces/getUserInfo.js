@@ -1,5 +1,5 @@
-const { sequelize } = require('../../servicenow-models/sequelize');
-const { initModels } = require('../../servicenow-models/init-models');
+const { sequelize } = require('../../servicetitan-models/sequelize');
+const { initModels } = require('../../servicetitan-models/init-models');
 const { generateServiceTitanToken } = require('../utils/serviceTitanHelpers');
 const models = initModels(sequelize);
 
