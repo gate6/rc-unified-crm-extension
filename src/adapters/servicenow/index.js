@@ -65,7 +65,6 @@ async function getOauthInfo(requestData) {
     //         failMessage: 'RingCentral Account ID Missing'
     //     }; 
     // }
-    console.log("getOauthInfo requestData", requestData);
 
     const companyData = await models.companies.findOne({
         where: {
@@ -337,7 +336,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     // ----------------------------------------
 
     const numberToQueryArray = [];
-    console.log("authHeader", authHeader)
 
     if (overridingFormat === '') {
         numberToQueryArray.push(phoneNumber.replace(/^\+/, ''));
@@ -365,8 +363,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
-
-    console.log("hostname", hostname)
 
     const companyData = await models.companies.findOne({
         where: {
@@ -535,8 +531,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     }
 
     postBody.assigned_to = caller_id.data.result.id;
-
-    console.log("additionalSubmission", additionalSubmission)
 
     if (additionalSubmission && additionalSubmission.state){
     
