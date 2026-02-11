@@ -65,6 +65,7 @@ async function getOauthInfo(requestData) {
     //         failMessage: 'RingCentral Account ID Missing'
     //     }; 
     // }
+    console.log("getOauthInfo requestData", requestData);
 
     const companyData = await models.companies.findOne({
         where: {
@@ -336,6 +337,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     // ----------------------------------------
 
     const numberToQueryArray = [];
+    console.log("authHeader", authHeader)
 
     if (overridingFormat === '') {
         numberToQueryArray.push(phoneNumber.replace(/^\+/, ''));
@@ -363,6 +365,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
+    console.log("hostname", hostname)
 
     const companyData = await models.companies.findOne({
         where: {
@@ -451,6 +454,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ---TODO.4: Implement call logging---
     // ------------------------------------
 
+    console.log("This function is working")
     let body = '';
     if (user.userSettings?.addCallLogNote?.value ?? true) { body = upsertCallAgentNote({ body, note }); }
     if (user.userSettings?.addCallLogContactNumber?.value ?? true) { body = upsertContactPhoneNumber({ body, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
@@ -532,6 +536,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     postBody.assigned_to = caller_id.data.result.id;
 
+    console.log("additionalSubmission", additionalSubmission)
+    
     if (additionalSubmission && additionalSubmission.state){
     
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
