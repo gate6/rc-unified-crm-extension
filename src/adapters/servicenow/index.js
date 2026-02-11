@@ -365,7 +365,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
-
     console.log("hostname", hostname)
 
     const companyData = await models.companies.findOne({

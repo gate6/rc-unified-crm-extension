@@ -16,26 +16,89 @@ const typeMapping = {
     "chat": "chat"
 };
 
+const stateRegexPatterns = [
+    { regex: /^new$/i, value: 'new' },
+    { regex: /^on\s*hold$/i, value: 'on_hold' },
+    { regex: /^(work|wrk)\s*in\s*progress$/i, value: 'work_in_progress' },
+    { regex: /^(closed?\s*)?ab(an)?don(ed)?$/i, value: 'closed_abandoned' },
+    { regex: /^(closed?\s*)?comp(lete|leted)?$/i, value: 'closed_complete' }
+];
+
+const typeRegexPatterns = [
+    { regex: /^mess(?:\s*|e)*aging$/i, value: 'messaging' },
+    { regex: /^chat(?:ting)?$/i, value: 'chat' },
+    { regex: /^phone$/i, value: 'phone' },
+    { regex: /^video$/i, value: 'video' }
+];
+
+function collapseLabel(value = '') {
+    return value.toLowerCase().replace(/\s+/g, '');
+}
+
+async function fetchChoices(hostname, authHeader, element) {
+    const response = await axios.get(
+        `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=${element}&sysparm_fields=label,value&sysparm_limit=500`,
+        {
+            headers: { 'Authorization': authHeader }
+        }
+    );
+
+    return response.data?.result || [];
+}
+
+async function findChoiceValue(hostname, authHeader, element, inputValue) {
+    const trimmedInput = (inputValue || '').trim();
+    if (!trimmedInput) {
+        return null;
+    }
+
+    const collapsedInput = collapseLabel(trimmedInput);
+    const choices = await fetchChoices(hostname, authHeader, element);
+
+    for (const choice of choices) {
+        const collapsedChoice = collapseLabel(choice.label);
+        if (collapsedChoice === collapsedInput) {
+            return choice.value;
+        }
+    }
+
+    return null;
+}
+
+function matchByRegex(inputValue, patterns) {
+    if (!inputValue) { return null; }
+    for (const pattern of patterns) {
+        if (pattern.regex.test(inputValue)) {
+            return pattern.value;
+        }
+    }
+    return null;
+}
+
 async function findStateValueByName(hostname, authHeader, inputValue){
     
     try {
         console.log("findStateValueByName called with inputValue:", inputValue);
-        const normalizedInputValue = inputValue.toLowerCase();
-        const normalizedValue = stateMapping[normalizedInputValue] || null;
+        const sanitizedInputValue = (inputValue || '').trim();
+        const normalizedLookupKey = sanitizedInputValue.toLowerCase();
 
-        if (!normalizedValue) {
+        if (!sanitizedInputValue) {
             console.log("Invalid state value provided.");
-            // throw new Error("Invalid state value provided.");
+            return null;
         }
-        
-        const stateSelection = await axios.get(
-            `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^label=${normalizedInputValue}&sysparm_fields=sys_id,label,value`,
-            {
-                headers: { 'Authorization':  authHeader }
-            });
-        
-        if (stateSelection.data && stateSelection.data.result && stateSelection.data.result.length > 0) {
-            return stateSelection.data.result[0].value;
+
+        const collapsedMatchValue = await findChoiceValue(hostname, authHeader, 'state', sanitizedInputValue);
+        if (collapsedMatchValue) {
+            return collapsedMatchValue;
+        }
+
+        const normalizedValue = stateMapping[normalizedLookupKey] || null;
+        const regexValue = matchByRegex(sanitizedInputValue, stateRegexPatterns);
+
+        if (normalizedValue) {
+            return normalizedValue;
+        } else if (regexValue) {
+            return regexValue;
         } else {
             return null;
         }
@@ -75,22 +138,26 @@ async function findTypeValueByName(hostname, authHeader, inputValue) {
     
     try {
         console.log("findTypeValueByName called with inputValue:", inputValue);
-        const normalizedInputValue = inputValue.toLowerCase();
-        const normalizedValue = typeMapping[normalizedInputValue] || null;
+        const sanitizedInputValue = (inputValue || '').trim();
+        const normalizedLookupKey = sanitizedInputValue.toLowerCase();
 
-        if (!normalizedValue) {
+        if (!sanitizedInputValue) {
             console.log("Invalid type value provided.");
-            // throw new Error("Invalid type value provided.");
+            return null;
         }
-        
-        const typeSelection = await axios.get(
-            `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^label=${normalizedInputValue}&sysparm_fields=sys_id,label,value`,
-            {
-                headers: { 'Authorization': authHeader }
-            });
-        
-        if (typeSelection.data && typeSelection.data.result && typeSelection.data.result.length > 0) {
-            return typeSelection.data.result[0].value;
+
+        const collapsedMatchValue = await findChoiceValue(hostname, authHeader, 'type', sanitizedInputValue);
+        if (collapsedMatchValue) {
+            return collapsedMatchValue;
+        }
+
+        const normalizedValue = typeMapping[normalizedLookupKey] || null;
+        const regexValue = matchByRegex(sanitizedInputValue, typeRegexPatterns);
+
+        if (normalizedValue) {
+            return normalizedValue;
+        } else if (regexValue) {
+            return regexValue;
         } else {
             return null;
         }
