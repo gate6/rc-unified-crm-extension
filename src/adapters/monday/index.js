@@ -237,9 +237,6 @@ async function getUserInfo({ authHeader, hostname, query }) {
     const callbackUri = query.callbackUri;
     const code = new URL(callbackUri).searchParams.get('code');
     const where = { hostname, status: "true" }
-    if (query.rcAccountId) {
-      where.rcAccountId = query.rcAccountId
-    }
     const company = await models.companies.findOne({
       where,
       include: [{ model: models.customer, as: 'customers', required: false }],
