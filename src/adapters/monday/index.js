@@ -194,9 +194,6 @@ function getAuthType() {
 
 async function getOauthInfo({ hostname, rcAccountId }) {
   const where = { hostname, status: "true" }
-  if (rcAccountId) {
-    where.rcAccountId = rcAccountId
-  }
   const company = await models.companies.findOne({
     where
   })
