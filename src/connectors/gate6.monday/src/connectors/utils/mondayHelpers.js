@@ -2,6 +2,7 @@ const axios = require('axios');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const FormData = require('form-data');
 const AWS = require('aws-sdk');
+const s3Helper = require('../../monday-core/s3');
 const { initModels } = require('../../monday-models/init-models');
 const { sequelize } = require('../../monday-models/sequelize');
 const models = initModels(sequelize);
