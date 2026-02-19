@@ -543,8 +543,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         postBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
     }
 
-    postBody.opened_for = additionalSubmission ? contactInfo.id : postBody.opened_for;
-
+    postBody.opened_for = contactInfo?.id ?? postBody.opened_for;
+    
     if (additionalSubmission?.type) {
         const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
         postBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
