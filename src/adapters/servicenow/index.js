@@ -538,17 +538,16 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     console.log("additionalSubmission", additionalSubmission)
 
-    if (additionalSubmission && additionalSubmission.state){
-    
+    if (additionalSubmission?.state) {
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
-        postBody.state =  returnedState ? returnedState : await findStateValueByName(hostname, authHeader, additionalSubmission.state);
-        postBody.opened_for = contactInfo.id;
+        postBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
+    }
 
-        if (additionalSubmission.type) {
-            const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
-            postBody.type = returnedType ? returnedType : await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
-        }
-        
+    postBody.opened_for = contactInfo.id;
+    
+    if (additionalSubmission?.type) {
+        const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
+        postBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
     }
 
     const addLogRes = await axios.post(
