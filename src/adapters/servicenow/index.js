@@ -538,7 +538,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     console.log("additionalSubmission", additionalSubmission)
 
-    if (additionalSubmission && additionalSubmission.state){
+    if (additionalSubmission || additionalSubmission.state){
     
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
         postBody.state =  returnedState ? returnedState : await findStateValueByName(hostname, authHeader, additionalSubmission.state);
@@ -550,6 +550,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         }
         
     }
+    console.log("postBody", postBody)
 
     const addLogRes = await axios.post(
         `https://${hostname}/api/now/table/interaction`,
