@@ -40,13 +40,13 @@ function getBasicAuth({ apiKey }) {
 // CASE: If using OAuth
 
 async function getHostname(hostname) {
-
+    
     const existingUser = await UserModel.findOne({
         where: {
-            hostname: hostname
+           hostname: hostname
         },
-        attributes: ['id', 'hostname'],
-        raw: true
+        attributes:['id','hostname'],
+        raw:true
     });
 
     let instanceId;
@@ -79,22 +79,22 @@ async function getOauthInfo(requestData) {
             failMessage: 'Company data not found for the provided hostname.'
         };
     }
-
+    
     const { clientId, clientSecret, crmRedirectUrl, tokenUrl } = companyData;
-
+    
     if (!clientId || !clientSecret || !crmRedirectUrl || !tokenUrl) {
         return {
             failMessage: 'RingCentral Account is not fully configured with Gate6.'
         };
     }
-
+    
     return {
         clientId,
         clientSecret,
         accessTokenUri: tokenUrl,
         redirectUri: crmRedirectUrl
     };
-
+    
 
     // console.log("requestData.rcAccountId", requestData.rcAccountId)
 
@@ -117,7 +117,7 @@ async function getOauthInfo(requestData) {
     //         },
     //         raw: true
     //     })
-
+    
     //     return {
     //         clientId: clientId,
     //         clientSecret:clientSecret,
@@ -129,8 +129,8 @@ async function getOauthInfo(requestData) {
 }
 
 // For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
-async function getUserInfo({ authHeader, additionalInfo, hostname }) {
-
+async function getUserInfo({ authHeader, additionalInfo, hostname}) {
+   
     // ------------------------------------------------------
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
@@ -140,7 +140,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname }) {
             where: {
                 hostname: hostname
             },
-            raw: true
+            raw:true
         })
 
         const userInfoResponse = await axios.get(`${getCompanyDetails.instanceUrl}/api/${getCompanyDetails.userDetailsPath}`, {
@@ -154,9 +154,10 @@ async function getUserInfo({ authHeader, additionalInfo, hostname }) {
         const name = userInfoResponse.data.result.user_name;
         const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
         const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
-
+    
         //Generate a random alphanumeric id for case when admin is login in using the extension
-        if (id == '6816f79cc0a8016401c5a33be04be441') {
+        if(id == '6816f79cc0a8016401c5a33be04be441')
+        {
             let newId = generateAlphanumericString(id.length);
             id = newId;
         }
@@ -244,11 +245,11 @@ async function getUserInfo({ authHeader, additionalInfo, hostname }) {
                                 message: 'Successfully connected to ServiceNow.',
                                 ttl: 3000
                             }
-                        };
-
-                    }
+                        };                    
+                
+                    }    
                 } else {
-                    return {
+                        return {
                         successful: false,
                         platformUserInfo: {
                             id: "",
@@ -345,7 +346,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         const formats = overridingFormat.split(',');
         for (var format of formats) {
             let phoneNumberObj;
-            if (isExtension) {
+            if(isExtension) {
                 numberToQueryArray.push(phoneNumber);
             } else {
                 phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
@@ -395,19 +396,19 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const stateSelection = await axios.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization':  authHeader }
         });
-
+    
     const typeSelection = await axios.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization':  authHeader }
         });
 
     const states = stateSelection.data.result.length > 0 ? stateSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
 
     const interactionType = typeSelection.data.result.length > 0 ? typeSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
-
+    
 
     // You can use parsePhoneNumber functions to further parse the phone number
     const matchedContactInfo = [];
@@ -418,7 +419,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         const personInfo = await axios.get(
             `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}`,
             {
-                headers: { 'Authorization': authHeader }
+                headers: { 'Authorization':  authHeader }
             });
 
         if (personInfo.data.result.length > 0) {
@@ -427,7 +428,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
                     id: result.sys_id,
                     name: (contactTable == 'table/sys_user') ? result.user_name : result.name,
                     phone: numberToQuery,
-                    additionalInfo: { state: states, type: interactionType }
+                    additionalInfo: {state: states, type: interactionType}
                 })
             }
         }
@@ -465,7 +466,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const userInfo = await getHostname(user.dataValues.hostname);
 
-    const { userDetailsPath } = await models.companies.findOne({
+    const { userDetailsPath }  = await models.companies.findOne({
         where: {
             hostname: userInfo.hostname,
             status: true
@@ -519,7 +520,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     }
 
     const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact';
-
+    
     const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
@@ -556,7 +557,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             headers: { 'Authorization': authHeader }
         }
     );
-
+    
     if (callLog?.recording?.downloadUrl) {
         const timestamp = moment().format("DD-MM-YYYY_HH_MM_SS");
         const fileName = `downloaded_audio_${timestamp}`;
@@ -722,8 +723,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
 
     patchBody = {
-        short_description: subject,
-        work_notes: logBody
+            short_description: subject,
+            work_notes: logBody
     }
 
     const patchLog = await axios.patch(
@@ -771,7 +772,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
-    const { userDetailsPath } = await models.companies.findOne({
+    const { userDetailsPath }  = await models.companies.findOne({
         where: {
             hostname: hostname,
             status: true
@@ -796,13 +797,13 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             }
         };
     }
-
+    
     const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
         }
     });
-
+    
     const postBody = {
         data: {
             short_description: `[SMS] ${message.direction} SMS - ${message.from.name ?? ''}(${message.from.phoneNumber}) to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`,
@@ -840,7 +841,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
-
+    
     const existingLogId = existingMessageLog.thirdPartyLogId;
     const getLogRes = await axios.get(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
