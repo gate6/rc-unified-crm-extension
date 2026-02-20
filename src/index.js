@@ -39,6 +39,7 @@ adapterRegistry.registerAdapter('servicenow-ven06766', servicenow, require('./ad
 adapterRegistry.registerAdapter('servicenow-cmscpidev', servicenow, require('./adapters/servicenow-cmscpidev/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-cmscpi', servicenow, require('./adapters/servicenow-cmscpi/manifest.json'));
 adapterRegistry.registerAdapter('monday', monday, require('./adapters/monday/manifest.json'));
+adapterRegistry.registerAdapter('monday-QA', monday, require('./adapters/monday-QA/manifest.json'));
 adapterRegistry.registerAdapter('testCRM', testCRM, require('./adapters/testCRM/manifest.json'));
 
 // Create Express app with core functionality
