@@ -32,9 +32,9 @@ jobs:
           username: ${{ vars.SSH_USER_TEST }}
           key: ${{ secrets.SSH_USER_KEY_TEST }}
           port: ${{ vars.PORT }}
-          source: "api.zip"
+          source: "public_html/api.zip"
           target: "public_html"
-          debug: true
+          TarTmpPath: "/home/rc-crmapi"
 
       - name: Execute remote SSH commands
         uses: appleboy/ssh-action@v1.0.3
