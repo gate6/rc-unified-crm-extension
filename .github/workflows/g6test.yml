@@ -33,7 +33,7 @@ jobs:
           key: ${{ secrets.SSH_USER_KEY_TEST }}
           port: ${{ vars.PORT }}
           source: "api.zip"
-          target: "public_html"
+          target: "/home/rc-crmapi/public_html"
 
       - name: Execute remote SSH commands
         uses: appleboy/ssh-action@v1.0.3
