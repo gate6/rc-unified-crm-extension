@@ -34,7 +34,6 @@ jobs:
           port: ${{ vars.PORT }}
           source: "api.zip"
           target: "public_html"
-          tar_tmp_path: "/home/rc-crmapi"
 
       - name: Execute remote SSH commands
         uses: appleboy/ssh-action@v1.0.3
