@@ -326,9 +326,9 @@ async function unAuthorize({ user }) {
         }
     }
 
-    //--------------------------------------------------------------
-    //---CHECK.2: Open db.sqlite to check if user info is removed---
-    //--------------------------------------------------------------
+    // --------------------------------------------------------------
+    // ---CHECK.2: Open db.sqlite to check if user info is removed---
+    // --------------------------------------------------------------
 }
 
 async function findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension }) {
@@ -762,33 +762,19 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     };
 }
 
-async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) { // contactNumber is now ContactInfo.phoneNumber
-    // ---------------------------------------
-    // ---TODO.7: Implement message logging---
-    // ---------------------------------------
+async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
 
     const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
     const { userDetailsPath }  = await models.companies.findOne({
-        where: {
-            hostname: hostname,
-            status: true
-        },
+        where: { hostname, status: true },
         raw: true
-    })
+    });
 
     if (!userDetailsPath) {
         return {
             successful: false,
-            platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
-            },
             returnMessage: {
                 messageType: 'danger',
                 message: `You are not having an active license. Please contact us.`,
@@ -796,31 +782,45 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             }
         };
     }
-    
+
     const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
-        headers: {
-            'Authorization': authHeader
-        }
+        headers: { 'Authorization': authHeader }
     });
-    
+
+    const workNotes =
+        `${message.direction} SMS - ${
+            message.direction === 'Inbound'
+                ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
+                : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
+        }\n${message.subject ? `[Message] ${message.subject}` : ''}`
+        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '')
+        + `\n\n--- Created via RingCentral CRM Extension`;
+
     const postBody = {
-        data: {
-            short_description: `[SMS] ${message.direction} SMS - ${message.from.name ?? ''}(${message.from.phoneNumber}) to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`,
-            work_notes: `${message.direction} SMS - ${message.direction == 'Inbound' ? `from ${message.from.name ?? ''}(${message.from.phoneNumber})` : `to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`} \n${!!message.subject ? `[Message] ${message.subject}` : ''} ${!!recordingLink ? `\n[Recording link] ${recordingLink}` : ''}\n\n--- Created via RingCentral CRM Extension`,
-            type: "Chat",
-            caller_id: caller_id.data.result.id
-        }
+        short_description: `[SMS] ${message.direction} SMS - ${contactInfo.name}`,
+        work_notes: workNotes,
+        assigned_to: caller_id.data.result.id,
+        opened_for: contactInfo.id
+    };
+
+    // Same state logic as call log
+    if (additionalSubmission?.state) {
+        const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
+        postBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
     }
+
+    // Same type logic as call log
+    if (additionalSubmission?.type) {
+        const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
+        postBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
+    }
+
     const addLogRes = await axios.post(
         `https://${hostname}/api/now/table/interaction`,
         postBody,
-        {
-            headers: { 'Authorization': authHeader }
-        });
+        { headers: { 'Authorization': authHeader } }
+    );
 
-    //-------------------------------------------------------------------------------------------------------------
-    //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
-    //-------------------------------------------------------------------------------------------------------------
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
@@ -832,39 +832,73 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 }
 
 // Used to update existing message log so to group message in the same day together
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber }) {
-    // ---------------------------------------
-    // ---TODO.8: Implement message logging---
-    // ---------------------------------------
+async function updateMessageLog({ user, existingMessageLog, authHeader, message, additionalSubmission, recordingLink }) {
 
     const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
-    
+
     const existingLogId = existingMessageLog.thirdPartyLogId;
+
+    if (!existingLogId) {
+        return {
+            logId: null,
+            returnMessage: {
+                messageType: 'error',
+                message: 'Missing message log id for update.',
+                ttl: 3000
+            }
+        };
+    }
+
     const getLogRes = await axios.get(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
-        {
-            headers: { 'Authorization': authHeader }
-        });
-    const originalNote = getLogRes.data.body;
-    const updateNote = originalNote.replace();
+        { headers: { 'Authorization': authHeader } }
+    );
+
+    let originalNote = getLogRes?.data?.result?.work_notes ?? '';
+
+    const updatedText =
+        `${message.direction} SMS - ${
+            message.direction === 'Inbound'
+                ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
+                : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
+        }\n${message.subject ? `[Message] ${message.subject}` : ''}`
+        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '');
+
+    const updatedWorkNotes = `${originalNote}\n${updatedText}`;
 
     const patchBody = {
-        data: {
-            body: updateNote,
-        }
+        short_description: `[SMS] ${message.direction} SMS - ${existingMessageLog.contactName ?? ''}`,
+        work_notes: updatedWorkNotes
+    };
+
+    // Same state logic as call log
+    if (additionalSubmission?.state) {
+        const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
+        patchBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
     }
-    const updateLogRes = await axios.patch(
+
+    // Same type logic as call log
+    if (additionalSubmission?.type) {
+        const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
+        patchBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
+    }
+
+    console.log(patchBody);
+    await axios.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
-        {
-            headers: { 'Authorization': authHeader }
-        });
+        { headers: { 'Authorization': authHeader } }
+    );
 
-    //---------------------------------------------------------------------------------------------------------------------------------------------
-    //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
-    //---------------------------------------------------------------------------------------------------------------------------------------------
+    return {
+        logId: existingLogId,
+        returnMessage: {
+            message: 'Message log updated.',
+            messageType: 'success',
+            ttl: 3000
+        }
+    };
 }
 
 async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType }) {
