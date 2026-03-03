@@ -326,9 +326,9 @@ async function unAuthorize({ user }) {
         }
     }
 
-    // --------------------------------------------------------------
-    // ---CHECK.2: Open db.sqlite to check if user info is removed---
-    // --------------------------------------------------------------
+    //--------------------------------------------------------------
+    //---CHECK.2: Open db.sqlite to check if user info is removed---
+    //--------------------------------------------------------------
 }
 
 async function findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension }) {
@@ -762,19 +762,32 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     };
 }
 
-async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
+async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) { // contactNumber is now ContactInfo.phoneNumber
+    // ---------------------------------------
+    // ---TODO.7: Implement message logging---
+    // ---------------------------------------
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const hostname = userInfo.hostname;
 
     const { userDetailsPath }  = await models.companies.findOne({
-        where: { hostname, status: true },
+        where: {
+            hostname: hostname,
+            status: true
+        },
         raw: true
-    });
+    })
 
     if (!userDetailsPath) {
         return {
             successful: false,
+            platformUserInfo: {
+                id: "",
+                name: "",
+                timezoneName: "",
+                timezoneOffset: "",
+                platformAdditionalInfo: {}
+            },
             returnMessage: {
                 messageType: 'danger',
                 message: `You are not having an active license. Please contact us.`,
@@ -784,7 +797,9 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     }
 
     const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
-        headers: { 'Authorization': authHeader }
+        headers: {
+            'Authorization': authHeader
+        }
     });
 
     const workNotes =
@@ -803,13 +818,11 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         opened_for: contactInfo.id
     };
 
-    // Same state logic as call log
     if (additionalSubmission?.state) {
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
         postBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
     }
 
-    // Same type logic as call log
     if (additionalSubmission?.type) {
         const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
         postBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
@@ -818,9 +831,13 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const addLogRes = await axios.post(
         `https://${hostname}/api/now/table/interaction`,
         postBody,
-        { headers: { 'Authorization': authHeader } }
-    );
+        {
+            headers: { 'Authorization': authHeader }
+        });
 
+    //-------------------------------------------------------------------------------------------------------------
+    //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
+    //-------------------------------------------------------------------------------------------------------------
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
@@ -833,8 +850,11 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 
 // Used to update existing message log so to group message in the same day together
 async function updateMessageLog({ user, existingMessageLog, authHeader, message, additionalSubmission, recordingLink }) {
-
+    // ---------------------------------------
+    // ---TODO.8: Implement message logging---
+    // ---------------------------------------
     const userInfo = await getHostname(user.dataValues.hostname);
+    const instanceId = userInfo.instanceId; // e.g. "instanceId": "dev226973"
     const hostname = userInfo.hostname;
 
     const existingLogId = existingMessageLog.thirdPartyLogId;
@@ -872,25 +892,25 @@ async function updateMessageLog({ user, existingMessageLog, authHeader, message,
         work_notes: updatedWorkNotes
     };
 
-    // Same state logic as call log
     if (additionalSubmission?.state) {
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
         patchBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
     }
 
-    // Same type logic as call log
     if (additionalSubmission?.type) {
         const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
         patchBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
     }
-
-    console.log(patchBody);
-    await axios.patch(
+    const updateLogRes = await axios.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
-        { headers: { 'Authorization': authHeader } }
-    );
+        {
+            headers: { 'Authorization': authHeader }
+        });
 
+//---------------------------------------------------------------------------------------------------------------------------------------------
+    //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
+    //---------------------------------------------------------------------------------------------------------------------------------------------
     return {
         logId: existingLogId,
         returnMessage: {
