@@ -850,14 +850,14 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 }
 
 // Used to update existing message log so to group message in the same day together
-async function updateMessageLog({ user,contactInfo, existingMessageLog, authHeader, message, contactNumber, additionalSubmission, recordingLink }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber, additionalSubmission, recordingLink }) {
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId; 
     const hostname = userInfo.hostname;
-
+    
     const existingLogId = existingMessageLog.thirdPartyLogId;
 
     if (!existingLogId) {
