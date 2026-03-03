@@ -768,6 +768,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---------------------------------------
 
     const userInfo = await getHostname(user.dataValues.hostname);
+    const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
     const { userDetailsPath }  = await models.companies.findOne({
@@ -849,12 +850,12 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 }
 
 // Used to update existing message log so to group message in the same day together
-async function updateMessageLog({ user, existingMessageLog, authHeader, message, additionalSubmission, recordingLink }) {
+async function updateMessageLog({ user,contactInfo, existingMessageLog, authHeader, message, contactNumber, additionalSubmission, recordingLink }) {
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
     const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId; // e.g. "instanceId": "dev226973"
+    const instanceId = userInfo.instanceId; 
     const hostname = userInfo.hostname;
 
     const existingLogId = existingMessageLog.thirdPartyLogId;
@@ -908,7 +909,7 @@ async function updateMessageLog({ user, existingMessageLog, authHeader, message,
             headers: { 'Authorization': authHeader }
         });
 
-//---------------------------------------------------------------------------------------------------------------------------------------------
+    //---------------------------------------------------------------------------------------------------------------------------------------------
     //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
     //---------------------------------------------------------------------------------------------------------------------------------------------
     return {
