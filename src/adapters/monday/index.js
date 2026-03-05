@@ -567,77 +567,10 @@ async function findContact({ phoneNumber, accessToken, authHeader, user }) {
   }
 }
 
-async function findContactWithName({ name, accessToken, authHeader, user }) {
-
-  const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname
-  })
-
-  const boardId = company.tenantId
-
-  const resolvedAccessToken =
-    authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-
-  const matchedContactInfo = []
-
-  if (!name) {
-    return {
-      successful: true,
-      matchedContactInfo: []
-    }
-  }
-
-  const res = await mondayRequest(
-    resolvedAccessToken,
-    `
-    query ($boardId: [ID!]) {
-      boards(ids: $boardId) {
-        items_page(limit: 50) {
-          items {
-            id
-            name
-          }
-        }
-      }
-    }
-    `,
-    { boardId: Number(boardId) }
-  )
-
-  const items =
-    res?.data?.boards?.[0]?.items_page?.items || []
-
-  if (res?.errors?.length) {
-    return {
-      successful: false,
-      returnMessage: {
-        messageType: 'error',
-        message: res?.errors?.[0]?.message || 'Failed to fetch contacts from Monday.',
-        ttl: 3000
-      }
-    }
-  }
-
-  const searchName = name.toLowerCase()
-
-  for (const item of items) {
-    if (item.name?.toLowerCase().includes(searchName)) {
-      matchedContactInfo.push({
-        id: item.id,
-        name: item.name
-      })
-    }
-  }
-
-  matchedContactInfo.push({
-    id: 'createNewContact',
-    name: 'Create new contact...',
-    isNewContact: true
-  })
-
+async function findContactWithName() {
   return {
     successful: true,
-    matchedContactInfo
+    matchedContactInfo: []
   }
 }
 
