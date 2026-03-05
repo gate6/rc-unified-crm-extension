@@ -796,21 +796,39 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             }
         };
     }
-    
+
     const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
         }
     });
-    
+
+    const workNotes =
+        `${message.direction} SMS - ${
+            message.direction === 'Inbound'
+                ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
+                : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
+        }\n${message.subject ? `[Message] ${message.subject}` : ''}`
+        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '')
+        + `\n\n--- Created via RingCentral CRM Extension`;
+
     const postBody = {
-        data: {
-            short_description: `[SMS] ${message.direction} SMS - ${message.from.name ?? ''}(${message.from.phoneNumber}) to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`,
-            work_notes: `${message.direction} SMS - ${message.direction == 'Inbound' ? `from ${message.from.name ?? ''}(${message.from.phoneNumber})` : `to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`} \n${!!message.subject ? `[Message] ${message.subject}` : ''} ${!!recordingLink ? `\n[Recording link] ${recordingLink}` : ''}\n\n--- Created via RingCentral CRM Extension`,
-            type: "Chat",
-            caller_id: caller_id.data.result.id
-        }
+        short_description: `[SMS] ${message.direction} SMS - ${contactInfo.name}`,
+        work_notes: workNotes,
+        assigned_to: caller_id.data.result.id,
+        opened_for: contactInfo.id
+    };
+
+    if (additionalSubmission?.state) {
+        const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
+        postBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
     }
+
+    if (additionalSubmission?.type) {
+        const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
+        postBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
+    }
+
     const addLogRes = await axios.post(
         `https://${hostname}/api/now/table/interaction`,
         postBody,
@@ -832,28 +850,57 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 }
 
 // Used to update existing message log so to group message in the same day together
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber, additionalSubmission, recordingLink }) {
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
-
     const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId;
+    const instanceId = userInfo.instanceId; 
     const hostname = userInfo.hostname;
     
     const existingLogId = existingMessageLog.thirdPartyLogId;
+
+    if (!existingLogId) {
+        return {
+            logId: null,
+            returnMessage: {
+                messageType: 'error',
+                message: 'Missing message log id for update.',
+                ttl: 3000
+            }
+        };
+    }
+
     const getLogRes = await axios.get(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
-        {
-            headers: { 'Authorization': authHeader }
-        });
-    const originalNote = getLogRes.data.body;
-    const updateNote = originalNote.replace();
+        { headers: { 'Authorization': authHeader } }
+    );
+
+    let originalNote = getLogRes?.data?.result?.work_notes ?? '';
+
+    const updatedText =
+        `${message.direction} SMS - ${
+            message.direction === 'Inbound'
+                ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
+                : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
+        }\n${message.subject ? `[Message] ${message.subject}` : ''}`
+        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '');
+
+    const updatedWorkNotes = `${originalNote}\n${updatedText}`;
 
     const patchBody = {
-        data: {
-            body: updateNote,
-        }
+        short_description: `[SMS] ${message.direction} SMS - ${existingMessageLog.contactName ?? ''}`,
+        work_notes: updatedWorkNotes
+    };
+
+    if (additionalSubmission?.state) {
+        const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
+        patchBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
+    }
+
+    if (additionalSubmission?.type) {
+        const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
+        patchBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
     }
     const updateLogRes = await axios.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
@@ -865,6 +912,14 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     //---------------------------------------------------------------------------------------------------------------------------------------------
     //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
     //---------------------------------------------------------------------------------------------------------------------------------------------
+    return {
+        logId: existingLogId,
+        returnMessage: {
+            message: 'Message log updated.',
+            messageType: 'success',
+            ttl: 3000
+        }
+    };
 }
 
 async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType }) {
