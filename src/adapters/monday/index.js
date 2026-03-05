@@ -567,10 +567,77 @@ async function findContact({ phoneNumber, accessToken, authHeader, user }) {
   }
 }
 
-async function findContactWithName() {
+async function findContactWithName({ name, accessToken, authHeader, user }) {
+
+  const company = await getCompanyByHostname({
+    hostname: user.dataValues.hostname
+  })
+
+  const boardId = company.tenantId
+
+  const resolvedAccessToken =
+    authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
+
+  const matchedContactInfo = []
+
+  if (!name) {
+    return {
+      successful: true,
+      matchedContactInfo: []
+    }
+  }
+
+  const res = await mondayRequest(
+    resolvedAccessToken,
+    `
+    query ($boardId: [ID!]) {
+      boards(ids: $boardId) {
+        items_page(limit: 50) {
+          items {
+            id
+            name
+          }
+        }
+      }
+    }
+    `,
+    { boardId: Number(boardId) }
+  )
+
+  const items =
+    res?.data?.boards?.[0]?.items_page?.items || []
+
+  if (res?.errors?.length) {
+    return {
+      successful: false,
+      returnMessage: {
+        messageType: 'error',
+        message: res?.errors?.[0]?.message || 'Failed to fetch contacts from Monday.',
+        ttl: 3000
+      }
+    }
+  }
+
+  const searchName = name.toLowerCase()
+
+  for (const item of items) {
+    if (item.name?.toLowerCase().includes(searchName)) {
+      matchedContactInfo.push({
+        id: item.id,
+        name: item.name
+      })
+    }
+  }
+
+  matchedContactInfo.push({
+    id: 'createNewContact',
+    name: 'Create new contact...',
+    isNewContact: true
+  })
+
   return {
     successful: true,
-    matchedContactInfo: []
+    matchedContactInfo
   }
 }
 
@@ -955,6 +1022,8 @@ async function upsertCallDisposition({ existingCallLog }) {
   return { logId: existingCallLog.thirdPartyLogId }
 }
 
+const MAX_THREAD_MESSAGES = 10
+
 async function createMessageLog({
   user,
   contactInfo,
@@ -963,7 +1032,9 @@ async function createMessageLog({
   faxDocLink,
   accessToken
 }) {
-  const resolvedAccessToken = accessToken || user?.accessToken
+
+  const resolvedAccessToken =
+    accessToken || user?.accessToken
 
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
@@ -972,38 +1043,30 @@ async function createMessageLog({
   const boardId = company.tenantId
   const itemId = Number(contactInfo.id)
 
-  // ------------------------
-  // Message type detection
-  // ------------------------
-  const messageType = recordingLink
-    ? 'Voicemail'
-    : faxDocLink
-      ? 'Fax'
-      : 'SMS'
+  const callLogsColumnId = await getOrCreateCallLogsColumn({
+    accessToken: resolvedAccessToken,
+    boardId,
+    columnName: 'Call Logs'
+  })
 
-  let subject = ''
-  let body = ''
+  const sender =
+    message.direction === 'Inbound'
+      ? contactInfo.name
+      : 'You'
 
-  switch (messageType) {
-    case 'SMS':
-      subject = `SMS conversation with ${contactInfo.name}`
-      body =
-        `SMS ${message.direction === 'Inbound' ? 'from' : 'to'} ${contactInfo.name}\n` +
-        `Message: ${message.subject || message.text || ''}`
-      break
+  const text = message.subject || message.text || ''
 
-    case 'Voicemail':
-      subject = `Voicemail from ${contactInfo.name}`
-      body = `Voicemail received`
-      break
+  let body = `SMS conversation with ${contactInfo.name}\n`
 
-    case 'Fax':
-      subject = `Fax from ${contactInfo.name}`
-      body = `Fax document received`
-      break
+  body += `[${moment().format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
+
+  if (recordingLink) {
+    body += `Recording:\n${recordingLink}\n`
   }
 
-  const fullBody = `${subject}\n${body}`
+  if (faxDocLink) {
+    body += `Fax Document:\n${faxDocLink}\n`
+  }
 
   const res = await mondayRequest(
     resolvedAccessToken,
@@ -1016,20 +1079,46 @@ async function createMessageLog({
     `,
     {
       itemId,
-      body: fullBody
+      body
     }
   )
 
   if (!res?.data?.create_update?.id) {
-    throw new Error('Failed to create message log in Monday')
+    throw new Error('Failed to create message log')
   }
 
   const updateId = res.data.create_update.id
 
+  if (callLogsColumnId) {
+    await mondayRequest(
+      resolvedAccessToken,
+      `
+      mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
+        change_simple_column_value(
+          board_id: $boardId,
+          item_id: $itemId,
+          column_id: $columnId,
+          value: $value
+        ) {
+          id
+        }
+      }
+      `,
+      {
+        boardId,
+        itemId,
+        columnId: callLogsColumnId,
+        value: body
+      }
+    )
+  }
+
   if (recordingLink || faxDocLink) {
+
     const downloadUrl = recordingLink || faxDocLink
+
     const fileName =
-      messageType === 'Voicemail'
+      recordingLink
         ? `Voicemail-${Date.now()}.mp3`
         : `Fax-${Date.now()}.pdf`
 
@@ -1054,12 +1143,14 @@ async function createMessageLog({
     logId: updateId,
     contactId: itemId,
     returnMessage: {
-      message: 'Message logged in Monday',
+      message: 'Message thread created',
       messageType: 'success',
       ttl: 1000
     }
   }
 }
+
+
 
 async function updateMessageLog({
   user,
@@ -1070,68 +1161,141 @@ async function updateMessageLog({
   faxDocLink,
   accessToken
 }) {
-  const resolvedAccessToken = accessToken || user?.accessToken
 
-  if (!existingMessageLog?.thirdPartyLogId) {
-    throw new Error('Missing message log id for Monday update')
-  }
+  const resolvedAccessToken =
+    accessToken || user?.accessToken
 
+  const company = await getCompanyByHostname({
+    hostname: user.dataValues.hostname
+  })
+
+  const boardId = company.tenantId
   const itemId = Number(contactInfo.id)
 
-  const messageType = recordingLink
-    ? 'Voicemail'
-    : faxDocLink
-      ? 'Fax'
-      : 'SMS'
+  const updateId = existingMessageLog.thirdPartyLogId
 
-  let subject = ''
-  let body = ''
+  const callLogsColumnId = await getOrCreateCallLogsColumn({
+    accessToken: resolvedAccessToken,
+    boardId,
+    columnName: 'Call Logs'
+  })
 
-  switch (messageType) {
-    case 'SMS':
-      subject = `SMS conversation with ${contactInfo.name}`
-      body =
-        `SMS ${message.direction === 'Inbound' ? 'from' : 'to'} ${contactInfo.name}\n` +
-        `Message: ${message.subject || message.text || ''}`
-      break
-
-    case 'Voicemail':
-      subject = `Voicemail from ${contactInfo.name}`
-      body = `Voicemail updated`
-      break
-
-    case 'Fax':
-      subject = `Fax from ${contactInfo.name}`
-      body = `Fax document updated`
-      break
-  }
-
-  const fullBody = `${subject}\n${body}`
-
-  
-  const res = await mondayRequest(
+  const existing = await mondayRequest(
     resolvedAccessToken,
     `
-    mutation ($updateId: ID!, $body: String!) {
-      edit_update(id: $updateId, body: $body) {
+    query ($updateId: [ID!]) {
+      updates(ids: $updateId) {
         id
+        body
       }
     }
     `,
-    {
-      updateId: existingMessageLog.thirdPartyLogId,
-      body: fullBody
-    }
+    { updateId: [updateId] }
   )
 
-  if (!res?.data?.edit_update?.id) {
-    throw new Error('Failed to update message log in Monday')
+  let previousBody =
+    existing?.data?.updates?.[0]?.body || ''
+
+  const sender =
+    message.direction === 'Inbound'
+      ? contactInfo.name
+      : 'You'
+
+  const text = message.subject || message.text || ''
+
+  let newLine =
+`\n[${moment().format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
+
+  if (recordingLink) {
+    newLine += `Recording:\n${recordingLink}\n`
+  }
+
+  if (faxDocLink) {
+    newLine += `Fax Document:\n${faxDocLink}\n`
+  }
+
+  let updatedBody = previousBody + newLine
+
+  const messageCount =
+    updatedBody.split('\n')
+      .filter(l => l.includes(':'))
+      .length
+
+  let updateResponse
+
+  if (messageCount > MAX_THREAD_MESSAGES) {
+
+    let newThread =
+      `SMS conversation with ${contactInfo.name}\n`
+
+    newThread +=
+      `[${moment().format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
+
+    updateResponse = await mondayRequest(
+      resolvedAccessToken,
+      `
+      mutation ($itemId: ID!, $body: String!) {
+        create_update(item_id: $itemId, body: $body) {
+          id
+        }
+      }
+      `,
+      {
+        itemId,
+        body: newThread
+      }
+    )
+
+    updatedBody = newThread
+
+  } else {
+
+    updateResponse = await mondayRequest(
+      resolvedAccessToken,
+      `
+      mutation ($updateId: ID!, $body: String!) {
+        edit_update(id: $updateId, body: $body) {
+          id
+        }
+      }
+      `,
+      {
+        updateId,
+        body: updatedBody
+      }
+    )
+  }
+
+  if (callLogsColumnId) {
+    await mondayRequest(
+      resolvedAccessToken,
+      `
+      mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
+        change_simple_column_value(
+          board_id: $boardId,
+          item_id: $itemId,
+          column_id: $columnId,
+          value: $value
+        ) {
+          id
+        }
+      }
+      `,
+      {
+        boardId,
+        itemId,
+        columnId: callLogsColumnId,
+        value: updatedBody
+      }
+    )
   }
 
   if (recordingLink || faxDocLink) {
+
     const downloadUrl = recordingLink || faxDocLink
+
     const fileName =
-      messageType === 'Voicemail'
+      recordingLink
         ? `Voicemail-${Date.now()}.mp3`
         : `Fax-${Date.now()}.pdf`
 
@@ -1153,9 +1317,11 @@ async function updateMessageLog({
   }
 
   return {
-    logId: res.data.edit_update.id,
+    logId:
+      updateResponse?.data?.edit_update?.id ||
+      updateResponse?.data?.create_update?.id,
     returnMessage: {
-      message: 'Message updated in Monday',
+      message: 'Message appended',
       messageType: 'success',
       ttl: 1000
     }
