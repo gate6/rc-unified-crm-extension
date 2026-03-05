@@ -1022,8 +1022,6 @@ async function upsertCallDisposition({ existingCallLog }) {
   return { logId: existingCallLog.thirdPartyLogId }
 }
 
-const MAX_THREAD_MESSAGES = 10
-
 async function createMessageLog({
   user,
   contactInfo,
@@ -1033,8 +1031,7 @@ async function createMessageLog({
   accessToken
 }) {
 
-  const resolvedAccessToken =
-    accessToken || user?.accessToken
+  const resolvedAccessToken = accessToken || user?.accessToken
 
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
@@ -1152,6 +1149,7 @@ async function createMessageLog({
 
 
 
+
 async function updateMessageLog({
   user,
   contactInfo,
@@ -1162,8 +1160,8 @@ async function updateMessageLog({
   accessToken
 }) {
 
-  const resolvedAccessToken =
-    accessToken || user?.accessToken
+  const MAX_THREAD_MESSAGES = 10
+  const resolvedAccessToken = accessToken || user?.accessToken
 
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
@@ -1171,7 +1169,6 @@ async function updateMessageLog({
 
   const boardId = company.tenantId
   const itemId = Number(contactInfo.id)
-
   const updateId = existingMessageLog.thirdPartyLogId
 
   const callLogsColumnId = await getOrCreateCallLogsColumn({
@@ -1193,7 +1190,7 @@ async function updateMessageLog({
     { updateId: [updateId] }
   )
 
-  let previousBody =
+  const previousBody =
     existing?.data?.updates?.[0]?.body || ''
 
   const sender =
@@ -1214,24 +1211,32 @@ async function updateMessageLog({
     newLine += `Fax Document:\n${faxDocLink}\n`
   }
 
-  let updatedBody = previousBody + newLine
-
-  const messageCount =
-    updatedBody.split('\n')
+  const messageLines =
+    previousBody
+      .split('\n')
       .filter(l => l.includes(':'))
-      .length
 
-  let updateResponse
+  const messageCount = messageLines.length
 
-  if (messageCount > MAX_THREAD_MESSAGES) {
+  let updatedBody
+  let response
+  let newThreadId = updateId
 
-    let newThread =
-      `SMS conversation with ${contactInfo.name}\n`
+  if (messageCount >= MAX_THREAD_MESSAGES) {
 
-    newThread +=
+    updatedBody =
+      `SMS conversation with ${contactInfo.name}\n` +
       `[${moment().format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
 
-    updateResponse = await mondayRequest(
+    if (recordingLink) {
+      updatedBody += `Recording:\n${recordingLink}\n`
+    }
+
+    if (faxDocLink) {
+      updatedBody += `Fax Document:\n${faxDocLink}\n`
+    }
+
+    response = await mondayRequest(
       resolvedAccessToken,
       `
       mutation ($itemId: ID!, $body: String!) {
@@ -1242,15 +1247,17 @@ async function updateMessageLog({
       `,
       {
         itemId,
-        body: newThread
+        body: updatedBody
       }
     )
 
-    updatedBody = newThread
+    newThreadId = response.data.create_update.id
 
   } else {
 
-    updateResponse = await mondayRequest(
+    updatedBody = previousBody + newLine
+
+    response = await mondayRequest(
       resolvedAccessToken,
       `
       mutation ($updateId: ID!, $body: String!) {
@@ -1317,9 +1324,7 @@ async function updateMessageLog({
   }
 
   return {
-    logId:
-      updateResponse?.data?.edit_update?.id ||
-      updateResponse?.data?.create_update?.id,
+    logId: newThreadId,
     returnMessage: {
       message: 'Message appended',
       messageType: 'success',
