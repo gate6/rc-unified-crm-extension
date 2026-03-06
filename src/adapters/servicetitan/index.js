@@ -442,17 +442,6 @@ function stripHtml(html = '') {
     .trim();
 }
 
-function formatCallDetails(details = '') {
-    return details
-        .replace(/Summary:/gi, '\nSummary:')
-        .replace(/Date\/time:/gi, '\nDate/Time:')
-        .replace(/Duration:/gi, '\nDuration:')
-        .replace(/Result:/gi, '\nResult:')
-        .replace(/Agent Notes/gi, '\nAgent Notes:')
-        .trim();
-}
-
-
 
 async function createCallLog({ user, contactInfo, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails, hashedAccountId }) {
 
@@ -467,11 +456,12 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
         ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
 
     let description = composedLogDetails;
-    
+    console.log("description", description)
+
     description = stripHtml(description)
-    description = formatCallDetails(description)
+
     // if (note) description += `<li><b>Subject</b><br>${subject}</li>`;
-    if (note) description += `\nAgent Notes: ${note}\n`;
+    if (note) description += `Agent Notes ${note}\n`;
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
         description += `AI Note ${aiNote}\n`;
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
@@ -573,12 +563,14 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     let description = composedLogDetails;
+    console.log("update description", description)
+    console.log("existingCallLog", existingCallLog)
+    console.log("existingCallLogDetails", existingCallLogDetails)
 
     description = stripHtml(description)
-    description = formatCallDetails(description)
 
     // if (note) description += `\n\nSubject</b><br>${subject}`;
-    if (note) description += `\nAgent Notes: ${note}\n`;
+    if (note) description += `Agent Notes ${note}\n`;
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
         description += `AI Note ${aiNote}\n`;
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
