@@ -206,7 +206,7 @@ async function getOauthInfo({ hostname, rcAccountId }) {
   }
   MONDAY_CLIENT_SECRET = company.clientSecret
   MONDAY_CLIENT_ID = company.clientId
-  MONDAY_REDIRECT_URI = company.crmRedirectUrl 
+  MONDAY_REDIRECT_URI = company.crmRedirectUrl
   return {
     clientId: company.clientId,
     clientSecret: company.clientSecret,
@@ -445,47 +445,37 @@ async function getCompanyByHostname({ hostname, rcAccountId }) {
 }
 
 function parseMondayCallLogBody(body = '') {
-  
+
   const normalized = body
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/?[^>]+(>|$)/g, '') 
+    .replace(/<\/?[^>]+(>|$)/g, '')
     .trim()
 
-  const lines = normalized
-    .split('\n')
-    .map(l => l.trim())
-    .filter(Boolean)
+  const subject = normalized.match(/Subject:\s*(.*)/)?.[1]?.trim() || ''
+  const direction = normalized.match(/Direction:\s*(.*)/)?.[1]?.trim() || ''
+  const startTime = normalized.match(/Start Time:\s*(.*)/)?.[1]?.trim() || ''
+  const endTime = normalized.match(/End Time:\s*(.*)/)?.[1]?.trim() || ''
 
-  
-  const subject = lines[0] || ''
+  const result = normalized.match(/Result:\s*(.*)/)?.[1]?.trim() || ''
+  const duration = normalized.match(/Duration:\s*(.*)/)?.[1]?.trim() || ''
 
-  
   let agentNote = ''
-  const agentNoteIndex = lines.findIndex(l =>
-    /^agent note:/i.test(l)
+
+  const agentMatch = normalized.match(
+    /Agent Notes?:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/i
   )
 
-  if (agentNoteIndex !== -1) {
-    for (let i = agentNoteIndex + 1; i < lines.length; i++) {
-      const line = lines[i]
-
-      // Stop at next known section
-      if (
-        /^result:/i.test(line) ||
-        /^duration:/i.test(line) ||
-        /^recording:/i.test(line) ||
-        /^ai note:/i.test(line) ||
-        /^transcript:/i.test(line)
-      ) {
-        break
-      }
-
-      agentNote += (agentNote ? '\n' : '') + line
-    }
+  if (agentMatch) {
+    agentNote = agentMatch[1].trim()
   }
 
   return {
     subject,
+    direction,
+    startTime,
+    endTime,
+    result,
+    duration,
     agentNote,
     normalizedBody: normalized
   }
@@ -576,9 +566,9 @@ async function findContactWithName() {
 
 async function createContact({ phoneNumber, newContactName, accessToken, authHeader, user }) {
   const company = await getCompanyByHostname({
-  hostname: user.dataValues.hostname
-})
-const boardId = company.tenantId
+    hostname: user.dataValues.hostname
+  })
+  const boardId = company.tenantId
 
   const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
   const phoneColumnId = await getColumnIdByName({
@@ -633,46 +623,67 @@ const boardId = company.tenantId
   }
 }
 
-async function createCallLog({contactInfo, callLog, note, aiNote, transcript, composedLogDetails, accessToken, authHeader, user}) {
+async function createCallLog({
+  contactInfo,
+  callLog,
+  note,
+  aiNote,
+  transcript,
+  accessToken,
+  authHeader,
+  user
+}) {
+
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
 
   const company = await getCompanyByHostname({
-  hostname: user.dataValues.hostname
-})
-const boardId = company.tenantId
-
-  const callLogsColumnId = await getOrCreateCallLogsColumn({
-    accessToken: resolvedAccessToken,
-    boardId,
-    columnName: 'Call Logs'
+    hostname: user.dataValues.hostname
   })
 
+  const boardId = company.tenantId
 
-  // -----------------------------
-  // Activity title (RC parity)
-  // -----------------------------
-  const activityTitle =
-    composedLogDetails ||
-    callLog?.subject ||
-    callLog?.activity ||
-    `${callLog?.direction || 'Call'} Call`
+  const subject =
+    callLog.customSubject ??
+    `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`
 
-  let body = `${activityTitle}\n`
-  body += `Result: ${callLog?.result || ''}\n`
-  body += `Duration: ${callLog?.duration ?? ''}s\n`
+  let sections = []
 
-  if (note) body += `\nAgent Note:\n${note}\n`
-  if (aiNote) body += `\nAI Note:\n${aiNote}\n`
-  if (transcript) body += `\nTranscript:\n${transcript}\n`
-
-  if (callLog?.recording?.link) {
-    body += `Recording:\n${callLog.recording.link}\n`
+  if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
+    sections.push(`Agent Notes:\n${note}`)
   }
 
-  // -----------------------------
-  // Create update (comment)
-  // -----------------------------
+  if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
+    sections.push(`Result:\n${callLog.result}`)
+  }
+
+  if (callLog?.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+    sections.push(`Duration:\n${callLog.duration} sec`)
+  }
+
+  if (callLog?.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) {
+    sections.push(`Recording:\n${callLog.recording.link}`)
+  }
+
+  if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+    sections.push(`AI Note:\n${aiNote}`)
+  }
+
+  if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+    sections.push(`Transcript:\n${transcript}`)
+  }
+
+  const optionalSections = sections.join("\n\n")
+
+  const body = `
+Subject: ${subject}
+Direction: ${callLog.direction}
+Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}
+End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}
+
+${optionalSections}
+`.trim()
+
   const res = await mondayRequest(
     resolvedAccessToken,
     `
@@ -688,48 +699,11 @@ const boardId = company.tenantId
     }
   )
 
-  if (res?.errors?.length || !res?.data?.create_update?.id) {
-    return {
-      logId: null,
-      returnMessage: {
-        messageType: 'error',
-        message: res?.errors?.[0]?.message || 'Failed to create call log in Monday.',
-        ttl: 3000
-      }
-    }
-  }
-
   const updateId = res.data.create_update.id
 
-  if (callLogsColumnId) {
-  await mondayRequest(
-    resolvedAccessToken,
-    `
-    mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
-      change_simple_column_value(
-        board_id: $boardId,
-        item_id: $itemId,
-        column_id: $columnId,
-        value: $value
-      ) {
-        id
-      }
-    }
-    `,
-    {
-      boardId,
-      itemId: Number(contactInfo.id),
-      columnId: callLogsColumnId,
-      value: body
-    }
-  )
-}
-
-
-  // -----------------------------
-  // Upload recording to Files column
-  // -----------------------------
+  // ---- Recording Upload ----
   if (callLog?.recording?.downloadUrl) {
+
     const fileName = `Call-${Date.now()}.mp3`
     const s3Key = fileName
 
@@ -752,68 +726,82 @@ const boardId = company.tenantId
     logId: updateId,
     contactId: Number(contactInfo.id),
     returnMessage: {
-      messageType: 'success',
-      message: 'Call log created',
-      ttl: 3000
+      message: "Call log created",
+      messageType: "success",
+      ttl: 2000
     }
   }
 }
 
-async function updateCallLog({existingCallLog, callLog, note, aiNote, transcript, recordingLink, duration, result, composedLogDetails, accessToken, authHeader, user}) {
+async function updateCallLog({
+  existingCallLog,
+  recordingLink,
+  note,
+  aiNote,
+  transcript,
+  accessToken,
+  authHeader,
+  user
+}) {
+
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
 
-  const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname
-  })
-  const boardId = company.tenantId
-  
-  if (!existingCallLog?.thirdPartyLogId) {
-    return {
-      logId: null,
-      returnMessage: {
-        messageType: 'error',
-        message: 'Missing call log id for Monday update.',
-        ttl: 3000
+  const res = await mondayRequest(
+    resolvedAccessToken,
+    `
+    query ($updateId: [ID!]) {
+      updates(ids: $updateId) {
+        id
+        body
       }
     }
+    `,
+    { updateId: [existingCallLog.thirdPartyLogId] }
+  )
+
+  const oldBody = res?.data?.updates?.[0]?.body || ''
+
+  const parsed = parseMondayCallLogBody(oldBody)
+
+  let sections = []
+
+  if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
+    sections.push(`Agent Notes:\n${note}`)
   }
 
-  const callLogsColumnId = await getOrCreateCallLogsColumn({
-  accessToken: resolvedAccessToken,
-  boardId,
-  columnName: 'Call Logs'
-})
-
-  const activityTitle =
-    composedLogDetails ||
-    callLog?.subject ||
-    callLog?.activity ||
-    `${callLog?.direction || existingCallLog?.direction || 'Call'} Call`
-
-  let body = `${activityTitle}\n`
-
-  const resolvedResult = callLog?.result ?? result ?? existingCallLog?.result
-  const resolvedDuration =
-    callLog?.duration ?? duration ?? existingCallLog?.duration
-
-  body += `Result: ${resolvedResult || ''}\n`
-  body += `Duration: ${resolvedDuration ?? ''}s\n`
-
-  if (note) body += `\nAgent Note:\n${note}\n`
-  if (aiNote) body += `\nAI Note:\n${aiNote}\n`
-  if (transcript) body += `\nTranscript:\n${transcript}\n`
-
-  const resolvedRecordingLink =
-    callLog?.recording?.downloadUrl ||
-    recordingLink ||
-    existingCallLog?.recording?.downloadUrl
-
-  if (resolvedRecordingLink) {
-    body += `Recording:\n${resolvedRecordingLink}\n`
+  if (parsed.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
+    sections.push(`Result:\n${parsed.result}`)
   }
 
-  const res = await mondayRequest(
+  if (parsed.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+    sections.push(`Duration:\n${parsed.duration}`)
+  }
+
+  if (recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) {
+    sections.push(`Recording:\n${recordingLink}`)
+  }
+
+  if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+    sections.push(`AI Note:\n${aiNote}`)
+  }
+
+  if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+    sections.push(`Transcript:\n${transcript}`)
+  }
+
+  const optionalSections = sections.join("\n\n")
+
+  const body = `
+Subject: ${parsed.subject}
+Direction: ${parsed.direction}
+Start Time: ${parsed.startTime}
+End Time: ${parsed.endTime}
+
+${optionalSections}
+`.trim()
+
+  const updateRes = await mondayRequest(
     resolvedAccessToken,
     `
     mutation ($updateId: ID!, $body: String!) {
@@ -828,85 +816,20 @@ async function updateCallLog({existingCallLog, callLog, note, aiNote, transcript
     }
   )
 
-  if (res?.errors?.length || !res?.data?.edit_update?.id) {
-    return {
-      logId: null,
-      returnMessage: {
-        messageType: 'error',
-        message: res?.errors?.[0]?.message || 'Failed to update call log in Monday.',
-        ttl: 3000
-      }
-    }
-  }
-
-  if (callLogsColumnId && existingCallLog.contactId) {
-  await mondayRequest(
-    resolvedAccessToken,
-    `
-    mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
-      change_simple_column_value(
-        board_id: $boardId,
-        item_id: $itemId,
-        column_id: $columnId,
-        value: $value
-      ) {
-        id
-      }
-    }
-    `,
-    {
-      boardId,
-      itemId: Number(existingCallLog.contactId),
-      columnId: callLogsColumnId,
-      value: body
-    }
-  )
-}
-
-
-  if (resolvedRecordingLink && existingCallLog.contactId) {
-    const fileName = `Call-${Date.now()}.mp3`
-    const s3Key = fileName
-
-    const s3Url = await downloadAudioFile(
-      resolvedRecordingLink,
-      process.env.S3_BUCKET,
-      s3Key
-    )
-
-    await uploadToMonday({
-      s3Url,
-      accessToken: resolvedAccessToken,
-      itemId: Number(existingCallLog.contactId),
-      fileName,
-      hostname: user.dataValues.hostname
-    })
-  }
-
   return {
-    logId: res.data.edit_update.id,
+    logId: updateRes.data.edit_update.id,
     returnMessage: {
-      messageType: 'success',
-      message: 'Call log updated',
-      ttl: 3000
+      message: "Call log updated",
+      messageType: "success",
+      ttl: 2000
     }
   }
 }
 
 async function getCallLog({ callLogId, accessToken, authHeader, user }) {
+
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-
-  if (!callLogId) {
-    return {
-      callLogInfo: {},
-      returnMessage: {
-        messageType: 'error',
-        message: 'Missing call log id for Monday fetch.',
-        ttl: 3000
-      }
-    }
-  }
 
   const res = await mondayRequest(
     resolvedAccessToken,
@@ -921,12 +844,12 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
     { updateId: [callLogId] }
   )
 
-  if (res?.errors?.length || !res?.data?.updates?.length) {
+  if (!res?.data?.updates?.length) {
     return {
       callLogInfo: {},
       returnMessage: {
         messageType: 'error',
-        message: res?.errors?.[0]?.message || 'Failed to fetch call log in Monday.',
+        message: 'Failed to fetch call log',
         ttl: 3000
       }
     }
@@ -935,11 +858,12 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
   const update = res.data.updates[0]
   const rawBody = update.body || ''
 
-  const { subject, agentNote } = parseMondayCallLogBody(rawBody)
+  const parsed = parseMondayCallLogBody(rawBody)
+
   return {
     callLogInfo: {
-      subject,           
-      note: agentNote,   
+      subject: parsed.subject,
+      note: parsed.agentNote,
       fullBody: rawBody,
       fullLogResponse: update
     },
@@ -979,23 +903,45 @@ async function createMessageLog({
     columnName: 'Call Logs'
   })
 
-  const sender =
-    message.direction === 'Inbound'
-      ? contactInfo.name
-      : 'You'
+  const messageType =
+    recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS')
 
-  const text = message.subject || message.text || ''
+  let body = ""
 
-  let body = `SMS conversation with ${contactInfo.name}\n`
+  if (messageType === "SMS") {
 
-  body += `[${moment().format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
+    const sender =
+      message.direction === 'Inbound'
+        ? contactInfo.name
+        : 'You'
 
-  if (recordingLink) {
-    body += `Recording:\n${recordingLink}\n`
+    const text = message.subject || message.text || ''
+
+    body = `SMS conversation with ${contactInfo.name}\n`
+    body += `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
+
   }
 
-  if (faxDocLink) {
-    body += `Fax Document:\n${faxDocLink}\n`
+  else if (messageType === "Voicemail") {
+
+    body =
+      `Voicemail from ${contactInfo.name}
+
+Recording:
+${recordingLink}
+`
+
+  }
+
+  else if (messageType === "Fax") {
+
+    body =
+      `Fax from ${contactInfo.name}
+
+Document:
+${faxDocLink}
+`
+
   }
 
   const res = await mondayRequest(
@@ -1110,6 +1056,70 @@ async function updateMessageLog({
     columnName: 'Call Logs'
   })
 
+  const messageType =
+    recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS')
+
+  // ------------------------------------------------
+  // VOICEMAIL OR FAX → always create new update
+  // ------------------------------------------------
+
+  if (messageType !== "SMS") {
+
+    let body = ""
+
+    if (messageType === "Voicemail") {
+
+      body =
+        `Voicemail from ${contactInfo.name}
+
+Recording:
+${recordingLink}
+`
+
+    }
+
+    if (messageType === "Fax") {
+
+      body =
+        `Fax from ${contactInfo.name}
+
+Document:
+${faxDocLink}
+`
+
+    }
+
+    const res = await mondayRequest(
+      resolvedAccessToken,
+      `
+      mutation ($itemId: ID!, $body: String!) {
+        create_update(item_id: $itemId, body: $body) {
+          id
+        }
+      }
+      `,
+      {
+        itemId,
+        body
+      }
+    )
+
+    const newUpdateId = res.data.create_update.id
+
+    return {
+      logId: newUpdateId,
+      returnMessage: {
+        message: 'Message logged',
+        messageType: 'success',
+        ttl: 1000
+      }
+    }
+  }
+
+  // ------------------------------------------------
+  // SMS THREAD
+  // ------------------------------------------------
+
   const existing = await mondayRequest(
     resolvedAccessToken,
     `
@@ -1133,16 +1143,8 @@ async function updateMessageLog({
 
   const text = message.subject || message.text || ''
 
-  let newLine =
-`\n[${moment().format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
-
-  if (recordingLink) {
-    newLine += `Recording:\n${recordingLink}\n`
-  }
-
-  if (faxDocLink) {
-    newLine += `Fax Document:\n${faxDocLink}\n`
-  }
+  const newLine =
+    `\n[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
 
   const messageLines =
     previousBody
@@ -1159,15 +1161,7 @@ async function updateMessageLog({
 
     updatedBody =
       `SMS conversation with ${contactInfo.name}\n` +
-      `[${moment().format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
-
-    if (recordingLink) {
-      updatedBody += `Recording:\n${recordingLink}\n`
-    }
-
-    if (faxDocLink) {
-      updatedBody += `Fax Document:\n${faxDocLink}\n`
-    }
+      `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
 
     response = await mondayRequest(
       resolvedAccessToken,
@@ -1274,39 +1268,39 @@ async function getUserList() {
 }
 
 async function downloadAudioFile(url, s3Bucket, s3Key) {
-    const urlObj = new URL(url);
-    const accessToken = urlObj.searchParams.get("accessToken");
-    const s3Values = {
-        accessKeyId: process.env.MEDIA_UPLOAD_KEY_ID,
-        secretAccessKey: process.env.MEDIA_UPLOAD_SECRET_KEY,
-        region: process.env.AWS_REGION
+  const urlObj = new URL(url);
+  const accessToken = urlObj.searchParams.get("accessToken");
+  const s3Values = {
+    accessKeyId: process.env.MEDIA_UPLOAD_KEY_ID,
+    secretAccessKey: process.env.MEDIA_UPLOAD_SECRET_KEY,
+    region: process.env.AWS_REGION
+  };
+  const s3 = new AWS.S3(s3Values);
+
+  console.log("Downloading Audio File...");
+
+  try {
+
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      responseType: "stream",
+    });
+
+    const uploadParams = {
+      Bucket: s3Bucket,
+      Key: s3Key,
+      Body: response.data
     };
-    const s3 = new AWS.S3(s3Values);
 
-    console.log("Downloading Audio File...");
+    const uploadResult = await s3.upload(uploadParams).promise();
 
-    try {
+    return uploadResult.Location;
 
-        const response = await axios.get(url, {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-            },
-            responseType: "stream",
-        });
-
-        const uploadParams = {
-            Bucket: s3Bucket,
-            Key: s3Key,
-            Body: response.data
-          };
-
-        const uploadResult = await s3.upload(uploadParams).promise();
-
-        return uploadResult.Location;
-
-    } catch (error) {
-        console.log("Error downloading or uploading audio:", error);
-    }
+  } catch (error) {
+    console.log("Error downloading or uploading audio:", error);
+  }
 }
 
 async function uploadToMonday({
