@@ -436,7 +436,6 @@ async function fetchJobs({ user, params = {} }) {
 
 
 async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript }) {
-    console.log("create call log function call hua")
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -488,8 +487,6 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
         ${optionalSections}
         `;
-
-    console.log("noteText", noteText);
 
     let addNoteRes;
     let logType = "note";
@@ -614,8 +611,6 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
         ${optionalSections}
         `.trim();
-
-    console.log("noteText >>", noteText);
 
     let newLogId;
 
