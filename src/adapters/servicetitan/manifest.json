@@ -129,12 +129,6 @@
                             "title": "Deals",
                             "type": "selection",
                             "contactDependent": true
-                        },
-                        {
-                            "const": "address",
-                            "title": "Address",
-                            "type": "inputField",
-                            "contactDependent": false
                         }
                     ]
                 },
@@ -145,12 +139,6 @@
                             "title": "Deals",
                             "type": "selection",
                             "contactDependent": true
-                        },
-                        {
-                            "const": "address",
-                            "title": "Address",
-                            "type": "inputField",
-                            "contactDependent": false
                         }
                     ]
                 }
@@ -163,5 +151,5 @@
             ]
         }
     },
-    "version": "1.6.6"
+    "version": "1.6.21"
 }
