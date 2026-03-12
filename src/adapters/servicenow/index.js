@@ -879,7 +879,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 }
 
 // Used to update existing message log so to group message in the same day together
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber, additionalSubmission, recordingLink }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber, additionalSubmission, recordingLink, faxDocLink }) {
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
