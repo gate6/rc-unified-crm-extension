@@ -5,7 +5,7 @@ const { parsePhoneNumber } = require('awesome-phonenumber');
 const jwt = require('@app-connect/core/lib/jwt');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
-const { messageLogModel } = require('@app-connect/core/models/messageLogModel');
+const { MessageLogModel } = require('@app-connect/core/models/messageLogModel');
 const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
 const qs = require('qs');
 const { sequelize } = require('../servicenow-models/sequelize');
@@ -21,155 +21,155 @@ function getBasicAuth({ apiKey }) {
 }
 
 async function getUserInfo(authHeader) {
-  const { hostname, additionalInfo } = authHeader;
-  const email = additionalInfo?.email;
+    const { hostname, additionalInfo } = authHeader;
+    const email = additionalInfo?.email;
 
-  try {
-    const company = await models.companies.findOne({
-      where: { hostname },
-      include: [{ model: models.customer, as: 'customers', required: false }],
-      raw: false,
-      logging: false
-    });
+    try {
+        const company = await models.companies.findOne({
+            where: { hostname },
+            include: [{ model: models.customer, as: 'customers', required: false }],
+            raw: false,
+            logging: false
+        });
 
-    // Company not found
-    if (!company) {
-      return {
-        successful: false,
-        platformUserInfo: {
-          id: "",
-          name: "",
-          timezoneName: "",
-          timezoneOffset: "",
-          platformAdditionalInfo: {}
-        },
-        returnMessage: {
-          messageType: 'danger',
-          message: 'Could not find the company details.',
-          ttl: 3000
+        // Company not found
+        if (!company) {
+            return {
+                successful: false,
+                platformUserInfo: {
+                    id: "",
+                    name: "",
+                    timezoneName: "",
+                    timezoneOffset: "",
+                    platformAdditionalInfo: {}
+                },
+                returnMessage: {
+                    messageType: 'danger',
+                    message: 'Could not find the company details.',
+                    ttl: 3000
+                }
+            };
         }
-      };
-    }
 
-    const {
-      clientId,
-      clientSecret,
-      maxAllowedUsers,
-      status,
-      tenantId,
-      apiKey : stAppKey,
-      customers = []
-    } = company;
+        const {
+            clientId,
+            clientSecret,
+            maxAllowedUsers,
+            status,
+            tenantId,
+            apiKey: stAppKey,
+            customers = []
+        } = company;
 
-    // Config validation
-    if (!clientId || !clientSecret || !tenantId || !stAppKey) {
-      return {
-        successful: false,
-        returnMessage: {
-          messageType: 'error',
-          message: 'ServiceTitan configuration incomplete.',
-          ttl: 3000
+        // Config validation
+        if (!clientId || !clientSecret || !tenantId || !stAppKey) {
+            return {
+                successful: false,
+                returnMessage: {
+                    messageType: 'error',
+                    message: 'ServiceTitan configuration incomplete.',
+                    ttl: 3000
+                }
+            };
         }
-      };
-    }
 
-    // License inactive
-    if (status !== true) {
-      return {
-        successful: false,
-        platformUserInfo: {
-          id: "",
-          name: "",
-          timezoneName: "",
-          timezoneOffset: "",
-          platformAdditionalInfo: {}
-        },
-        returnMessage: {
-          messageType: 'danger',
-          message: 'You do not have an active license. Please contact us.',
-          ttl: 3000
+        // License inactive
+        if (status !== true) {
+            return {
+                successful: false,
+                platformUserInfo: {
+                    id: "",
+                    name: "",
+                    timezoneName: "",
+                    timezoneOffset: "",
+                    platformAdditionalInfo: {}
+                },
+                returnMessage: {
+                    messageType: 'danger',
+                    message: 'You do not have an active license. Please contact us.',
+                    ttl: 3000
+                }
+            };
         }
-      };
-    }
 
-    // Check existing user
-    let customer = customers.find(c => c.email === email);
-    // Generate ServiceTitan token
-    const accessToken = await generateServiceTitanToken(clientId, clientSecret);
-    // Create user if not exists
-    if (!customer) {
-      if (customers.length >= maxAllowedUsers) {
+        // Check existing user
+        let customer = customers.find(c => c.email === email);
+        // Generate ServiceTitan token
+        const accessToken = await generateServiceTitanToken(clientId, clientSecret);
+        // Create user if not exists
+        if (!customer) {
+            if (customers.length >= maxAllowedUsers) {
+                return {
+                    successful: false,
+                    platformUserInfo: {
+                        id: "",
+                        name: "",
+                        timezoneName: "",
+                        timezoneOffset: "",
+                        platformAdditionalInfo: {}
+                    },
+                    returnMessage: {
+                        messageType: 'danger',
+                        message: `You are not having an active license. Please contact us.`,
+                        ttl: 3000
+                    }
+                };
+            }
+
+            await models.customer.create({
+                sysId: `st-user-${email}`,
+                email,
+                companyId: company.id,
+                hostname: hostname,
+                accessToken: accessToken,
+                tokenExpiry: Date.now() + ((900 - 60) * 1000),
+                platformAdditionalInfo: {
+                    client_id: clientId,
+                    client_secret: clientSecret,
+                    st_app_key: stAppKey,
+                    tenant: tenantId,
+                    expiresAt: Date.now() + ((900 - 60) * 1000) // 15 min - 1 min buffer
+                },
+                status: true,
+                createdAt: new Date(),
+                updatedAt: new Date()
+            });
+        }
+
         return {
-            successful: false,
+            successful: true,
             platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
+                id: `st-user-${email}`,
+                name: email,
+                email,
+                overridingApiKey: accessToken,
+                platformAdditionalInfo: {
+                    client_id: clientId,
+                    client_secret: clientSecret,
+                    st_app_key: stAppKey,
+                    tenant: tenantId,
+                    expiresAt: Date.now() + ((900 - 60) * 1000) // 15 min - 1 min buffer
+                }
             },
             returnMessage: {
-                messageType: 'danger',
-                message: `You are not having an active license. Please contact us.`,
+                messageType: 'success',
+                message: 'Successfully connected to ServiceTitan.',
                 ttl: 3000
             }
         };
-      }
 
-      await models.customer.create({
-        sysId: `st-user-${email}`,
-        email,
-        companyId: company.id,
-        hostname: hostname,
-        accessToken: accessToken,
-        tokenExpiry: Date.now() + ((900 - 60) * 1000),
-        platformAdditionalInfo: {
-          client_id: clientId,
-          client_secret: clientSecret,
-          st_app_key: stAppKey,
-          tenant: tenantId,
-          expiresAt: Date.now() + ((900 - 60) * 1000) // 15 min - 1 min buffer
-        },
-        status: true,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
+    } catch (err) {
+        console.error('AUTO ST LOGIN ERROR:', err?.response?.data || err.message);
+
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'error',
+                message: 'Automatic ServiceTitan authentication failed.',
+                ttl: 3000
+            }
+        };
     }
-
-    return {
-      successful: true,
-      platformUserInfo: {
-        id: `st-user-${email}`,
-        name: email,
-        email,
-        overridingApiKey: accessToken,
-        platformAdditionalInfo: {
-          client_id: clientId,
-          client_secret: clientSecret,
-          st_app_key: stAppKey,
-          tenant: tenantId,
-          expiresAt: Date.now() + ((900 - 60) * 1000) // 15 min - 1 min buffer
-        }
-      },
-      returnMessage: {
-        messageType: 'success',
-        message: 'Successfully connected to ServiceTitan.',
-        ttl: 3000
-      }
-    };
-
-  } catch (err) {
-    console.error('AUTO ST LOGIN ERROR:', err?.response?.data || err.message);
-
-    return {
-      successful: false,
-      returnMessage: {
-        messageType: 'error',
-        message: 'Automatic ServiceTitan authentication failed.',
-        ttl: 3000
-      }
-    };
-  }
 }
 
 
@@ -434,235 +434,242 @@ async function fetchJobs({ user, params = {} }) {
     }
 }
 
-function stripHtml(html = '') {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/?[^>]+(>|$)/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .trim();
-}
 
-
-async function createCallLog({ user, contactInfo, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails, hashedAccountId }) {
+async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript }) {
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-    // Fetch jobs of this customer
     const jobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
 
-    const subject = callLog.customSubject
-        ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+    const subject =
+        callLog.customSubject ??
+        `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
 
-    let description = composedLogDetails;
-    console.log("description", description)
+    let sections = [];
 
-    description = stripHtml(description)
-
-    // if (note) description += `<li><b>Subject</b><br>${subject}</li>`;
-    if (note) description += `Agent Notes ${note}\n`;
-    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
-        description += `AI Note ${aiNote}\n`;
-    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
-        description += `\nTranscript ${transcript}\n`;
-    if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { description = upsertCallRecording({ body: description, recordingLink: callLog.recording.link }); }
-
-    const contactId = contactInfo.id;
-
-    const logTime = (callLog?.startTime && callLog?.duration) ? `start time: ${moment(callLog.startTime).utc().toISOString()} \nend time: ${moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()}` : ''
-
-    const noteBody = {
-        text: `${subject}\n\n` + `${description}\n\n` + logTime
+    if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
+        sections.push(`Agent Notes:\n${note}`);
     }
-    // const noteBody = {
-    //     text: JSON.stringify({
-    //         subject,
-    //         description,
-    //         start_date: moment(callLog.startTime).utc().toISOString(),
-    //         end_date: moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()
-    //     })
-    // }
+
+    if (contactInfo?.phone && (user.userSettings?.addCallLogContactNumber?.value ?? true)) {
+        sections.push(`Contact Number:\n${contactInfo.phone}`);
+    }
+
+    if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
+        sections.push(`Result:\n${callLog.result}`);
+    }
+
+    if (callLog?.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+        sections.push(`Duration:\n${callLog.duration} sec`);
+    }
+
+    if (callLog?.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) {
+        sections.push(`Recording:\n${callLog.recording.link}`);
+    }
+
+    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+        sections.push(`AI Note:\n${aiNote}`);
+    }
+
+    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+        sections.push(`Transcript:\n${transcript}`);
+    }
+
+    const optionalSections = sections.join("\n\n");
+
+    const noteText = `
+        Subject: ${subject}
+        Direction: ${callLog.direction}
+        Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}
+        End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}
+
+        ${optionalSections}
+        `;
 
     let addNoteRes;
-    let logType = 'note';
+    let logType = "note";
 
-    // ============================================
-    // CASE 1 → NO JOB FOUND → Create a CRM Note Only
-    // ============================================
     if (!jobs || jobs.length === 0) {
 
         addNoteRes = await axios.post(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
-            noteBody,
+            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactInfo.id}/notes`,
+            { text: noteText },
             {
                 headers: {
-                    'Authorization': `Bearer ${auth}`,
-                    'ST-App-Key': stAppKey,
-                    'Content-Type': 'application/json'
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey,
+                    "Content-Type": "application/json"
                 }
             }
         );
-    }
 
-    // ============================================
-    // CASE 2 → JOB EXISTS → Update Job Summary
-    // ============================================
-    else {
-        // pick latest job using highest id
-        const latestJob = jobs.reduce((max, job) =>
-            job.id > max.id ? job : max
-        );
+    } else {
 
-        // Update summary with full description UI se bheja hua
-        const updateBody = {
-            summary: description
-        };
+        const latestJob = jobs.reduce((max, job) => job.id > max.id ? job : max);
 
         addNoteRes = await axios.patch(
             `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${latestJob.id}`,
-            updateBody,
+            { summary: noteText },
             {
                 headers: {
-                    'Authorization': `Bearer ${auth}`,
-                    'ST-App-Key': stAppKey,
-                    'Content-Type': 'application/json'
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey,
+                    "Content-Type": "application/json"
                 }
             }
         );
-        logType = 'job';
+
+        logType = "job";
     }
 
     return {
         logId: `${addNoteRes.data.id}_${logType}`,
+        contactId: contactInfo.id,
         returnMessage: {
-            message: 'Call log handled',
-            messageType: 'success',
+            message: "Call log created",
+            messageType: "success",
             ttl: 2000
-        },
-        extraDataTracking: {
-            withSmartNoteLog: !!aiNote,
-            withTranscript: !!transcript
         }
     };
 }
 
-function upsertCallRecording({ body, recordingLink }) {
-    const recordingLinkRegex = RegExp('- Call recording link: (.+?)\n');
-    if (!!recordingLink && recordingLinkRegex.test(body)) {
-        body = body.replace(recordingLinkRegex, `- Call recording link: ${recordingLink}\n`);
-    } else if (!!recordingLink) {
-        body += `- Call recording link: ${recordingLink}\n`;
-    }
-    return body;
-}
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript, additionalSubmission, composedLogDetails, existingCallLogDetails, hashedAccountId }) {
+async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNote, transcript }) {
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-    let description = composedLogDetails;
-    console.log("update description", description)
-    console.log("existingCallLog", existingCallLog)
-    console.log("existingCallLogDetails", existingCallLogDetails)
-
-    description = stripHtml(description)
-
-    // if (note) description += `\n\nSubject</b><br>${subject}`;
-    if (note) description += `Agent Notes ${note}\n`;
-    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
-        description += `AI Note ${aiNote}\n`;
-    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
-        description += `\nTranscript ${transcript}\n`;
-     if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { description = upsertCallRecording({ body: description, recordingLink: decodeURIComponent(recordingLink) }); }
-
     const contactId = existingCallLog.contactId;
 
-    let [realId, logType] = existingCallLog.thirdPartyLogId.split('_');
-    logType = logType || 'note'; // fallback
+    let [realId, logType] = existingCallLog.thirdPartyLogId.split("_");
+    logType = logType || "note";
+
+    let subject = "";
+    let direction = "";
+    let startTime = "";
+    let endTime = "";
+
+    // ---------------- FETCH OLD DATA ----------------
+
+    if (logType === "note") {
+
+        const getLogRes = await axios.get(
+            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+            {
+                headers: {
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey
+                }
+            }
+        );
+
+        const targetLog = getLogRes.data.data.find(log => log.id == realId);
+
+        if (targetLog) {
+
+            const body = targetLog.text || "";
+
+            subject = body.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
+            direction = body.match(/^\s*Direction:\s*(.*)$/m)?.[1]?.trim() || "";
+            startTime = body.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
+            endTime = body.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
+        }
+    }
+
+    // ---------------- BUILD OPTIONAL SECTIONS ----------------
+
+    let sections = [];
+
+    if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
+        sections.push(`Agent Notes:\n${note}`);
+    }
+
+    if (recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) {
+        sections.push(`Recording:\n${recordingLink}`);
+    }
+
+    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+        sections.push(`AI Note:\n${aiNote}`);
+    }
+
+    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+        sections.push(`Transcript:\n${transcript}`);
+    }
+
+    const optionalSections = sections.join("\n\n");
+
+    // ---------------- FINAL STRUCTURED NOTE ----------------
+
+    const noteText = `
+        Subject: ${subject}
+        Direction: ${direction}
+        Start Time: ${startTime}
+        End Time: ${endTime}
+
+        ${optionalSections}
+        `.trim();
 
     let newLogId;
 
-    // --------------------------- NOTE UPDATE --------------------------
-    if (logType === 'note') {
+    // ---------------- UPDATE NOTE ----------------
 
-        const logTime = (startTime && duration) ? `start time: ${moment(startTime).utc().toISOString()} \nend time: ${moment(startTime).utc().add(duration, 'seconds').toISOString()}` : ''
-
-        const postBody = {
-            text: `${description}\n\n` + logTime
-        }
+    if (logType === "note") {
 
         const addNoteRes = await axios.post(
             `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
-            postBody,
+            { text: noteText },
             {
                 headers: {
-                    'Authorization': `Bearer ${auth}`,
-                    'ST-App-Key': stAppKey,
-                    'Content-Type': 'application/json'
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey,
+                    "Content-Type": "application/json"
                 }
             }
         );
 
         newLogId = `${addNoteRes.data.id}_note`;
-
-        let logID_db = await CallLogModel.findOne({
-            where: {
-                thirdPartyLogId: existingCallLog.thirdPartyLogId,
-                contactId: contactId
-            }
-        });
-
-        if (logID_db) {
-            logID_db.thirdPartyLogId = newLogId;
-            await logID_db.save();
-        }
     }
 
-    // --------------------------- JOB UPDATE --------------------------
-    else {
+    // ---------------- UPDATE JOB ----------------
 
-        const updateBody = { summary: description };
+    else {
 
         await axios.patch(
             `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${realId}`,
-            updateBody,
+            { summary: noteText },
             {
                 headers: {
-                    'Authorization': `Bearer ${auth}`,
-                    'ST-App-Key': stAppKey,
-                    'Content-Type': 'application/json'
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey,
+                    "Content-Type": "application/json"
                 }
             }
         );
 
         newLogId = `${realId}_job`;
+    }
 
-        let logID_db = await CallLogModel.findOne({
-            where: {
-                thirdPartyLogId: existingCallLog.thirdPartyLogId,
-                contactId: contactId
-            }
-        });
-
-        if (logID_db) {
-            logID_db.thirdPartyLogId = newLogId;
-            await logID_db.save();
+    const logID_db = await CallLogModel.findOne({
+        where: {
+            thirdPartyLogId: existingCallLog.thirdPartyLogId,
+            contactId
         }
+    });
+
+    if (logID_db) {
+        logID_db.thirdPartyLogId = newLogId;
+        await logID_db.save();
     }
 
     return {
         logId: newLogId,
-        updatedNote: description,
         returnMessage: {
-            message: 'Call log updated',
-            messageType: 'success',
+            message: "Call log updated",
+            messageType: "success",
             ttl: 2000
-        },
-        extraDataTracking: {
-            withSmartNoteLog: !!aiNote,
-            withTranscript: !!transcript
         }
     };
 }
@@ -677,112 +684,191 @@ async function upsertCallDisposition({ user, existingCallLog, authHeader, dispos
     };
 }
 
-async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
+async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink }) {
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
-    let subject = '';
-    let description = '';
-    switch (messageType) {
-        case 'SMS':
-            subject = `SMS conversation with ${contactInfo.name}`;
-            description = `SMS from ${message.direction === 'Inbound' ? contactInfo.name : 'user'}: ${message.subject}`;
-            break;
-        case 'Voicemail':
-            subject = `Voicemail from ${contactInfo.name}`;
-            description = `Voicemail recording link: ${recordingLink}\n`;
-            break;
-        case 'Fax':
-            subject = `Fax from ${contactInfo.name}`;
-            description = `Fax document link: ${faxDocLink}`;
-            break;
-    }
-
     const contactId = contactInfo.id;
-    let postBody = JSON.stringify({
-        "text": JSON.stringify({
-            start_date: moment(message.creationTime).utc().toISOString(),
-            end_date: moment(message.creationTime).utc().toISOString(),
-            subject,
-            description,
-        })
-    });
+
+    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+
+    let noteText = "";
+
+    if (messageType === "SMS") {
+
+        const direction =
+            message.direction === "Inbound"
+                ? contactInfo.name
+                : "Agent";
+
+        const line =
+            `[${moment(message.creationTime).format("YYYY-MM-DD HH:mm:ss")}] ${direction}: ${message.subject}`;
+
+        noteText = `
+Conversation:
+${line}
+`.trim();
+
+    } else if (messageType === "Voicemail") {
+
+        noteText = `
+Voicemail from ${contactInfo.name}
+
+Recording:
+${recordingLink}
+`.trim();
+
+    } else if (messageType === "Fax") {
+
+        noteText = `
+Fax from ${contactInfo.name}
+
+Document:
+${faxDocLink}
+`.trim();
+    }
 
     const addLogRes = await axios.post(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
-        postBody,
+        { text: noteText },
         {
             headers: {
-                'Authorization': `Bearer ${auth}`,
-                'ST-App-Key': stAppKey,
-                'Content-Type': 'application/json'
+                Authorization: `Bearer ${auth}`,
+                "ST-App-Key": stAppKey,
+                "Content-Type": "application/json"
             }
-        });
+        }
+    );
 
     return {
         logId: addLogRes.data.id,
+        contactId,
         returnMessage: {
-            message: 'Message logged as a note',
-            messageType: 'success',
+            message: "Message logged as a note",
+            messageType: "success",
             ttl: 1000
         }
     };
 }
 
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink }) {
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-    let subject = '';
-    let description = '';
-    switch (messageType) {
-        case 'SMS':
-            subject = `SMS conversation with ${contactInfo.name}`;
-            description = `SMS from ${message.direction === 'Inbound' ? contactInfo.name : 'user'}: ${message.subject}`;
-            break;
-        case 'Voicemail':
-            subject = `Voicemail from ${contactInfo.name}`;
-            description = `Voicemail recording link: ${recordingLink}`;
-            break;
-        case 'Fax':
-            subject = `Fax from ${contactInfo.name}`;
-            description = `Fax document link: ${faxDocLink}`;
-            break;
+    const contactId = contactInfo.id;
+    const noteId = existingMessageLog.thirdPartyLogId;
+
+    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+
+    let noteText = "";
+
+    // ---------------- SMS CASE ----------------
+    if (messageType === "SMS") {
+
+        const getLogRes = await axios.get(
+            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+            {
+                headers: {
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey
+                }
+            }
+        );
+
+        const targetLog = getLogRes.data.data.find(log => log.id == noteId);
+
+        let previousConversation = "";
+
+        if (targetLog?.text) {
+            const match = targetLog.text.match(/Conversation:\s*([\s\S]*)/);
+            if (match) {
+                previousConversation = match[1].trim();
+            }
+        }
+
+        const direction =
+            message.direction === "Inbound"
+                ? contactInfo.name
+                : "Agent";
+
+        const newLine =
+            `[${moment(message.creationTime).format("YYYY-MM-DD HH:mm:ss")}] ${direction}: ${message.subject}`;
+
+        const updatedConversation =
+            previousConversation
+                ? `${previousConversation}\n${newLine}`
+                : newLine;
+
+        const MAX_NOTE_SIZE = 30000;
+
+        if (updatedConversation.length > MAX_NOTE_SIZE) {
+
+            const lines = previousConversation.trim().split("\n");
+            const lastMessage = lines[lines.length - 1] || "";
+
+            const newThreadConversation =
+                `${lastMessage}\n${newLine}`;
+
+            noteText = `
+Conversation:
+${newThreadConversation}
+`.trim();
+
+        } else {
+
+            noteText = `
+Conversation:
+${updatedConversation}
+`.trim();
+        }
+
     }
 
-    const contactId = contactInfo.id;
-    let postBody = JSON.stringify({
-        "text": JSON.stringify({
-            subject,
-            description,
-            start_date: moment(message.creationTime).utc().toISOString(),
-            end_date: moment(message.creationTime).utc().toISOString(),
-        })
-    });
+    // ---------------- VOICEMAIL CASE ----------------
+    else if (messageType === "Voicemail") {
+
+        noteText = `
+Voicemail from ${contactInfo.name}
+
+Recording:
+${recordingLink}
+`.trim();
+    }
+
+    // ---------------- FAX CASE ----------------
+    else if (messageType === "Fax") {
+
+        noteText = `
+Fax from ${contactInfo.name}
+
+Document:
+${faxDocLink}
+`.trim();
+    }
 
     const addLogRes = await axios.post(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
-        postBody,
+        { text: noteText },
         {
             headers: {
-                'Authorization': `Bearer ${auth}`,
-                'ST-App-Key': stAppKey,
-                'Content-Type': 'application/json'
+                Authorization: `Bearer ${auth}`,
+                "ST-App-Key": stAppKey,
+                "Content-Type": "application/json"
             }
-        });
+        }
+    );
 
-    let messageLogID_db = await messageLogModel.findOne({
+    const messageLogID_db = await MessageLogModel.findOne({
         where: {
-            thirdPartyLogId: existingMessageLog.thirdPartyLogId,
+            thirdPartyLogId: existingMessageLog.thirdPartyLogId
         }
     });
 
     if (messageLogID_db) {
-        messageLogID_db.userId = existingMessageLog.userId;
-        messageLogID_db.platform = existingMessageLog.platform;
         messageLogID_db.thirdPartyLogId = addLogRes.data.id;
         await messageLogID_db.save();
     }
@@ -790,111 +876,117 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     return {
         logId: addLogRes.data.id,
         returnMessage: {
-            message: 'Message logged as a note',
-            messageType: 'success',
+            message: "Message log updated",
+            messageType: "success",
             ttl: 1000
         }
     };
 }
+async function getCallLog({ user, callLogId }) {
 
-async function getCallLog({ user, callLogId, authHeader }) {
-    const [realId, logType = 'note'] = callLogId.split('_');
+    const [realId, logType = "note"] = callLogId.split("_");
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-    let subject = '';
-    let note = '';
+    let subject = "";
+    let note = "";
     let full_data = {};
 
     try {
-        if (logType === 'job') {
+
+        // ---------------- JOB LOG ----------------
+        if (logType === "job") {
+
             const jobRes = await axios.get(
                 `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${realId}`,
                 {
-                    headers: { 'Authorization': `Bearer ${auth}`, 'ST-App-Key': stAppKey },
+                    headers: {
+                        Authorization: `Bearer ${auth}`,
+                        "ST-App-Key": stAppKey
+                    }
                 }
             );
 
-            const jobData = jobRes.data;
-            if (jobData) {
-                const summary = jobData.summary || '';
+            const summary = jobRes.data?.summary || "";
 
-                const subjectMarker = '<b>Subject</b><br>';
-                const subjectIndex = summary.indexOf(subjectMarker);
-                const agentNotesMarker = '<b>Agent Notes</b><br>';
-                const notesIndex = summary.indexOf(agentNotesMarker);
-                if (subjectIndex !== -1) {
-                    const subjectSection = summary.substring(subjectIndex + subjectMarker.length);
-                    const subjectSectionIndex = subjectSection.indexOf('\n\n<b>');
-                    subject = (subjectSectionIndex !== -1 ? subjectSection.substring(0, subjectSectionIndex) : subjectSection).trim();
-                }
-                if (notesIndex !== -1) {
-                    const notesSection = summary.substring(notesIndex + agentNotesMarker.length);
-                    const nextSectionIndex = notesSection.indexOf('\n\n<b>');
-                    note = (nextSectionIndex !== -1 ? notesSection.substring(0, nextSectionIndex) : notesSection).trim();
-                }
+            subject = summary.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
 
-                full_data = { subject, description: summary };
+            const agentMatch = summary.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/);
+
+            if (agentMatch) {
+                note = agentMatch[1].trim();
             }
-        } else { // 'note' type
+
+            full_data = {
+                subject,
+                description: summary
+            };
+        }
+
+        // ---------------- NOTE LOG ----------------
+        else {
+
             const existingCallLogDetails = await CallLogModel.findOne({
-                where: { thirdPartyLogId: callLogId },
+                where: { thirdPartyLogId: callLogId }
             });
 
             if (!existingCallLogDetails) {
-                console.error(`Could not find call log with thirdPartyLogId: ${callLogId}`);
-                return { callLogInfo: { subject: '', note: '', fullLogResponse: {} } };
+                return {
+                    callLogInfo: {
+                        subject: "",
+                        note: "",
+                        fullLogResponse: {}
+                    }
+                };
             }
 
-            const { contactId } = existingCallLogDetails.dataValues;
+            const contactId = existingCallLogDetails.contactId;
+
             const getLogRes = await axios.get(
                 `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
                 {
-                    headers: { 'Authorization': `Bearer ${auth}`, 'ST-App-Key': stAppKey },
+                    headers: {
+                        Authorization: `Bearer ${auth}`,
+                        "ST-App-Key": stAppKey
+                    }
                 }
             );
 
-            const logData = getLogRes.data;
-            if (Array.isArray(logData.data)) {
-                const targetLog = logData.data.find(log => log.id == realId);
-                if (targetLog) {
-                    try {
-                        let parsedText = targetLog.text;
-                        try { parsedText = JSON.parse(targetLog.text); } catch {}
-                        subject = parsedText.subject || '';
-                        const description = parsedText.description || '';
+            const targetLog = getLogRes.data.data.find(log => log.id == realId);
 
-                        const agentNotesMarker = '<b>Agent Notes</b><br>';
-                        const notesIndex = description.indexOf(agentNotesMarker);
+            if (targetLog) {
 
-                        if (notesIndex !== -1) {
-                            const notesSection = description.substring(notesIndex + agentNotesMarker.length);
-                            const nextSectionIndex = notesSection.indexOf('\n\n<b>');
-                            note = (nextSectionIndex !== -1 ? notesSection.substring(0, nextSectionIndex) : notesSection).trim();
-                        } else {
-                            note = description;
-                        }
+                const body = targetLog.text || "";
 
-                        full_data = parsedText;
-                    } catch (err) {
-                        console.error('Error parsing note text:', err);
-                        note = targetLog.text;
-                    }
+                subject = body.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
+
+                const agentMatch = body.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/);
+
+                if (agentMatch) {
+                    note = agentMatch[1].trim();
                 }
+
+                full_data = body;
             }
         }
+
     } catch (error) {
-        console.error(`Failed to get call log for ${callLogId}:`, error?.response?.data || error.message);
+
+        console.error(
+            "Failed to fetch call log:",
+            error?.response?.data || error.message
+        );
+
     }
 
     return {
         callLogInfo: {
             subject,
-            fullLogResponse: full_data,
             note,
-        },
+            fullLogResponse: full_data
+        }
     };
 }
 
