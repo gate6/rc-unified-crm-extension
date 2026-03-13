@@ -803,17 +803,20 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         }
     });
 
+    // detect message type (SMS / Voicemail / Fax)
+    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+
     const workNotes =
-        `${message.direction} SMS - ${
-            message.direction === 'Inbound'
-                ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
-                : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
+        `${message.direction} ${messageType} - ${message.direction === 'Inbound'
+            ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
+            : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
         }\n${message.subject ? `[Message] ${message.subject}` : ''}`
         + (recordingLink ? `\n[Recording link] ${recordingLink}` : '')
+        + (faxDocLink ? `\n[Fax document link] ${faxDocLink}` : '')
         + `\n\n--- Created via RingCentral CRM Extension`;
 
     const postBody = {
-        short_description: `[SMS] ${message.direction} SMS - ${contactInfo.name}`,
+        short_description: `[${messageType}] ${message.direction} ${messageType} - ${contactInfo.name}`,
         work_notes: workNotes,
         assigned_to: caller_id.data.result.id,
         opened_for: contactInfo.id
@@ -836,6 +839,32 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             headers: { 'Authorization': authHeader }
         });
 
+    if (recordingLink || faxDocLink) {
+
+        const downloadUrl = recordingLink || faxDocLink
+
+        const fileName =
+            recordingLink
+                ? `Voicemail-${Date.now()}.mp3`
+                : `Fax-${Date.now()}.pdf`;
+                
+        const s3Key = fileName;
+
+        const s3Url = await downloadAudioFile(
+            downloadUrl, 
+            process.env.S3_BUCKET, 
+            s3Key
+        );
+
+        await uploadToServiceNow(
+            s3Url, 
+            hostname, 
+            authHeader, 
+            addLogRes?.data?.result?.sys_id, 
+            fileName
+        );
+    }
+
     //-------------------------------------------------------------------------------------------------------------
     //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
     //-------------------------------------------------------------------------------------------------------------
@@ -850,7 +879,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 }
 
 // Used to update existing message log so to group message in the same day together
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber, additionalSubmission, recordingLink }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber, additionalSubmission, recordingLink, faxDocLink }) {
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
@@ -878,18 +907,21 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
     let originalNote = getLogRes?.data?.result?.work_notes ?? '';
 
+    // detect message type
+    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+
     const updatedText =
-        `${message.direction} SMS - ${
-            message.direction === 'Inbound'
-                ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
-                : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
+        `${message.direction} ${messageType} - ${message.direction === 'Inbound'
+            ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
+            : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
         }\n${message.subject ? `[Message] ${message.subject}` : ''}`
-        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '');
+        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '')
+        + (faxDocLink ? `\n[Fax document link] ${faxDocLink}` : '');
 
     const updatedWorkNotes = `${originalNote}\n${updatedText}`;
 
     const patchBody = {
-        short_description: `[SMS] ${message.direction} SMS - ${existingMessageLog.contactName ?? ''}`,
+        short_description: `[${messageType}] ${message.direction} ${messageType} - ${existingMessageLog.contactName ?? ''}`,
         work_notes: updatedWorkNotes
     };
 
@@ -902,12 +934,39 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
         patchBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
     }
+
     const updateLogRes = await axios.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
         });
+
+    if (recordingLink || faxDocLink) {
+
+        const downloadUrl = recordingLink || faxDocLink
+
+        const fileName =
+            recordingLink
+                ? `Voicemail-${Date.now()}.mp3`
+                : `Fax-${Date.now()}.pdf`;
+                
+        const s3Key = fileName;
+
+        const s3Url = await downloadAudioFile(
+            downloadUrl, 
+            process.env.S3_BUCKET, 
+            s3Key
+        );
+
+        await uploadToServiceNow(
+            s3Url, 
+            hostname, 
+            authHeader, 
+            existingLogId, 
+            fileName
+        );
+    }
 
     //---------------------------------------------------------------------------------------------------------------------------------------------
     //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
