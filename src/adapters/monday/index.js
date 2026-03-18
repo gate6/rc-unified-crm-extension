@@ -21,6 +21,51 @@ var MONDAY_CLIENT_ID = '';
 var MONDAY_REDIRECT_URI = '';
 const columnIdCache = new Map();
 
+
+async function getLicenseStatus({ userId }) {
+  try {
+    console.log("License check hit", userId);
+
+    const user = await UserModel.findByPk(userId);
+
+    if (!user) {
+      return {
+        isLicenseValid: false,
+        licenseStatus: "User Not Found",
+        licenseStatusDescription: ""
+      };
+    }
+
+    const company = await getCompanyByHostname({
+      hostname: user.hostname,
+      rcAccountId: user.rcAccountId
+    });
+
+    if (!company || company.status !== true) {
+      return {
+        isLicenseValid: false,
+        licenseStatus: "Inactive",
+        licenseStatusDescription: "Purchase license to continue"
+      };
+    }
+
+    return {
+      isLicenseValid: true,
+      licenseStatus: "Active",
+      licenseStatusDescription: "Basic"
+    };
+
+  } catch (error) {
+    console.error("getLicenseStatus error:", error);
+
+    return {
+      isLicenseValid: false,
+      licenseStatus: "Error",
+      licenseStatusDescription: "Error validating license"
+    };
+  }
+}
+
 async function mondayRequest(accessToken, query, variables = {}) {
   const res = await axios.post(
     MONDAY_API_URL,
@@ -193,7 +238,7 @@ function getAuthType() {
 }
 
 async function getOauthInfo({ hostname, rcAccountId }) {
-  const where = { hostname, status: "true" }
+  const where = { hostname }
   const company = await models.companies.findOne({
     where
   })
@@ -233,7 +278,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
   try {
     const callbackUri = query.callbackUri;
     const code = new URL(callbackUri).searchParams.get('code');
-    const where = { hostname, status: "true" }
+    const where = { hostname }
     const company = await models.companies.findOne({
       where,
       include: [{ model: models.customer, as: 'customers', required: false }],
@@ -280,24 +325,6 @@ async function getUserInfo({ authHeader, hostname, query }) {
       };
     }
 
-    // License inactive
-    if (status !== true) {
-      return {
-        successful: false,
-        platformUserInfo: {
-          id: "",
-          name: "",
-          timezoneName: "",
-          timezoneOffset: "",
-          platformAdditionalInfo: {}
-        },
-        returnMessage: {
-          messageType: 'danger',
-          message: 'You do not have an active license. Please contact us.',
-          ttl: 3000
-        }
-      };
-    }
     const accessToken = authHeader.replace('Bearer ', '');
     if (!accessToken) {
       return {
@@ -313,7 +340,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
     const userDataResponse = await fetch("https://api.monday.com/v2", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${accessToken}`, // 
+        "Authorization": `Bearer ${accessToken}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -427,15 +454,12 @@ async function unAuthorize() {
 }
 
 async function getCompanyByHostname({ hostname, rcAccountId }) {
-  const where = { hostname, status: "true" }
-  if (rcAccountId) where.rcAccountId = rcAccountId
+  const where = { hostname };
+  if (rcAccountId) where.rcAccountId = rcAccountId;
 
-  const company = await models.companies.findOne({ where, raw: true })
+  const company = await models.companies.findOne({ where, raw: true });
 
-  if (!company) {
-    throw new Error('Company not found or inactive')
-  }
-  return company
+  return company || null;
 }
 
 function parseMondayCallLogBody(body = '') {
@@ -476,6 +500,31 @@ function parseMondayCallLogBody(body = '') {
 }
 
 async function findContact({ phoneNumber, accessToken, authHeader, user }) {
+
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+    if (!licenseStatus.isLicenseValid) {
+        return {
+            successful: false,
+            returnMessage: {
+                message: 'License validation failed',
+                messageType: 'error',
+                details: [
+                    {
+                        title: 'License Issue',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: 'Please go to user settings page and refresh license status'
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
+    }
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
   })
@@ -559,6 +608,32 @@ async function findContactWithName() {
 }
 
 async function createContact({ phoneNumber, newContactName, accessToken, authHeader, user }) {
+
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+    if (!licenseStatus.isLicenseValid) {
+        return {
+            successful: false,
+            returnMessage: {
+                message: 'License validation failed',
+                messageType: 'error',
+                details: [
+                    {
+                        title: 'License Issue',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: 'Please go to user settings page and refresh license status'
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
+    }
+
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
   })
@@ -627,6 +702,31 @@ async function createCallLog({
   authHeader,
   user
 }) {
+
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+    if (!licenseStatus.isLicenseValid) {
+        return {
+            successful: false,
+            returnMessage: {
+                message: 'License validation failed',
+                messageType: 'error',
+                details: [
+                    {
+                        title: 'License Issue',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: 'Please go to user settings page and refresh license status'
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
+    }
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
@@ -737,6 +837,31 @@ async function updateCallLog({
   authHeader,
   user
 }) {
+
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+    if (!licenseStatus.isLicenseValid) {
+        return {
+            successful: false,
+            returnMessage: {
+                message: 'License validation failed',
+                messageType: 'error',
+                details: [
+                    {
+                        title: 'License Issue',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: 'Please go to user settings page and refresh license status'
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
+    }
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
@@ -881,6 +1006,31 @@ async function createMessageLog({
   faxDocLink,
   accessToken
 }) {
+
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+    if (!licenseStatus.isLicenseValid) {
+        return {
+            successful: false,
+            returnMessage: {
+                message: 'License validation failed',
+                messageType: 'error',
+                details: [
+                    {
+                        title: 'License Issue',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: 'Please go to user settings page and refresh license status'
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
+    }
 
   const resolvedAccessToken = accessToken || user?.accessToken
 
@@ -1032,6 +1182,31 @@ async function updateMessageLog({
   faxDocLink,
   accessToken
 }) {
+
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+    if (!licenseStatus.isLicenseValid) {
+        return {
+            successful: false,
+            returnMessage: {
+                message: 'License validation failed',
+                messageType: 'error',
+                details: [
+                    {
+                        title: 'License Issue',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: 'Please go to user settings page and refresh license status'
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
+    }
 
   const MAX_THREAD_MESSAGES = 10
   const resolvedAccessToken = accessToken || user?.accessToken
@@ -1391,3 +1566,4 @@ exports.createMessageLog = createMessageLog;
 exports.updateMessageLog = updateMessageLog;
 exports.getUserList = getUserList;
 exports.getOverridingOAuthOption = getOverridingOAuthOption;
+exports.getLicenseStatus = getLicenseStatus;
