@@ -298,7 +298,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
           platformAdditionalInfo: {}
         },
         returnMessage: {
-          messageType: 'danger',
+          messageType: 'warning',
           message: 'Could not find the company details.',
           ttl: 3000
         }
@@ -383,7 +383,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
             platformAdditionalInfo: {}
           },
           returnMessage: {
-            messageType: 'danger',
+            messageType: 'warning',
             message: `You are not having an active license. Please contact us.`,
             ttl: 3000
           }
