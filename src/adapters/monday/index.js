@@ -526,7 +526,7 @@ async function findContact({ phoneNumber, accessToken, authHeader, user }) {
             successful: false,
             returnMessage: {
                 message: 'License validation failed',
-                messageType: 'danger',
+                messageType: 'error',
                 details: [
                     {
                         title: 'License Issue',
@@ -634,7 +634,7 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
             successful: false,
             returnMessage: {
                 message: 'License validation failed',
-                messageType: 'danger',
+                messageType: 'error',
                 details: [
                     {
                         title: 'License Issue',
@@ -728,7 +728,7 @@ async function createCallLog({
             successful: false,
             returnMessage: {
                 message: 'License validation failed',
-                messageType: 'danger',
+                messageType: 'error',
                 details: [
                     {
                         title: 'License Issue',
@@ -863,7 +863,7 @@ async function updateCallLog({
             successful: false,
             returnMessage: {
                 message: 'License validation failed',
-                messageType: 'danger',
+                messageType: 'error',
                 details: [
                     {
                         title: 'License Issue',
@@ -1032,7 +1032,7 @@ async function createMessageLog({
             successful: false,
             returnMessage: {
                 message: 'License validation failed',
-                messageType: 'danger',
+                messageType: 'error',
                 details: [
                     {
                         title: 'License Issue',
@@ -1208,7 +1208,7 @@ async function updateMessageLog({
             successful: false,
             returnMessage: {
                 message: 'License validation failed',
-                messageType: 'danger',
+                messageType: 'error',
                 details: [
                     {
                         title: 'License Issue',
