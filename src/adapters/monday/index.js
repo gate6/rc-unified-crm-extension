@@ -1,14 +1,10 @@
 const axios = require('axios')
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber')
-const { saveUserInfo } = require('../servicenow-core/auth');
 const { initModels } = require('../servicenow-models/init-models');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const models = initModels(sequelize);
-const Sequelize = require('sequelize');
-const { env } = require('shelljs');
-const Op = require('sequelize').Op;
 const FormData = require('form-data')
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
@@ -24,7 +20,6 @@ const columnIdCache = new Map();
 
 async function getLicenseStatus({ userId }) {
   try {
-    console.log("License check hit", userId);
 
     const user = await UserModel.findByPk(userId);
 
@@ -66,6 +61,35 @@ async function getLicenseStatus({ userId }) {
   }
 }
 
+async function validateLicenseOrFail(user) {
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+  if (!licenseStatus.isLicenseValid) {
+    return {
+      successful: false,
+      returnMessage: {
+        message: 'License validation failed',
+        messageType: 'error',
+        details: [
+          {
+            title: 'License Issue',
+            items: [
+              {
+                id: '1',
+                type: 'text',
+                text: 'Please go to user settings page and refresh license status'
+              }
+            ]
+          }
+        ],
+        ttl: 5000
+      }
+    };
+  }
+
+  return null; 
+}
+
 async function mondayRequest(accessToken, query, variables = {}) {
   const res = await axios.post(
     MONDAY_API_URL,
@@ -80,11 +104,7 @@ async function mondayRequest(accessToken, query, variables = {}) {
   return res.data
 }
 
-async function getOrCreateCallLogsColumn({
-  accessToken,
-  boardId,
-  columnName = 'Call Logs'
-}) {
+async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'Call Logs' }) {
   let columnId = await getColumnIdByName({
     accessToken,
     boardId,
@@ -125,11 +145,7 @@ async function getOrCreateCallLogsColumn({
   return newColumnId
 }
 
-async function getOrCreateFilesColumn({
-  accessToken,
-  boardId,
-  columnName = 'Files'
-}) {
+async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'Files' }) {
   let columnId = await getColumnIdByName({
     accessToken,
     boardId,
@@ -309,7 +325,6 @@ async function getUserInfo({ authHeader, hostname, query }) {
       clientId,
       clientSecret,
       maxAllowedUsers,
-      status,
       customers = []
     } = company;
 
@@ -501,30 +516,9 @@ function parseMondayCallLogBody(body = '') {
 
 async function findContact({ phoneNumber, accessToken, authHeader, user }) {
 
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
   })
@@ -609,30 +603,8 @@ async function findContactWithName() {
 
 async function createContact({ phoneNumber, newContactName, accessToken, authHeader, user }) {
 
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
@@ -692,41 +664,10 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
   }
 }
 
-async function createCallLog({
-  contactInfo,
-  callLog,
-  note,
-  aiNote,
-  transcript,
-  accessToken,
-  authHeader,
-  user
-}) {
+async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, accessToken, authHeader, user }) {
 
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
@@ -827,41 +768,10 @@ ${optionalSections}
   }
 }
 
-async function updateCallLog({
-  existingCallLog,
-  recordingLink,
-  note,
-  aiNote,
-  transcript,
-  accessToken,
-  authHeader,
-  user
-}) {
+async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user }) {
 
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
@@ -947,6 +857,9 @@ ${optionalSections}
 
 async function getCallLog({ callLogId, accessToken, authHeader, user }) {
 
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
+
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
 
@@ -998,39 +911,10 @@ async function upsertCallDisposition({ existingCallLog }) {
   return { logId: existingCallLog.thirdPartyLogId }
 }
 
-async function createMessageLog({
-  user,
-  contactInfo,
-  message,
-  recordingLink,
-  faxDocLink,
-  accessToken
-}) {
+async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink, accessToken }) {
 
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const resolvedAccessToken = accessToken || user?.accessToken
 
@@ -1173,40 +1057,10 @@ ${faxDocLink}
 
 
 
-async function updateMessageLog({
-  user,
-  contactInfo,
-  existingMessageLog,
-  message,
-  recordingLink,
-  faxDocLink,
-  accessToken
-}) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink, accessToken }) {
 
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const MAX_THREAD_MESSAGES = 10
   const resolvedAccessToken = accessToken || user?.accessToken
@@ -1472,13 +1326,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
   }
 }
 
-async function uploadToMonday({
-  s3Url,
-  accessToken,
-  itemId,
-  fileName,
-  hostname
-}) {
+async function uploadToMonday({ s3Url, accessToken, itemId, fileName, hostname }) {
 
   if (!hostname) {
     throw new Error('uploadToMonday: hostname is missing')
