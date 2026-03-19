@@ -325,7 +325,6 @@ async function getUserInfo({ authHeader, hostname, query }) {
       clientId,
       clientSecret,
       maxAllowedUsers,
-      status,
       customers = []
     } = company;
 
