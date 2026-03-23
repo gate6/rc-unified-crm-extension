@@ -1,18 +1,13 @@
 const axios = require('axios')
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber')
-const { saveUserInfo } = require('../servicenow-core/auth');
 const { initModels } = require('../servicenow-models/init-models');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const models = initModels(sequelize);
-const Sequelize = require('sequelize');
-const { env } = require('shelljs');
-const Op = require('sequelize').Op;
 const FormData = require('form-data')
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
-
 
 const MONDAY_API_URL = process.env.MONDAY_API_URL;
 const MONDAY_AUTHORIZE_URL = process.env.MONDAY_AUTHORIZE_URL;
@@ -21,13 +16,9 @@ var MONDAY_CLIENT_ID = '';
 var MONDAY_REDIRECT_URI = '';
 const columnIdCache = new Map();
 
-
 async function getLicenseStatus({ userId }) {
   try {
-    console.log("License check hit", userId);
-
     const user = await UserModel.findByPk(userId);
-
     if (!user) {
       return {
         isLicenseValid: false,
@@ -66,6 +57,35 @@ async function getLicenseStatus({ userId }) {
   }
 }
 
+async function validateLicenseOrFail(user) {
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+  if (!licenseStatus.isLicenseValid) {
+    return {
+      successful: false,
+      returnMessage: {
+        message: 'License validation failed',
+        messageType: 'error',
+        details: [
+          {
+            title: 'License Issue',
+            items: [
+              {
+                id: '1',
+                type: 'text',
+                text: 'Please go to user settings page and refresh license status'
+              }
+            ]
+          }
+        ],
+        ttl: 5000
+      }
+    };
+  }
+
+  return null; 
+}
+
 async function mondayRequest(accessToken, query, variables = {}) {
   const res = await axios.post(
     MONDAY_API_URL,
@@ -80,11 +100,7 @@ async function mondayRequest(accessToken, query, variables = {}) {
   return res.data
 }
 
-async function getOrCreateCallLogsColumn({
-  accessToken,
-  boardId,
-  columnName = 'Call Logs'
-}) {
+async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'Call Logs' }) {
   let columnId = await getColumnIdByName({
     accessToken,
     boardId,
@@ -125,11 +141,7 @@ async function getOrCreateCallLogsColumn({
   return newColumnId
 }
 
-async function getOrCreateFilesColumn({
-  accessToken,
-  boardId,
-  columnName = 'Files'
-}) {
+async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'Files' }) {
   let columnId = await getColumnIdByName({
     accessToken,
     boardId,
@@ -298,7 +310,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
           platformAdditionalInfo: {}
         },
         returnMessage: {
-          messageType: 'danger',
+          messageType: 'warning',
           message: 'Could not find the company details.',
           ttl: 3000
         }
@@ -309,7 +321,6 @@ async function getUserInfo({ authHeader, hostname, query }) {
       clientId,
       clientSecret,
       maxAllowedUsers,
-      status,
       customers = []
     } = company;
 
@@ -325,24 +336,6 @@ async function getUserInfo({ authHeader, hostname, query }) {
       };
     }
 
-    // License inactive
-    // if (status !== true) {
-    //   return {
-    //     successful: false,
-    //     platformUserInfo: {
-    //       id: "",
-    //       name: "",
-    //       timezoneName: "",
-    //       timezoneOffset: "",
-    //       platformAdditionalInfo: {}
-    //     },
-    //     returnMessage: {
-    //       messageType: 'danger',
-    //       message: 'You do not have an active license. Please contact us.',
-    //       ttl: 3000
-    //     }
-    //   };
-    // }
     const accessToken = authHeader.replace('Bearer ', '');
     if (!accessToken) {
       return {
@@ -368,7 +361,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
 
     const result = await userDataResponse.json();
 
-    // 
+    // Check if user data is available
     if (!result?.data?.me) {
       return {
         successful: false,
@@ -380,7 +373,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
       };
     }
 
-    // 
+    // Extract user data
     const userData = {
       id: result.data.me.id,
       name: result.data.me.name,
@@ -401,7 +394,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
             platformAdditionalInfo: {}
           },
           returnMessage: {
-            messageType: 'danger',
+            messageType: 'warning',
             message: `You are not having an active license. Please contact us.`,
             ttl: 3000
           }
@@ -481,7 +474,6 @@ async function getCompanyByHostname({ hostname, rcAccountId }) {
 }
 
 function parseMondayCallLogBody(body = '') {
-
   const normalized = body
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/?[^>]+(>|$)/g, '')
@@ -491,12 +483,9 @@ function parseMondayCallLogBody(body = '') {
   const direction = normalized.match(/Direction:\s*(.*)/)?.[1]?.trim() || ''
   const startTime = normalized.match(/Start Time:\s*(.*)/)?.[1]?.trim() || ''
   const endTime = normalized.match(/End Time:\s*(.*)/)?.[1]?.trim() || ''
-
   const result = normalized.match(/Result:\s*(.*)/)?.[1]?.trim() || ''
   const duration = normalized.match(/Duration:\s*(.*)/)?.[1]?.trim() || ''
-
   let agentNote = ''
-
   const agentMatch = normalized.match(
     /Agent Notes?:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/i
   )
@@ -518,31 +507,9 @@ function parseMondayCallLogBody(body = '') {
 }
 
 async function findContact({ phoneNumber, accessToken, authHeader, user }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
   })
@@ -569,7 +536,6 @@ async function findContact({ phoneNumber, accessToken, authHeader, user }) {
   if (phone) {
     const res = await mondayRequest(
       resolvedAccessToken,
-
       `
       query ($value: String!) {
         items_page_by_column_values(
@@ -626,37 +592,13 @@ async function findContactWithName() {
 }
 
 async function createContact({ phoneNumber, newContactName, accessToken, authHeader, user }) {
-
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
   })
   const boardId = company.tenantId
-
   const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
   const phoneColumnId = await getColumnIdByName({
     accessToken: resolvedAccessToken,
@@ -676,7 +618,6 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
 
   const res = await mondayRequest(
     resolvedAccessToken,
-
     `
     mutation ($name: String!, $values: JSON!) {
       create_item(
@@ -710,91 +651,49 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
   }
 }
 
-async function createCallLog({
-  contactInfo,
-  callLog,
-  note,
-  aiNote,
-  transcript,
-  accessToken,
-  authHeader,
-  user
-}) {
-
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
+async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, accessToken, authHeader, user }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
   })
-
   const boardId = company.tenantId
-
   const subject =
     callLog.customSubject ??
     `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`
-
   let sections = []
 
   if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
     sections.push(`Agent Notes:\n${note}`)
   }
-
   if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
     sections.push(`Result:\n${callLog.result}`)
   }
-
   if (callLog?.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
     sections.push(`Duration:\n${callLog.duration} sec`)
   }
-
   if (callLog?.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) {
     sections.push(`Recording:\n${callLog.recording.link}`)
   }
-
   if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
     sections.push(`AI Note:\n${aiNote}`)
   }
-
   if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
     sections.push(`Transcript:\n${transcript}`)
   }
 
   const optionalSections = sections.join("\n\n")
-
   const body = `
-Subject: ${subject}
-Direction: ${callLog.direction}
-Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}
-End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}
+    Subject: ${subject}
+    Direction: ${callLog.direction}
+    Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}
+    End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}
 
-${optionalSections}
-`.trim()
+    ${optionalSections}
+    `.trim()
 
   const res = await mondayRequest(
     resolvedAccessToken,
@@ -815,10 +714,8 @@ ${optionalSections}
 
   // ---- Recording Upload ----
   if (callLog?.recording?.downloadUrl) {
-
     const fileName = `Call-${Date.now()}.mp3`
     const s3Key = fileName
-
     const s3Url = await downloadAudioFile(
       callLog.recording.downloadUrl,
       process.env.S3_BUCKET,
@@ -845,45 +742,12 @@ ${optionalSections}
   }
 }
 
-async function updateCallLog({
-  existingCallLog,
-  recordingLink,
-  note,
-  aiNote,
-  transcript,
-  accessToken,
-  authHeader,
-  user
-}) {
-
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
+async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-
   const res = await mondayRequest(
     resolvedAccessToken,
     `
@@ -898,45 +762,37 @@ async function updateCallLog({
   )
 
   const oldBody = res?.data?.updates?.[0]?.body || ''
-
   const parsed = parseMondayCallLogBody(oldBody)
-
   let sections = []
 
   if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
     sections.push(`Agent Notes:\n${note}`)
   }
-
   if (parsed.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
     sections.push(`Result:\n${parsed.result}`)
   }
-
   if (parsed.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
     sections.push(`Duration:\n${parsed.duration}`)
   }
-
   if (recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) {
     sections.push(`Recording:\n${recordingLink}`)
   }
-
   if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
     sections.push(`AI Note:\n${aiNote}`)
   }
-
   if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
     sections.push(`Transcript:\n${transcript}`)
   }
 
   const optionalSections = sections.join("\n\n")
-
   const body = `
-Subject: ${parsed.subject}
-Direction: ${parsed.direction}
-Start Time: ${parsed.startTime}
-End Time: ${parsed.endTime}
+    Subject: ${parsed.subject}
+    Direction: ${parsed.direction}
+    Start Time: ${parsed.startTime}
+    End Time: ${parsed.endTime}
 
-${optionalSections}
-`.trim()
+    ${optionalSections}
+    `.trim()
 
   const updateRes = await mondayRequest(
     resolvedAccessToken,
@@ -964,10 +820,11 @@ ${optionalSections}
 }
 
 async function getCallLog({ callLogId, accessToken, authHeader, user }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-
   const res = await mondayRequest(
     resolvedAccessToken,
     `
@@ -994,7 +851,6 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
 
   const update = res.data.updates[0]
   const rawBody = update.body || ''
-
   const parsed = parseMondayCallLogBody(rawBody)
 
   return {
@@ -1016,94 +872,52 @@ async function upsertCallDisposition({ existingCallLog }) {
   return { logId: existingCallLog.thirdPartyLogId }
 }
 
-async function createMessageLog({
-  user,
-  contactInfo,
-  message,
-  recordingLink,
-  faxDocLink,
-  accessToken
-}) {
-
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
+async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink, accessToken }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const resolvedAccessToken = accessToken || user?.accessToken
-
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
   })
-
   const boardId = company.tenantId
   const itemId = Number(contactInfo.id)
-
   const callLogsColumnId = await getOrCreateCallLogsColumn({
     accessToken: resolvedAccessToken,
     boardId,
     columnName: 'Call Logs'
   })
-
   const messageType =
     recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS')
-
   let body = ""
 
   if (messageType === "SMS") {
-
     const sender =
       message.direction === 'Inbound'
         ? contactInfo.name
         : 'You'
-
     const text = message.subject || message.text || ''
-
     body = `SMS conversation with ${contactInfo.name}\n`
     body += `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
 
   }
 
   else if (messageType === "Voicemail") {
-
     body =
       `Voicemail from ${contactInfo.name}
 
-Recording:
-${recordingLink}
-`
-
+        Recording:
+        ${recordingLink}
+        `
   }
 
   else if (messageType === "Fax") {
-
     body =
       `Fax from ${contactInfo.name}
 
-Document:
-${faxDocLink}
-`
-
+        Document:
+        ${faxDocLink}
+        `
   }
 
   const res = await mondayRequest(
@@ -1152,16 +966,12 @@ ${faxDocLink}
   }
 
   if (recordingLink || faxDocLink) {
-
     const downloadUrl = recordingLink || faxDocLink
-
     const fileName =
       recordingLink
         ? `Voicemail-${Date.now()}.mp3`
         : `Fax-${Date.now()}.pdf`
-
     const s3Key = fileName
-
     const s3Url = await downloadAudioFile(
       downloadUrl,
       process.env.S3_BUCKET,
@@ -1188,61 +998,23 @@ ${faxDocLink}
   }
 }
 
-
-
-
-async function updateMessageLog({
-  user,
-  contactInfo,
-  existingMessageLog,
-  message,
-  recordingLink,
-  faxDocLink,
-  accessToken
-}) {
-
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink, accessToken }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const MAX_THREAD_MESSAGES = 10
   const resolvedAccessToken = accessToken || user?.accessToken
-
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
   })
-
   const boardId = company.tenantId
   const itemId = Number(contactInfo.id)
   const updateId = existingMessageLog.thirdPartyLogId
-
   const callLogsColumnId = await getOrCreateCallLogsColumn({
     accessToken: resolvedAccessToken,
     boardId,
     columnName: 'Call Logs'
   })
-
   const messageType =
     recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS')
 
@@ -1251,18 +1023,14 @@ async function updateMessageLog({
   // ------------------------------------------------
 
   if (messageType !== "SMS") {
-
     let body = ""
-
     if (messageType === "Voicemail") {
-
       body =
         `Voicemail from ${contactInfo.name}
 
-Recording:
-${recordingLink}
-`
-
+          Recording:
+          ${recordingLink}
+          `
     }
 
     if (messageType === "Fax") {
@@ -1270,10 +1038,9 @@ ${recordingLink}
       body =
         `Fax from ${contactInfo.name}
 
-Document:
-${faxDocLink}
-`
-
+          Document:
+          ${faxDocLink}
+          `
     }
 
     const res = await mondayRequest(
@@ -1322,34 +1089,26 @@ ${faxDocLink}
 
   const previousBody =
     existing?.data?.updates?.[0]?.body || ''
-
   const sender =
     message.direction === 'Inbound'
       ? contactInfo.name
       : 'You'
-
   const text = message.subject || message.text || ''
-
   const newLine =
     `\n[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
-
   const messageLines =
     previousBody
       .split('\n')
       .filter(l => l.includes(':'))
-
   const messageCount = messageLines.length
-
   let updatedBody
   let response
   let newThreadId = updateId
 
   if (messageCount >= MAX_THREAD_MESSAGES) {
-
     updatedBody =
       `SMS conversation with ${contactInfo.name}\n` +
       `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
-
     response = await mondayRequest(
       resolvedAccessToken,
       `
@@ -1368,9 +1127,7 @@ ${faxDocLink}
     newThreadId = response.data.create_update.id
 
   } else {
-
     updatedBody = previousBody + newLine
-
     response = await mondayRequest(
       resolvedAccessToken,
       `
@@ -1412,16 +1169,12 @@ ${faxDocLink}
   }
 
   if (recordingLink || faxDocLink) {
-
     const downloadUrl = recordingLink || faxDocLink
-
     const fileName =
       recordingLink
         ? `Voicemail-${Date.now()}.mp3`
         : `Fax-${Date.now()}.pdf`
-
     const s3Key = fileName
-
     const s3Url = await downloadAudioFile(
       downloadUrl,
       process.env.S3_BUCKET,
@@ -1463,24 +1216,20 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
     region: process.env.AWS_REGION
   };
   const s3 = new AWS.S3(s3Values);
-
   console.log("Downloading Audio File...");
 
   try {
-
     const response = await axios.get(url, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
       responseType: "stream",
     });
-
     const uploadParams = {
       Bucket: s3Bucket,
       Key: s3Key,
       Body: response.data
     };
-
     const uploadResult = await s3.upload(uploadParams).promise();
 
     return uploadResult.Location;
@@ -1490,14 +1239,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
   }
 }
 
-async function uploadToMonday({
-  s3Url,
-  accessToken,
-  itemId,
-  fileName,
-  hostname
-}) {
-
+async function uploadToMonday({ s3Url, accessToken, itemId, fileName, hostname }) {
   if (!hostname) {
     throw new Error('uploadToMonday: hostname is missing')
   }
@@ -1506,7 +1248,6 @@ async function uploadToMonday({
 
   try {
     console.log('Uploading file to Monday...')
-
     const filesColumnId = await getOrCreateFilesColumn({
       accessToken,
       boardId
@@ -1518,7 +1259,6 @@ async function uploadToMonday({
 
     const s3Key = decodeURIComponent(new URL(s3Url).pathname.substring(1))
     const fileStream = await s3Helper.getObject(s3Key, 'audio')
-
     const formData = new FormData()
 
     formData.append(
@@ -1554,7 +1294,6 @@ async function uploadToMonday({
     )
 
     console.log('File uploaded to Monday:', response.data)
-
     await s3Helper.deleteObject(s3Key, 'audio')
     console.log('File deleted from S3:', s3Key)
 

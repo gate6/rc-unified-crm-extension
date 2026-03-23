@@ -17,6 +17,79 @@ const FormData = require("form-data");
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 
+async function getLicenseStatus({ userId }) {
+    console.log("Ye Chal gya hai")
+    try {
+        const user = await UserModel.findByPk(userId);
+        if (!user) {
+            return {
+                isLicenseValid: false,
+                licenseStatus: "User Not Found",
+                licenseStatusDescription: ""
+            };
+        }
+
+        const company = await models.companies.findOne({
+            where: {
+                hostname: user.hostname,
+                rcAccountId: user.rcAccountId
+            }
+        });
+
+        if (!company || company.status !== true) {
+            return {
+                isLicenseValid: false,
+                licenseStatus: "Inactive",
+                licenseStatusDescription: "Purchase license to continue"
+            };
+        }
+
+        return {
+            isLicenseValid: true,
+            licenseStatus: "Active",
+            licenseStatusDescription: "Basic"
+        };
+
+    } catch (error) {
+        console.error("getLicenseStatus error:", error);
+
+        return {
+            isLicenseValid: false,
+            licenseStatus: "Error",
+            licenseStatusDescription: "Error validating license"
+        };
+    }
+}
+
+async function validateLicenseOrFail(user) {
+    const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+    if (!licenseStatus.isLicenseValid) {
+        return {
+            successful: false,
+            returnMessage: {
+                message: 'License validation failed',
+                messageType: 'error',
+                details: [
+                    {
+                        title: 'License Issue',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: 'Please go to user settings page and refresh license status'
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
+    }
+
+    return null; 
+}
+
 //function to generate aplhanumeric string for admin login sysid
 function generateAlphanumericString(length) {
     const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -335,6 +408,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     // ----------------------------------------
     // ---TODO.3: Implement contact matching---
     // ----------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const numberToQueryArray = [];
     console.log("authHeader", authHeader)
@@ -453,6 +528,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ------------------------------------
     // ---TODO.4: Implement call logging---
     // ------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     let body = '';
     if (user.userSettings?.addCallLogNote?.value ?? true) { body = upsertCallAgentNote({ body, note }); }
@@ -668,6 +745,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
     // ---TODO.5: Implement call log fetching---
     // -----------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -699,6 +778,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -766,6 +847,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---------------------------------------
     // ---TODO.7: Implement message logging---
     // ---------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -883,6 +966,9 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
+
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId; 
     const hostname = userInfo.hostname;
@@ -985,6 +1071,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ----------------------------------------
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -1133,3 +1221,4 @@ exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
 exports.upsertCallDisposition = upsertCallDisposition;
+exports.getLicenseStatus = getLicenseStatus
