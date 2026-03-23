@@ -281,7 +281,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                     };
                 }
                 //allow login of new user
-                if ((checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers) && checkActiveUsers.status == 1) {
+                if (checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers) {
 
                     if (checkActiveUsers.customers.some(customer => customer.sysId === id)) {
                         return {
@@ -444,28 +444,9 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     const companyData = await models.companies.findOne({
         where: {
-            hostname: hostname,
-            status: true
+            hostname: hostname
         }
     });
-
-    if (!(companyData?.status)) {
-        return {
-            successful: false,
-            platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
-            },
-            returnMessage: {
-                messageType: 'danger',
-                message: `You are not having an active license. Please contact us.`,
-                ttl: 3000
-            }
-        };
-    }
 
     const stateSelection = await axios.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
@@ -544,8 +525,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
-            hostname: userInfo.hostname,
-            status: true
+            hostname: userInfo.hostname
         },
         raw: true
     })
@@ -572,28 +552,9 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const hostname = userInfo.hostname;
     const companyData = await models.companies.findOne({
         where: {
-            hostname: hostname,
-            status: true
+            hostname: hostname
         }
     });
-
-    if (!(companyData?.status)) {
-        return {
-            successful: false,
-            platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
-            },
-            returnMessage: {
-                messageType: 'danger',
-                message: `You are not having an active license. Please contact us.`,
-                ttl: 3000
-            }
-        };
-    }
 
     const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact';
     
@@ -856,8 +817,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
-            hostname: hostname,
-            status: true
+            hostname: hostname
         },
         raw: true
     })
@@ -1080,8 +1040,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
 
     const companyData = await models.companies.findOne({
         where: {
-            hostname: hostname,
-            status: true
+            hostname: hostname
         }
     });
 
