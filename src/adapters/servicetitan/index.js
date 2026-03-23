@@ -12,6 +12,78 @@ const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = initModels(sequelize);
 
+async function getLicenseStatus({ userId }) {
+  try {
+    const user = await UserModel.findByPk(userId);
+    if (!user) {
+      return {
+        isLicenseValid: false,
+        licenseStatus: "User Not Found",
+        licenseStatusDescription: ""
+      };
+    }
+
+    const company = await models.companies.findOne({
+      where: {
+        hostname: user.hostname
+      },
+      raw: true
+    });
+
+    if (!company || company.status !== true) {
+      return {
+        isLicenseValid: false,
+        licenseStatus: "Inactive",
+        licenseStatusDescription: "Purchase license to continue"
+      };
+    }
+
+    return {
+      isLicenseValid: true,
+      licenseStatus: "Active",
+      licenseStatusDescription: "Basic"
+    };
+
+  } catch (error) {
+    console.error("getLicenseStatus error:", error);
+
+    return {
+      isLicenseValid: false,
+      licenseStatus: "Error",
+      licenseStatusDescription: "Error validating license"
+    };
+  }
+}
+
+async function validateLicenseOrFail(user) {
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+  if (!licenseStatus.isLicenseValid) {
+    return {
+      successful: false,
+      returnMessage: {
+        message: 'License validation failed',
+        messageType: 'error',
+        details: [
+          {
+            title: 'License Issue',
+            items: [
+              {
+                id: '1',
+                type: 'text',
+                text: 'Please go to user settings page and refresh license status'
+              }
+            ]
+          }
+        ],
+        ttl: 5000
+      }
+    };
+  }
+
+  return null; 
+}
+
 function getAuthType() {
     return 'apiKey';
 }
@@ -55,7 +127,6 @@ async function getUserInfo(authHeader) {
             clientId,
             clientSecret,
             maxAllowedUsers,
-            status,
             tenantId,
             apiKey: stAppKey,
             customers = []
@@ -68,25 +139,6 @@ async function getUserInfo(authHeader) {
                 returnMessage: {
                     messageType: 'error',
                     message: 'ServiceTitan configuration incomplete.',
-                    ttl: 3000
-                }
-            };
-        }
-
-        // License inactive
-        if (status !== true) {
-            return {
-                successful: false,
-                platformUserInfo: {
-                    id: "",
-                    name: "",
-                    timezoneName: "",
-                    timezoneOffset: "",
-                    platformAdditionalInfo: {}
-                },
-                returnMessage: {
-                    messageType: 'danger',
-                    message: 'You do not have an active license. Please contact us.',
                     ttl: 3000
                 }
             };
@@ -205,6 +257,9 @@ async function unAuthorize({ user }) {
 }
 
 async function findContact({ user, phoneNumber, isExtension }) {
+    // const licenseError = await validateLicenseOrFail(user);
+    // if (licenseError) return licenseError;
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     if (isExtension === 'true') {
@@ -294,6 +349,9 @@ async function findContactWithName({ user, name }) {
 }
 
 async function createContact({ user, phoneNumber, newContactName }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
@@ -436,6 +494,8 @@ async function fetchJobs({ user, params = {} }) {
 
 
 async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -537,6 +597,8 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
 
 async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNote, transcript }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -685,6 +747,8 @@ async function upsertCallDisposition({ user, existingCallLog, authHeader, dispos
 }
 
 async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -754,6 +818,8 @@ ${faxDocLink}
 }
 
 async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -883,6 +949,8 @@ ${faxDocLink}
     };
 }
 async function getCallLog({ user, callLogId }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const [realId, logType = "note"] = callLogId.split("_");
 
@@ -1055,3 +1123,4 @@ exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
 exports.findContactWithName = findContactWithName;
 exports.getRefreshedAuthToken = getRefreshedAuthToken;
+exports.getLicenseStatus = getLicenseStatus;
