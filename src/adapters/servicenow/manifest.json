@@ -15,7 +15,6 @@
             "urlIdentifier": "*service-now.com*",
             "name": "servicenow",
             "displayName": "servicenow",
-            "useLicense": true,
             "enableExtensionNumberLoggingSetting": true,
             "clickToDialMatchAllNumbers": true,
             "requestConfig": {
@@ -71,25 +70,25 @@
                         {
                             "id": "serviceNowInboundCallState",
                             "type": "inputField",
-                            "name": "Default action for inbound calls",
+                            "name": "Default value for inbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowOutboundCallState",
                             "type": "inputField",
-                            "name": "Default action for outbound calls",
+                            "name": "Default value for outbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowMessageState",
                             "type": "inputField",
-                            "name": "Default action for SMS",
+                            "name": "Default value for SMS",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowVoicemailState",
                             "type": "inputField",
-                            "name": "Default action for voicemails",
+                            "name": "Default value for voicemails",
                             "placeholder": "Enter action value"
                         }
                     ]
@@ -108,25 +107,25 @@
                         {
                             "id": "serviceNowInboundCallType",
                             "type": "inputField",
-                            "name": "Default action for inbound calls",
+                            "name": "Default value for inbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowOutboundCallType",
                             "type": "inputField",
-                            "name": "Default action for outbound calls",
+                            "name": "Default value for outbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowMessageType",
                             "type": "inputField",
-                            "name": "Default action for SMS",
+                            "name": "Default value for SMS",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowVoicemailType",
                             "type": "inputField",
-                            "name": "Default action for voicemails",
+                            "name": "Default value for voicemails",
                             "placeholder": "Enter action value"
                         }
                     ]
@@ -265,5 +264,5 @@
                 }}
             }
     },
-    "version": "1.5.6"
+    "version": "1.6.21"
 }
