@@ -17,6 +17,7 @@
             "urlIdentifier": "servicetitan.com",
             "name": "servicetitan",
             "logFormat": "text/html",
+            "useLicense": true,
             "embedUrls": [
                 "https://*.servicetitan.com/*"
             ],
