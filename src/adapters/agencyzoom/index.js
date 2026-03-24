@@ -12,6 +12,78 @@ const models = initModels(sequelize);
 
 const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
 
+async function getLicenseStatus({ userId }) {
+  try {
+    const user = await UserModel.findByPk(userId);
+    if (!user) {
+      return {
+        isLicenseValid: false,
+        licenseStatus: "User Not Found",
+        licenseStatusDescription: ""
+      };
+    }
+
+    const company = await models.companies.findOne({
+      where: {
+        hostname: user.hostname
+      },
+      raw: true
+    });
+
+    if (!company || company.status !== true) {
+      return {
+        isLicenseValid: false,
+        licenseStatus: "Inactive",
+        licenseStatusDescription: "Purchase license to continue"
+      };
+    }
+
+    return {
+      isLicenseValid: true,
+      licenseStatus: "Active",
+      licenseStatusDescription: "Basic"
+    };
+
+  } catch (error) {
+    console.error("getLicenseStatus error:", error);
+
+    return {
+      isLicenseValid: false,
+      licenseStatus: "Error",
+      licenseStatusDescription: "Error validating license"
+    };
+  }
+}
+
+async function validateLicenseOrFail(user) {
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+  if (!licenseStatus.isLicenseValid) {
+    return {
+      successful: false,
+      returnMessage: {
+        message: 'License validation failed',
+        messageType: 'error',
+        details: [
+          {
+            title: 'License Issue',
+            items: [
+              {
+                id: '1',
+                type: 'text',
+                text: 'Please go to user settings page and refresh license status'
+              }
+            ]
+          }
+        ],
+        ttl: 5000
+      }
+    };
+  }
+
+  return null; 
+}
+
 function extractLogId(noteBody) {
 
   const match = noteBody.match(/RC_LOG_ID:\s*(\S+)/);
@@ -33,20 +105,6 @@ function buildNoteIndex(notes) {
   }
 
   return index;
-}
-
-function upsertCallRecording(body, recordingLink) {
-  const recordingRegex = /Recording:\s*(.+)/;
-
-  if (!recordingLink) return body;
-
-  if (recordingRegex.test(body)) {
-    body = body.replace(recordingRegex, `Recording: ${recordingLink}`);
-  } else {
-    body += `\nRecording: ${recordingLink}\n`;
-  }
-
-  return body;
 }
 
 /* ---------------- AUTH TYPE ---------------- */
@@ -120,6 +178,8 @@ async function getUserInfo(authHeader) {
       };
     }
 
+    const token = await authenticate(username, password);
+
     // Find company
     const company = await models.companies.findOne({
       where: { hostname },
@@ -146,26 +206,8 @@ async function getUserInfo(authHeader) {
 
     const {
       maxAllowedUsers,
-      status,
       customers = []
     } = company;
-
-    // License check
-    if (status !== true) {
-      return {
-        successful: false,
-        platformUserInfo: {
-          id: "",
-          name: "",
-          platformAdditionalInfo: {}
-        },
-        returnMessage: {
-          messageType: "danger",
-          message: "You do not have an active license. Please contact us.",
-          ttl: 3000
-        }
-      };
-    }
 
     // Check existing user
     let customer = customers.find(c => c.email === username);
@@ -274,6 +316,8 @@ function normalizePhone(phone) {
 
 async function findContact({ user, phoneNumber }) {
   try {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const auth = await getRefreshedAuthToken(user);
     const phone = normalizePhone(phoneNumber);
@@ -371,6 +415,8 @@ async function findContactWithName({ user, name }) {
 /* ---------------- CREATE CONTACT ---------------- */
 
 async function createContact({ user, phoneNumber, newContactName }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   if (!newContactName?.trim()) {
     return {
@@ -437,11 +483,11 @@ async function createContact({ user, phoneNumber, newContactName }) {
 /* ---------------- CREATE CALL LOG ---------------- */
 
 async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const auth = await getRefreshedAuthToken(user);
-
   const logId = `az-log-${Date.now().toString(36)}`;
-
   const subject =
     callLog.customSubject ??
     `${callLog.direction} Call ${callLog.direction === "Outbound" ? "to" : "from"} ${contactInfo.name}`;
@@ -490,18 +536,6 @@ ${description}
   }
 }
 
-function upsertSection(body, title, content) {
-  if (!content) return body;
-
-  const regex = new RegExp(`${title}:\\s*([\\s\\S]*?)(\\n[A-Z][a-zA-Z ]+:|$)`, "i");
-
-  if (regex.test(body)) {
-    return body.replace(regex, `${title}:\n${content}\n`);
-  }
-
-  return body + `\n${title}:\n${content}\n`;
-}
-
 
 /* ---------------- UPDATE CALL LOG ---------------- */
 
@@ -519,6 +553,8 @@ async function updateCallLog({
   composedLogDetails,
   existingCallLogDetails
 }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const auth = await getRefreshedAuthToken(user);
 
@@ -615,6 +651,8 @@ ${description}
 /* ---------------- GET CALL LOG ---------------- */
 
 async function getCallLog({ user, callLogId }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   if (!callLogId) {
     return {
@@ -701,6 +739,8 @@ async function getCallLog({ user, callLogId }) {
 /* ---------------- MESSAGE LOG ---------------- */
 
 async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   if (!contactInfo?.id) {
     return {
@@ -714,9 +754,7 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
   }
 
   const auth = await getRefreshedAuthToken(user);
-
   const logId = `az-msg-${Date.now().toString(36)}`;
-
   const messageType =
     recordingLink ? "Voicemail" :
       (faxDocLink ? "Fax" : "SMS");
@@ -771,6 +809,8 @@ ${description}
 }
 
 async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const auth = await getRefreshedAuthToken(user);
 
@@ -911,3 +951,4 @@ exports.unAuthorize = unAuthorize;
 exports.findContactWithName = findContactWithName;
 exports.getLogFormatType = getLogFormatType;
 exports.getRefreshedAuthToken = getRefreshedAuthToken;
+exports.getLicenseStatus = getLicenseStatus
