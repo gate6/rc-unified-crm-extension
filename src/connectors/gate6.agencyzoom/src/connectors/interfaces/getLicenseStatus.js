@@ -1,6 +1,6 @@
 const { UserModel } = require('@app-connect/core/models/userModel');
-const { sequelize } = require('../../../../servicenow-models/sequelize');
-const { initModels } = require('../../../../servicenow-models/init-models');
+const { sequelize } = require('../../agencyzoom-models/sequelize');
+const { initModels } = require('../../agencyzoom-models/init-models');
 
 const models = initModels(sequelize);
 
