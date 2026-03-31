@@ -417,7 +417,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
-            `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}`,
+            `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}^ORmobile_phoneLIKE${numberToQuery}`,
             {
                 headers: { 'Authorization':  authHeader }
             });
@@ -803,21 +803,68 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             'Authorization': authHeader
         }
     });
-    
+
+    // detect message type (SMS / Voicemail / Fax)
+    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+
+    const workNotes =
+        `${message.direction} ${messageType} - ${message.direction === 'Inbound'
+            ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
+            : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
+        }\n${message.subject ? `[Message] ${message.subject}` : ''}`
+        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '')
+        + (faxDocLink ? `\n[Fax document link] ${faxDocLink}` : '')
+        + `\n\n--- Created via RingCentral CRM Extension`;
+
     const postBody = {
-        data: {
-            short_description: `[SMS] ${message.direction} SMS - ${message.from.name ?? ''}(${message.from.phoneNumber}) to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`,
-            work_notes: `${message.direction} SMS - ${message.direction == 'Inbound' ? `from ${message.from.name ?? ''}(${message.from.phoneNumber})` : `to ${message.to[0].name ?? ''}(${message.to[0].phoneNumber})`} \n${!!message.subject ? `[Message] ${message.subject}` : ''} ${!!recordingLink ? `\n[Recording link] ${recordingLink}` : ''}\n\n--- Created via RingCentral CRM Extension`,
-            type: "Chat",
-            caller_id: caller_id.data.result.id
-        }
+        short_description: `[${messageType}] ${message.direction} ${messageType} - ${contactInfo.name}`,
+        work_notes: workNotes,
+        assigned_to: caller_id.data.result.id,
+        opened_for: contactInfo.id
+    };
+
+    if (additionalSubmission?.state) {
+        const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
+        postBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
     }
+
+    if (additionalSubmission?.type) {
+        const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
+        postBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
+    }
+
     const addLogRes = await axios.post(
         `https://${hostname}/api/now/table/interaction`,
         postBody,
         {
             headers: { 'Authorization': authHeader }
         });
+
+    if (recordingLink || faxDocLink) {
+
+        const downloadUrl = recordingLink || faxDocLink
+
+        const fileName =
+            recordingLink
+                ? `Voicemail-${Date.now()}.mp3`
+                : `Fax-${Date.now()}.pdf`;
+                
+        const s3Key = fileName;
+
+        const s3Url = await downloadAudioFile(
+            downloadUrl, 
+            process.env.S3_BUCKET, 
+            s3Key
+        );
+
+        await uploadToServiceNow(
+            s3Url, 
+            hostname, 
+            authHeader, 
+            addLogRes?.data?.result?.sys_id, 
+            fileName
+        );
+    }
 
     //-------------------------------------------------------------------------------------------------------------
     //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
@@ -833,29 +880,63 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 }
 
 // Used to update existing message log so to group message in the same day together
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber, additionalSubmission, recordingLink, faxDocLink }) {
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
 
     const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId;
+    const instanceId = userInfo.instanceId; 
     const hostname = userInfo.hostname;
     
     const existingLogId = existingMessageLog.thirdPartyLogId;
+
+    if (!existingLogId) {
+        return {
+            logId: null,
+            returnMessage: {
+                messageType: 'error',
+                message: 'Missing message log id for update.',
+                ttl: 3000
+            }
+        };
+    }
+
     const getLogRes = await axios.get(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
-        {
-            headers: { 'Authorization': authHeader }
-        });
-    const originalNote = getLogRes.data.body;
-    const updateNote = originalNote.replace();
+        { headers: { 'Authorization': authHeader } }
+    );
+
+    let originalNote = getLogRes?.data?.result?.work_notes ?? '';
+
+    // detect message type
+    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+
+    const updatedText =
+        `${message.direction} ${messageType} - ${message.direction === 'Inbound'
+            ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
+            : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
+        }\n${message.subject ? `[Message] ${message.subject}` : ''}`
+        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '')
+        + (faxDocLink ? `\n[Fax document link] ${faxDocLink}` : '');
+
+    const updatedWorkNotes = `${originalNote}\n${updatedText}`;
 
     const patchBody = {
-        data: {
-            body: updateNote,
-        }
+        short_description: `[${messageType}] ${message.direction} ${messageType} - ${existingMessageLog.contactName ?? ''}`,
+        work_notes: updatedWorkNotes
+    };
+
+    if (additionalSubmission?.state) {
+        const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
+        patchBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
     }
+
+    if (additionalSubmission?.type) {
+        const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
+        patchBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
+    }
+
     const updateLogRes = await axios.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
@@ -863,9 +944,43 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
             headers: { 'Authorization': authHeader }
         });
 
+    if (recordingLink || faxDocLink) {
+
+        const downloadUrl = recordingLink || faxDocLink
+
+        const fileName =
+            recordingLink
+                ? `Voicemail-${Date.now()}.mp3`
+                : `Fax-${Date.now()}.pdf`;
+                
+        const s3Key = fileName;
+
+        const s3Url = await downloadAudioFile(
+            downloadUrl, 
+            process.env.S3_BUCKET, 
+            s3Key
+        );
+
+        await uploadToServiceNow(
+            s3Url, 
+            hostname, 
+            authHeader, 
+            existingLogId, 
+            fileName
+        );
+    }
+
     //---------------------------------------------------------------------------------------------------------------------------------------------
     //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
     //---------------------------------------------------------------------------------------------------------------------------------------------
+    return {
+        logId: existingLogId,
+        returnMessage: {
+            message: 'Message log updated.',
+            messageType: 'success',
+            ttl: 3000
+        }
+    };
 }
 
 async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType }) {
