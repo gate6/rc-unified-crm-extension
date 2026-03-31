@@ -18,7 +18,6 @@ const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 
 async function getLicenseStatus({ userId }) {
-    console.log("Ye Chal gya hai")
     try {
         const user = await UserModel.findByPk(userId);
         if (!user) {
@@ -472,7 +471,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
-            `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}`,
+            `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}^ORmobile_phoneLIKE${numberToQuery}`,
             {
                 headers: { 'Authorization':  authHeader }
             });
