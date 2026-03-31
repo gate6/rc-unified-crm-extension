@@ -37,7 +37,7 @@
                 },
                 "oauth": {
                     "authUrl": "https://powertest2.service-now.com/oauth_auth.do",
-                    "clientId": "122e4b94819a418684b6ea77b6bf140c",
+                    "clientId": "41c41ea40ea947b89f9708181534ba69",
                     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
                     "customState": "",
                     "scope": ""
