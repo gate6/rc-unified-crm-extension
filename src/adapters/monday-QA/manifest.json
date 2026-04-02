@@ -24,7 +24,7 @@
         "type": "oauth",
         "oauth": {
           "authUrl": "https://auth.monday.com/oauth2/authorize",
-          "clientId": "954cab65ca4b8b8c5c5cd0742ee65e4d",
+          "clientId": "dc5c1ba381ceabe93b3402589ef4a812",
           "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
           "customState": "",
           "scope": "me:read users:read boards:read boards:write updates:write"
