@@ -443,11 +443,15 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
     const jobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
 
-    const subject = callLog.customSubject 
-        ? callLog.customSubject
-        : `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+    let subject = "";
 
     let sections = [];
+
+    if (callLog?.customSubject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+        subject = callLog.customSubject 
+            ? callLog.customSubject
+            : `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+    }
 
     if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
         sections.push(`Agent Notes:\n${note}`);
@@ -536,7 +540,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 }
 
 
-async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNote, transcript }) {
+async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNote, transcript, subject }) {
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -547,7 +551,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     let [realId, logType] = existingCallLog.thirdPartyLogId.split("_");
     logType = logType || "note";
 
-    let subject = "";
+    let subject1 = "";
     let direction = "";
     let startTime = "";
     let endTime = "";
@@ -572,7 +576,6 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
             const body = targetLog.text || "";
 
-            subject = body.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
             direction = body.match(/^\s*Direction:\s*(.*)$/m)?.[1]?.trim() || "";
             startTime = body.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
             endTime = body.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
@@ -582,6 +585,10 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     // ---------------- BUILD OPTIONAL SECTIONS ----------------
 
     let sections = [];
+
+    if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+        subject1 = subject;
+    }
 
     if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
         sections.push(`Agent Notes:\n${note}`);
@@ -604,7 +611,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     // ---------------- FINAL STRUCTURED NOTE ----------------
 
     const noteText = `
-        Subject: ${subject}
+        Subject: ${subject1}
         Direction: ${direction}
         Start Time: ${startTime}
         End Time: ${endTime}
