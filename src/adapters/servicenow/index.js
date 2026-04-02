@@ -17,6 +17,78 @@ const FormData = require("form-data");
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 
+async function getLicenseStatus({ userId }) {
+    try {
+        const user = await UserModel.findByPk(userId);
+        if (!user) {
+            return {
+                isLicenseValid: false,
+                licenseStatus: "User Not Found",
+                licenseStatusDescription: ""
+            };
+        }
+
+        const company = await models.companies.findOne({
+            where: {
+                hostname: user.hostname,
+                rcAccountId: user.rcAccountId
+            }
+        });
+
+        if (!company || company.status !== true) {
+            return {
+                isLicenseValid: false,
+                licenseStatus: "Inactive",
+                licenseStatusDescription: "Purchase license to continue"
+            };
+        }
+
+        return {
+            isLicenseValid: true,
+            licenseStatus: "Active",
+            licenseStatusDescription: "Basic"
+        };
+
+    } catch (error) {
+        console.error("getLicenseStatus error:", error);
+
+        return {
+            isLicenseValid: false,
+            licenseStatus: "Error",
+            licenseStatusDescription: "Error validating license"
+        };
+    }
+}
+
+async function validateLicenseOrFail(user) {
+    const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+    if (!licenseStatus.isLicenseValid) {
+        return {
+            successful: false,
+            returnMessage: {
+                message: 'License validation failed',
+                messageType: 'error',
+                details: [
+                    {
+                        title: 'License Issue',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: 'Please go to user settings page and refresh license status'
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
+    }
+
+    return null; 
+}
+
 //function to generate aplhanumeric string for admin login sysid
 function generateAlphanumericString(length) {
     const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -208,7 +280,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                     };
                 }
                 //allow login of new user
-                if ((checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers) && checkActiveUsers.status == 1) {
+                if (checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers) {
 
                     if (checkActiveUsers.customers.some(customer => customer.sysId === id)) {
                         return {
@@ -335,6 +407,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     // ----------------------------------------
     // ---TODO.3: Implement contact matching---
     // ----------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const numberToQueryArray = [];
     console.log("authHeader", authHeader)
@@ -369,28 +443,9 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     const companyData = await models.companies.findOne({
         where: {
-            hostname: hostname,
-            status: true
+            hostname: hostname
         }
     });
-
-    if (!(companyData?.status)) {
-        return {
-            successful: false,
-            platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
-            },
-            returnMessage: {
-                messageType: 'danger',
-                message: `You are not having an active license. Please contact us.`,
-                ttl: 3000
-            }
-        };
-    }
 
     const stateSelection = await axios.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
@@ -416,7 +471,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
-            `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}`,
+            `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}^ORmobile_phoneLIKE${numberToQuery}`,
             {
                 headers: { 'Authorization':  authHeader }
             });
@@ -453,6 +508,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ------------------------------------
     // ---TODO.4: Implement call logging---
     // ------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     let body = '';
     if (user.userSettings?.addCallLogNote?.value ?? true) { body = upsertCallAgentNote({ body, note }); }
@@ -467,8 +524,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
-            hostname: userInfo.hostname,
-            status: true
+            hostname: userInfo.hostname
         },
         raw: true
     })
@@ -495,28 +551,9 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const hostname = userInfo.hostname;
     const companyData = await models.companies.findOne({
         where: {
-            hostname: hostname,
-            status: true
+            hostname: hostname
         }
     });
-
-    if (!(companyData?.status)) {
-        return {
-            successful: false,
-            platformUserInfo: {
-                id: "",
-                name: "",
-                timezoneName: "",
-                timezoneOffset: "",
-                platformAdditionalInfo: {}
-            },
-            returnMessage: {
-                messageType: 'danger',
-                message: `You are not having an active license. Please contact us.`,
-                ttl: 3000
-            }
-        };
-    }
 
     const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact';
     
@@ -668,6 +705,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
     // ---TODO.5: Implement call log fetching---
     // -----------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -699,6 +738,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -766,6 +807,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---------------------------------------
     // ---TODO.7: Implement message logging---
     // ---------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -773,8 +816,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
-            hostname: hostname,
-            status: true
+            hostname: hostname
         },
         raw: true
     })
@@ -803,17 +845,20 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         }
     });
 
+    // detect message type (SMS / Voicemail / Fax)
+    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+
     const workNotes =
-        `${message.direction} SMS - ${
-            message.direction === 'Inbound'
-                ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
-                : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
+        `${message.direction} ${messageType} - ${message.direction === 'Inbound'
+            ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
+            : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
         }\n${message.subject ? `[Message] ${message.subject}` : ''}`
         + (recordingLink ? `\n[Recording link] ${recordingLink}` : '')
+        + (faxDocLink ? `\n[Fax document link] ${faxDocLink}` : '')
         + `\n\n--- Created via RingCentral CRM Extension`;
 
     const postBody = {
-        short_description: `[SMS] ${message.direction} SMS - ${contactInfo.name}`,
+        short_description: `[${messageType}] ${message.direction} ${messageType} - ${contactInfo.name}`,
         work_notes: workNotes,
         assigned_to: caller_id.data.result.id,
         opened_for: contactInfo.id
@@ -836,6 +881,32 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             headers: { 'Authorization': authHeader }
         });
 
+    if (recordingLink || faxDocLink) {
+
+        const downloadUrl = recordingLink || faxDocLink
+
+        const fileName =
+            recordingLink
+                ? `Voicemail-${Date.now()}.mp3`
+                : `Fax-${Date.now()}.pdf`;
+                
+        const s3Key = fileName;
+
+        const s3Url = await downloadAudioFile(
+            downloadUrl, 
+            process.env.S3_BUCKET, 
+            s3Key
+        );
+
+        await uploadToServiceNow(
+            s3Url, 
+            hostname, 
+            authHeader, 
+            addLogRes?.data?.result?.sys_id, 
+            fileName
+        );
+    }
+
     //-------------------------------------------------------------------------------------------------------------
     //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
     //-------------------------------------------------------------------------------------------------------------
@@ -850,10 +921,13 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 }
 
 // Used to update existing message log so to group message in the same day together
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber, additionalSubmission, recordingLink }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber, additionalSubmission, recordingLink, faxDocLink }) {
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
+
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId; 
     const hostname = userInfo.hostname;
@@ -878,18 +952,21 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
     let originalNote = getLogRes?.data?.result?.work_notes ?? '';
 
+    // detect message type
+    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+
     const updatedText =
-        `${message.direction} SMS - ${
-            message.direction === 'Inbound'
-                ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
-                : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
+        `${message.direction} ${messageType} - ${message.direction === 'Inbound'
+            ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
+            : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
         }\n${message.subject ? `[Message] ${message.subject}` : ''}`
-        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '');
+        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '')
+        + (faxDocLink ? `\n[Fax document link] ${faxDocLink}` : '');
 
     const updatedWorkNotes = `${originalNote}\n${updatedText}`;
 
     const patchBody = {
-        short_description: `[SMS] ${message.direction} SMS - ${existingMessageLog.contactName ?? ''}`,
+        short_description: `[${messageType}] ${message.direction} ${messageType} - ${existingMessageLog.contactName ?? ''}`,
         work_notes: updatedWorkNotes
     };
 
@@ -902,12 +979,39 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
         patchBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
     }
+
     const updateLogRes = await axios.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
             headers: { 'Authorization': authHeader }
         });
+
+    if (recordingLink || faxDocLink) {
+
+        const downloadUrl = recordingLink || faxDocLink
+
+        const fileName =
+            recordingLink
+                ? `Voicemail-${Date.now()}.mp3`
+                : `Fax-${Date.now()}.pdf`;
+                
+        const s3Key = fileName;
+
+        const s3Url = await downloadAudioFile(
+            downloadUrl, 
+            process.env.S3_BUCKET, 
+            s3Key
+        );
+
+        await uploadToServiceNow(
+            s3Url, 
+            hostname, 
+            authHeader, 
+            existingLogId, 
+            fileName
+        );
+    }
 
     //---------------------------------------------------------------------------------------------------------------------------------------------
     //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
@@ -926,6 +1030,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ----------------------------------------
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -933,8 +1039,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
 
     const companyData = await models.companies.findOne({
         where: {
-            hostname: hostname,
-            status: true
+            hostname: hostname
         }
     });
 
@@ -1074,3 +1179,4 @@ exports.findContact = findContact;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
 exports.upsertCallDisposition = upsertCallDisposition;
+exports.getLicenseStatus = getLicenseStatus
