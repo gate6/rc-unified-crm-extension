@@ -443,9 +443,9 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
     const jobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
 
-    const subject =
-        callLog.customSubject ??
-        `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+    const subject = callLog.customSubject 
+        ? callLog.customSubject
+        : `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
 
     let sections = [];
 
