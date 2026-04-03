@@ -503,15 +503,12 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
     const jobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
 
-    let subject = "";
+    const subject =
+        (user.userSettings?.addCallLogSubject?.value ?? true)
+            ? (callLog?.customSubject?.trim() || "")
+            : ""
 
     let sections = [];
-
-    if (callLog?.customSubject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
-        subject = callLog.customSubject 
-            ? callLog.customSubject
-            : `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
-    }
 
     if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
         sections.push(`Agent Notes:\n${note}`);
@@ -609,7 +606,10 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     const contactId = existingCallLog.contactId;
-    const subjectToUse = subject && (user.userSettings?.addCallLogSubject?.value ?? true) ? subject : "";
+    const subjectToUse =
+        (user.userSettings?.addCallLogSubject?.value ?? true)
+            ? (subject?.trim() || "")
+            : ""
 
     let [realId, logType] = existingCallLog.thirdPartyLogId.split("_");
     logType = logType || "note";
@@ -981,10 +981,16 @@ async function getCallLog({ user, callLogId }) {
             );
 
             const summary = jobRes.data?.summary || "";
+            const normalized = summary.replace(/\r\n/g, '\n');
 
-            subject = summary.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
+            const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
+            subject = subjectMatch ? subjectMatch[1].trim() : '';
 
-            const agentMatch = summary.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/);
+            if (!subject || subject.toLowerCase().startsWith('direction:')) {
+                subject = '';
+            }
+
+            const agentMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Za-z][^\n]*:|$)/);
 
             if (agentMatch) {
                 note = agentMatch[1].trim();
@@ -1030,10 +1036,16 @@ async function getCallLog({ user, callLogId }) {
             if (targetLog) {
 
                 const body = targetLog.text || "";
+                const normalized = body.replace(/\r\n/g, '\n');
 
-                subject = body.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
+                const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
+                subject = subjectMatch ? subjectMatch[1].trim() : '';
 
-                const agentMatch = body.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/);
+                if (!subject || subject.toLowerCase().startsWith('direction:')) {
+                    subject = '';
+                }
+
+                const agentMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Za-z][^\n]*:|$)/);
 
                 if (agentMatch) {
                     note = agentMatch[1].trim();
