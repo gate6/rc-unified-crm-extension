@@ -609,11 +609,11 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     const contactId = existingCallLog.contactId;
+    const subjectToUse = subject && (user.userSettings?.addCallLogSubject?.value ?? true) ? subject : "";
 
     let [realId, logType] = existingCallLog.thirdPartyLogId.split("_");
     logType = logType || "note";
 
-    let subject1 = "";
     let direction = "";
     let startTime = "";
     let endTime = "";
@@ -648,10 +648,6 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     let sections = [];
 
-    if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
-        subject1 = subject;
-    }
-
     if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
         sections.push(`Agent Notes:\n${note}`);
     }
@@ -673,7 +669,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     // ---------------- FINAL STRUCTURED NOTE ----------------
 
     const noteText = `
-        Subject: ${subject1}
+        Subject: ${subjectToUse}
         Direction: ${direction}
         Start Time: ${startTime}
         End Time: ${endTime}
