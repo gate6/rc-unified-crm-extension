@@ -503,15 +503,12 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
     const jobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
 
-    let subject = "";
+    const subject =
+        (user.userSettings?.addCallLogSubject?.value ?? true)
+            ? (callLog?.customSubject?.trim() || "")
+            : ""
 
     let sections = [];
-
-    if (callLog?.customSubject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
-        subject = callLog.customSubject 
-            ? callLog.customSubject
-            : `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
-    }
 
     if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
         sections.push(`Agent Notes:\n${note}`);
@@ -609,7 +606,10 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     const contactId = existingCallLog.contactId;
-    const subjectToUse = subject && (user.userSettings?.addCallLogSubject?.value ?? true) ? subject : "";
+    const subjectToUse =
+        (user.userSettings?.addCallLogSubject?.value ?? true)
+            ? (subject?.trim() || "")
+            : ""
 
     let [realId, logType] = existingCallLog.thirdPartyLogId.split("_");
     logType = logType || "note";
@@ -982,7 +982,12 @@ async function getCallLog({ user, callLogId }) {
 
             const summary = jobRes.data?.summary || "";
 
-            subject = summary.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
+            const subjectMatch = summary.match(/Subject:\s*(.*?)(?:\n|$)/);
+            subject = subjectMatch ? subjectMatch[1].trim() : '';
+
+            if (!subject || subject.toLowerCase().includes('direction:')) {
+                subject = '';
+            }
 
             const agentMatch = summary.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/);
 
@@ -1031,7 +1036,12 @@ async function getCallLog({ user, callLogId }) {
 
                 const body = targetLog.text || "";
 
-                subject = body.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
+                const subjectMatch = body.match(/Subject:\s*(.*?)(?:\n|$)/);
+                subject = subjectMatch ? subjectMatch[1].trim() : '';
+
+                if (!subject || subject.toLowerCase().includes('direction:')) {
+                    subject = '';
+                }
 
                 const agentMatch = body.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/);
 
