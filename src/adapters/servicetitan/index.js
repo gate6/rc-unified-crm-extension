@@ -981,15 +981,16 @@ async function getCallLog({ user, callLogId }) {
             );
 
             const summary = jobRes.data?.summary || "";
+            const normalized = summary.replace(/\r\n/g, '\n');
 
-            const subjectMatch = summary.match(/Subject:\s*(.*?)(?:\n|$)/);
+            const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
             subject = subjectMatch ? subjectMatch[1].trim() : '';
 
-            if (!subject || subject.toLowerCase().includes('direction:')) {
+            if (!subject || subject.toLowerCase().startsWith('direction:')) {
                 subject = '';
             }
 
-            const agentMatch = summary.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/);
+            const agentMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Za-z][^\n]*:|$)/);
 
             if (agentMatch) {
                 note = agentMatch[1].trim();
@@ -1035,15 +1036,16 @@ async function getCallLog({ user, callLogId }) {
             if (targetLog) {
 
                 const body = targetLog.text || "";
+                const normalized = body.replace(/\r\n/g, '\n');
 
-                const subjectMatch = body.match(/Subject:\s*(.*?)(?:\n|$)/);
+                const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
                 subject = subjectMatch ? subjectMatch[1].trim() : '';
 
-                if (!subject || subject.toLowerCase().includes('direction:')) {
+                if (!subject || subject.toLowerCase().startsWith('direction:')) {
                     subject = '';
                 }
 
-                const agentMatch = body.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/);
+                const agentMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Za-z][^\n]*:|$)/);
 
                 if (agentMatch) {
                     note = agentMatch[1].trim();
