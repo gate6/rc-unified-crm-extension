@@ -488,8 +488,9 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
   const auth = await getRefreshedAuthToken(user);
   const logId = `az-log-${Date.now().toString(36)}`;
   const subject =
-    callLog.customSubject ??
-    `${callLog.direction} Call ${callLog.direction === "Outbound" ? "to" : "from"} ${contactInfo.name}`;
+    (user.userSettings?.addCallLogSubject?.value ?? true)
+      ? (callLog?.customSubject?.trim() || "")
+      : ""
 
   let description = "";
 
@@ -535,23 +536,9 @@ ${description}
   }
 }
 
-
 /* ---------------- UPDATE CALL LOG ---------------- */
 
-async function updateCallLog({
-  user,
-  existingCallLog,
-  subject,
-  startTime,
-  duration,
-  result,
-  note,
-  aiNote,
-  transcript,
-  recordingLink,
-  composedLogDetails,
-  existingCallLogDetails
-}) {
+async function updateCallLog({ user, existingCallLog, subject, startTime, duration, result, note, aiNote, transcript, recordingLink, composedLogDetails, existingCallLogDetails }) {
   const licenseError = await validateLicenseOrFail(user);
   if (licenseError) return licenseError;
 
@@ -585,10 +572,9 @@ async function updateCallLog({
   const resolvedDuration = duration ?? existingCallLog?.duration ?? 0;
   const resolvedStartTime = startTime || existingCallLog?.startTime || null;
   const resolvedSubject =
-    subject ||
-    composedLogDetails ||
-    existingCallLog?.subject ||
-    `${resolvedDirection || "Call"} Call`;
+    (user.userSettings?.addCallLogSubject?.value ?? true)
+      ? (subject?.trim() || "")
+      : ""
 
   let description = "";
 
@@ -712,10 +698,17 @@ async function getCallLog({ user, callLogId }) {
 
   const body = matchedNote.body;
 
-  const subject = body.match(/Subject:\s*(.*)/)?.[1] || "";
+  const normalized = (body || "").replace(/\r\n/g, '\n');
+
+  const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
+  let subject = subjectMatch ? subjectMatch[1].trim() : '';
+
+  if (!subject || subject.toLowerCase().startsWith('direction:')) {
+      subject = '';
+  }
 
   let agentNote = "";
-  const agentMatch = body.match(/Agent Notes:\s*([\s\S]*?)(?:\n(?:AI Note|Transcript|Recording):|$)/);
+  const agentMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n(?:AI Note|Transcript|Recording):|$)/);
 
   if (agentMatch) {
     agentNote = agentMatch[1].trim();
