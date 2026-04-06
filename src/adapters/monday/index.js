@@ -479,12 +479,17 @@ function parseMondayCallLogBody(body = '') {
     .replace(/<\/?[^>]+(>|$)/g, '')
     .trim()
 
-  const subject = normalized.match(/Subject:\s*(.*)/)?.[1]?.trim() || ''
-  const direction = normalized.match(/Direction:\s*(.*)/)?.[1]?.trim() || ''
-  const startTime = normalized.match(/Start Time:\s*(.*)/)?.[1]?.trim() || ''
-  const endTime = normalized.match(/End Time:\s*(.*)/)?.[1]?.trim() || ''
-  const result = normalized.match(/Result:\s*(.*)/)?.[1]?.trim() || ''
-  const duration = normalized.match(/Duration:\s*(.*)/)?.[1]?.trim() || ''
+  const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/)
+  let subject = subjectMatch ? subjectMatch[1].trim() : ''
+
+  if (!subject || subject.toLowerCase().startsWith('direction:')) {
+    subject = ''
+  }
+  const direction = normalized.match(/Direction:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
+  const startTime = normalized.match(/Start Time:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
+  const endTime = normalized.match(/End Time:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
+  const result = normalized.match(/Result:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
+  const duration = normalized.match(/Duration:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
   let agentNote = ''
   const agentMatch = normalized.match(
     /Agent Notes?:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/i
@@ -662,8 +667,10 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   })
   const boardId = company.tenantId
   const subject =
-    callLog.customSubject ??
-    `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`
+    (user.userSettings?.addCallLogSubject?.value ?? true)
+      ? (callLog?.customSubject?.trim() || "")
+      : ""
+
   let sections = []
 
   if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
@@ -742,7 +749,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   }
 }
 
-async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user }) {
+async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user, subject }) {
   const licenseError = await validateLicenseOrFail(user);
   if (licenseError) return licenseError;
 
@@ -763,6 +770,11 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
 
   const oldBody = res?.data?.updates?.[0]?.body || ''
   const parsed = parseMondayCallLogBody(oldBody)
+  const subjectToUse =
+    (user.userSettings?.addCallLogSubject?.value ?? true)
+      ? (subject?.trim() || "")
+      : ""
+
   let sections = []
 
   if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
@@ -786,7 +798,7 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
 
   const optionalSections = sections.join("\n\n")
   const body = `
-    Subject: ${parsed.subject}
+    Subject: ${subjectToUse}
     Direction: ${parsed.direction}
     Start Time: ${parsed.startTime}
     End Time: ${parsed.endTime}
