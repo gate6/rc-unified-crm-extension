@@ -503,9 +503,10 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
     const jobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
 
-    const subject = callLog.customSubject 
-        ? callLog.customSubject
-        : `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+    const subject =
+        (user.userSettings?.addCallLogSubject?.value ?? true)
+            ? (callLog?.customSubject?.trim() || "")
+            : ""
 
     let sections = [];
 
@@ -596,7 +597,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 }
 
 
-async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNote, transcript }) {
+async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNote, transcript, subject }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
@@ -605,11 +606,14 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     const contactId = existingCallLog.contactId;
+    const subjectToUse =
+        (user.userSettings?.addCallLogSubject?.value ?? true)
+            ? (subject?.trim() || "")
+            : ""
 
     let [realId, logType] = existingCallLog.thirdPartyLogId.split("_");
     logType = logType || "note";
 
-    let subject = "";
     let direction = "";
     let startTime = "";
     let endTime = "";
@@ -634,7 +638,6 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
             const body = targetLog.text || "";
 
-            subject = body.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
             direction = body.match(/^\s*Direction:\s*(.*)$/m)?.[1]?.trim() || "";
             startTime = body.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
             endTime = body.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
@@ -666,7 +669,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     // ---------------- FINAL STRUCTURED NOTE ----------------
 
     const noteText = `
-        Subject: ${subject}
+        Subject: ${subjectToUse}
         Direction: ${direction}
         Start Time: ${startTime}
         End Time: ${endTime}
@@ -978,10 +981,16 @@ async function getCallLog({ user, callLogId }) {
             );
 
             const summary = jobRes.data?.summary || "";
+            const normalized = summary.replace(/\r\n/g, '\n');
 
-            subject = summary.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
+            const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
+            subject = subjectMatch ? subjectMatch[1].trim() : '';
 
-            const agentMatch = summary.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/);
+            if (!subject || subject.toLowerCase().startsWith('direction:')) {
+                subject = '';
+            }
+
+            const agentMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Za-z][^\n]*:|$)/);
 
             if (agentMatch) {
                 note = agentMatch[1].trim();
@@ -1027,10 +1036,16 @@ async function getCallLog({ user, callLogId }) {
             if (targetLog) {
 
                 const body = targetLog.text || "";
+                const normalized = body.replace(/\r\n/g, '\n');
 
-                subject = body.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
+                const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
+                subject = subjectMatch ? subjectMatch[1].trim() : '';
 
-                const agentMatch = body.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/);
+                if (!subject || subject.toLowerCase().startsWith('direction:')) {
+                    subject = '';
+                }
+
+                const agentMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Za-z][^\n]*:|$)/);
 
                 if (agentMatch) {
                     note = agentMatch[1].trim();
