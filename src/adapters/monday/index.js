@@ -693,14 +693,16 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   }
 
   const optionalSections = sections.join("\n\n")
-  const body = `
-    Subject: ${subject}
-    Direction: ${callLog.direction}
-    Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}
-    End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}
+  const lines = [
+    `Subject: ${subject}`,
+    `Direction: ${callLog.direction}`,
+    `Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`,
+    `End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`,
+    "",
+    optionalSections
+  ].filter(Boolean);
 
-    ${optionalSections}
-    `.trim()
+  const body = lines.join("\n");
 
   const res = await mondayRequest(
     resolvedAccessToken,
@@ -797,14 +799,16 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   }
 
   const optionalSections = sections.join("\n\n")
-  const body = `
-    Subject: ${subjectToUse}
-    Direction: ${parsed.direction}
-    Start Time: ${parsed.startTime}
-    End Time: ${parsed.endTime}
+  const lines = [
+    `Subject: ${subjectToUse}`,
+    `Direction: ${parsed.direction}`,
+    `Start Time: ${parsed.startTime}`,
+    `End Time: ${parsed.endTime}`,
+    "",
+    optionalSections
+  ].filter(Boolean);
 
-    ${optionalSections}
-    `.trim()
+  const body = lines.join("\n");
 
   const updateRes = await mondayRequest(
     resolvedAccessToken,
