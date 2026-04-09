@@ -698,7 +698,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     `Direction: ${callLog.direction}`,
     `Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`,
     `End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`,
-    "",
+    ` `,
     optionalSections
   ].filter(Boolean);
 
@@ -772,10 +772,17 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
 
   const oldBody = res?.data?.updates?.[0]?.body || ''
   const parsed = parseMondayCallLogBody(oldBody)
-  const subjectToUse =
-    (user.userSettings?.addCallLogSubject?.value ?? true)
-      ? (subject?.trim() || "")
-      : ""
+  let subjectToUse = ""
+
+    if (user.userSettings?.addCallLogSubject?.value ?? true) {
+        if (subject === undefined || subject === "") {
+            subjectToUse = originalSubject;
+        } else if (subject.trim() === "") {
+            subjectToUse = "";
+        } else {
+            subjectToUse = subject.trim();
+        }
+    }
 
   let sections = []
 
@@ -804,7 +811,7 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
     `Direction: ${parsed.direction}`,
     `Start Time: ${parsed.startTime}`,
     `End Time: ${parsed.endTime}`,
-    "",
+    ` `,
     optionalSections
   ].filter(Boolean);
 
