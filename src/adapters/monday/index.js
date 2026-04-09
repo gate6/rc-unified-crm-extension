@@ -692,7 +692,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     sections.push(`Transcript:\n${transcript}`)
   }
 
-  const optionalSections = sections.join("\n\n")
+  const optionalSections = sections.join("<br><br>")
   const lines = [
     `Subject: ${subject}`,
     `Direction: ${callLog.direction}`,
@@ -702,7 +702,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     optionalSections
   ].filter(Boolean);
 
-  const body = lines.join("\n");
+  const body = lines.join("<br>");
 
   const res = await mondayRequest(
     resolvedAccessToken,
@@ -776,7 +776,7 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
 
     if (user.userSettings?.addCallLogSubject?.value ?? true) {
         if (subject === undefined || subject === "") {
-            subjectToUse = originalSubject;
+            subjectToUse = parsed.subject;
         } else if (subject.trim() === "") {
             subjectToUse = "";
         } else {
@@ -805,7 +805,7 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
     sections.push(`Transcript:\n${transcript}`)
   }
 
-  const optionalSections = sections.join("\n\n")
+  const optionalSections = sections.join("<br><br>")
   const lines = [
     `Subject: ${subjectToUse}`,
     `Direction: ${parsed.direction}`,
@@ -815,7 +815,7 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
     optionalSections
   ].filter(Boolean);
 
-  const body = lines.join("\n");
+  const body = lines.join("<br>");
 
   const updateRes = await mondayRequest(
     resolvedAccessToken,
