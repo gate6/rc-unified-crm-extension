@@ -674,22 +674,22 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   let sections = []
 
   if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
-    sections.push(`Agent Notes:\n${note}`)
+    sections.push(`Agent Notes:<br>${note}`)
   }
   if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
-    sections.push(`Result:\n${callLog.result}`)
+    sections.push(`Result:<br>${callLog.result}`)
   }
   if (callLog?.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
-    sections.push(`Duration:\n${callLog.duration} sec`)
+    sections.push(`Duration:<br>${callLog.duration} sec`)
   }
   if (callLog?.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) {
-    sections.push(`Recording:\n${callLog.recording.link}`)
+    sections.push(`Recording:<br>${callLog.recording.link}`)
   }
   if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-    sections.push(`AI Note:\n${aiNote}`)
+    sections.push(`AI Note:<br>${aiNote}`)
   }
   if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-    sections.push(`Transcript:\n${transcript}`)
+    sections.push(`Transcript:<br>${transcript}`)
   }
 
   const optionalSections = sections.join("<br><br>")
@@ -698,7 +698,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     `Direction: ${callLog.direction}`,
     `Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`,
     `End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`,
-    ` `,
+    "",
     optionalSections
   ].filter(Boolean);
 
@@ -787,22 +787,22 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   let sections = []
 
   if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
-    sections.push(`Agent Notes:\n${note}`)
+    sections.push(`Agent Notes:<br>${note}`)
   }
   if (parsed.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
-    sections.push(`Result:\n${parsed.result}`)
+    sections.push(`Result:<br>${parsed.result}`)
   }
   if (parsed.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
-    sections.push(`Duration:\n${parsed.duration}`)
+    sections.push(`Duration:<br>${parsed.duration}`)
   }
   if (recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) {
-    sections.push(`Recording:\n${recordingLink}`)
+    sections.push(`Recording:<br>${recordingLink}`)
   }
   if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-    sections.push(`AI Note:\n${aiNote}`)
+    sections.push(`AI Note:<br>${aiNote}`)
   }
   if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-    sections.push(`Transcript:\n${transcript}`)
+    sections.push(`Transcript:<br>${transcript}`)
   }
 
   const optionalSections = sections.join("<br><br>")
@@ -811,7 +811,7 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
     `Direction: ${parsed.direction}`,
     `Start Time: ${parsed.startTime}`,
     `End Time: ${parsed.endTime}`,
-    ` `,
+    "",
     optionalSections
   ].filter(Boolean);
 
@@ -920,8 +920,8 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
         ? contactInfo.name
         : 'You'
     const text = message.subject || message.text || ''
-    body = `SMS conversation with ${contactInfo.name}\n`
-    body += `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
+    body = `SMS conversation with ${contactInfo.name}<br>`
+    body += `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}<br>`
 
   }
 
@@ -1118,10 +1118,10 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
       : 'You'
   const text = message.subject || message.text || ''
   const newLine =
-    `\n[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
+    `<br>[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}<br>`
   const messageLines =
     previousBody
-      .split('\n')
+      .split('<br>')
       .filter(l => l.includes(':'))
   const messageCount = messageLines.length
   let updatedBody
@@ -1130,8 +1130,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
   if (messageCount >= MAX_THREAD_MESSAGES) {
     updatedBody =
-      `SMS conversation with ${contactInfo.name}\n` +
-      `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}\n`
+      `SMS conversation with ${contactInfo.name}<br>` +
+      `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}<br>`
     response = await mondayRequest(
       resolvedAccessToken,
       `
