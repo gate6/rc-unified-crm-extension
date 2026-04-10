@@ -606,10 +606,6 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     const contactId = existingCallLog.contactId;
-    const subjectToUse =
-        (user.userSettings?.addCallLogSubject?.value ?? true)
-            ? (subject?.trim() || "")
-            : ""
 
     let [realId, logType] = existingCallLog.thirdPartyLogId.split("_");
     logType = logType || "note";
@@ -617,9 +613,11 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     let direction = "";
     let startTime = "";
     let endTime = "";
+    let result = "";
+    let duration = "";
 
     // ---------------- FETCH OLD DATA ----------------
-
+    let body = "";
     if (logType === "note") {
 
         const getLogRes = await axios.get(
@@ -635,13 +633,35 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         const targetLog = getLogRes.data.data.find(log => log.id == realId);
 
         if (targetLog) {
-
-            const body = targetLog.text || "";
-
-            direction = body.match(/^\s*Direction:\s*(.*)$/m)?.[1]?.trim() || "";
-            startTime = body.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
-            endTime = body.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
+            body = targetLog.text || "";
         }
+    } else {
+        const jobRes = await axios.get(
+            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${realId}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey
+                }
+            }
+        );
+
+        body = jobRes.data?.summary || "";
+    }
+    let subjectToUse = "";
+    if (body) {
+        const normalized = body.replace(/\r\n/g, '\n');
+        const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/)
+        const extractedSubject = subjectMatch?.[1]?.trim();
+
+        if (extractedSubject && !extractedSubject.toLowerCase().startsWith('direction:')) {
+            subjectToUse = extractedSubject;
+        }
+        direction = normalized.match(/^\s*Direction:\s*(.*)$/m)?.[1]?.trim() || "";
+        startTime = normalized.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
+        endTime = normalized.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
+        result = normalized.match(/^\s*Result:\s*(.*)$/m)?.[1]?.trim() || "";
+        duration = normalized.match(/^\s*Duration:\s*(.*)$/m)?.[1]?.trim() || "";
     }
 
     // ---------------- BUILD OPTIONAL SECTIONS ----------------
@@ -663,6 +683,17 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
         sections.push(`Transcript:\n${transcript}`);
     }
+    if (user.userSettings?.addCallLogResult?.value ?? true) {
+        sections.push(`Result:\n${result}`);
+    }
+
+    if (user.userSettings?.addCallLogDuration?.value ?? true) {
+        sections.push(`Duration:\n${duration} sec`);
+    }
+
+    if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+        subjectToUse = subject.trim();
+    }
 
     const optionalSections = sections.join("\n\n");
 
@@ -678,6 +709,8 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         `.trim();
 
     let newLogId;
+
+    console.log("noteText", noteText);
 
     // ---------------- UPDATE NOTE ----------------
 
