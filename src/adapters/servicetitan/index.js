@@ -710,8 +710,6 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     let newLogId;
 
-    console.log("noteText", noteText);
-
     // ---------------- UPDATE NOTE ----------------
 
     if (logType === "note") {
