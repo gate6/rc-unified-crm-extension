@@ -9,7 +9,7 @@ const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = initModels(sequelize);
 
-const AZ_BASE_URL = process.env.AGENCY_ZOOM_BASE_URI;
+const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
 
 async function getLicenseStatus({ userId }) {
   try {
