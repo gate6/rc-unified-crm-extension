@@ -771,16 +771,10 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const originalSubject = getLogRes?.data?.result?.short_description || '';
     let patchBody = {};
 
-    let subjectToUse = ""
+    let subjectToUse = originalSubject || "";
 
-    if (user.userSettings?.addCallLogSubject?.value ?? true) {
-        if (subject === undefined || subject === "") {
-            subjectToUse = originalSubject;
-        } else if (subject.trim() === "") {
-            subjectToUse = "";
-        } else {
-            subjectToUse = subject.trim();
-        }
+    if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+        subjectToUse = subject.trim();
     }
     
     let logBody = originalNote;
