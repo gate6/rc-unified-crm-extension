@@ -12,6 +12,9 @@ const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = initModels(sequelize);
 
+const SERVICE_TITAN_JPM_URL= "https://api-integration.servicetitan.io/jpm/v2/tenant"
+const SERVICE_TITAN_CRM_URL= "https://api-integration.servicetitan.io/crm/v2/tenant"
+
 async function getLicenseStatus({ userId }) {
   try {
     const user = await UserModel.findByPk(userId);
@@ -276,7 +279,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
         phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
     }
     const personInfo = await axios.get(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}`,
+        `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}`,
         {
             headers: {
                 'Authorization': `Bearer ${auth}`,
@@ -318,7 +321,7 @@ async function findContactWithName({ user, name }) {
 
     try {
         const personInfo = await axios.get(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers?name=${name}`,
+            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?name=${name}`,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
@@ -403,7 +406,7 @@ async function createContact({ user, phoneNumber, newContactName }) {
         };
 
         const response = await axios.post(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers`,
+            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers`,
             payload,
             {
                 headers: {
@@ -447,7 +450,7 @@ async function getUserList({ user, authHeader }) {
 
     try {
         const userListResp = await axios.get(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers`,
+            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers`,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
@@ -475,7 +478,7 @@ async function fetchJobs({ user, params = {} }) {
         const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
         const resp = await axios.get(
-            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`,
+            `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
@@ -555,7 +558,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     if (!jobs || jobs.length === 0) {
 
         addNoteRes = await axios.post(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactInfo.id}/notes`,
+            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}/notes`,
             { text: noteText },
             {
                 headers: {
@@ -571,7 +574,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
         const latestJob = jobs.reduce((max, job) => job.id > max.id ? job : max);
 
         addNoteRes = await axios.patch(
-            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${latestJob.id}`,
+            `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${latestJob.id}`,
             { summary: noteText },
             {
                 headers: {
@@ -606,10 +609,6 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     const contactId = existingCallLog.contactId;
-    const subjectToUse =
-        (user.userSettings?.addCallLogSubject?.value ?? true)
-            ? (subject?.trim() || "")
-            : ""
 
     let [realId, logType] = existingCallLog.thirdPartyLogId.split("_");
     logType = logType || "note";
@@ -617,13 +616,15 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     let direction = "";
     let startTime = "";
     let endTime = "";
+    let result = "";
+    let duration = "";
 
     // ---------------- FETCH OLD DATA ----------------
-
+    let body = "";
     if (logType === "note") {
 
         const getLogRes = await axios.get(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
             {
                 headers: {
                     Authorization: `Bearer ${auth}`,
@@ -635,13 +636,35 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         const targetLog = getLogRes.data.data.find(log => log.id == realId);
 
         if (targetLog) {
-
-            const body = targetLog.text || "";
-
-            direction = body.match(/^\s*Direction:\s*(.*)$/m)?.[1]?.trim() || "";
-            startTime = body.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
-            endTime = body.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
+            body = targetLog.text || "";
         }
+    } else {
+        const jobRes = await axios.get(
+            `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey
+                }
+            }
+        );
+
+        body = jobRes.data?.summary || "";
+    }
+    let subjectToUse = "";
+    if (body) {
+        const normalized = body.replace(/\r\n/g, '\n');
+        const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/)
+        const extractedSubject = subjectMatch?.[1]?.trim();
+
+        if (extractedSubject && !extractedSubject.toLowerCase().startsWith('direction:')) {
+            subjectToUse = extractedSubject;
+        }
+        direction = normalized.match(/^\s*Direction:\s*(.*)$/m)?.[1]?.trim() || "";
+        startTime = normalized.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
+        endTime = normalized.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
+        result = normalized.match(/^\s*Result:\s*(.*)$/m)?.[1]?.trim() || "";
+        duration = normalized.match(/^\s*Duration:\s*(.*)$/m)?.[1]?.trim() || "";
     }
 
     // ---------------- BUILD OPTIONAL SECTIONS ----------------
@@ -662,6 +685,17 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
         sections.push(`Transcript:\n${transcript}`);
+    }
+    if (user.userSettings?.addCallLogResult?.value ?? true) {
+        sections.push(`Result:\n${result}`);
+    }
+
+    if (user.userSettings?.addCallLogDuration?.value ?? true) {
+        sections.push(`Duration:\n${duration} sec`);
+    }
+
+    if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+        subjectToUse = subject.trim();
     }
 
     const optionalSections = sections.join("\n\n");
@@ -684,7 +718,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     if (logType === "note") {
 
         const addNoteRes = await axios.post(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
             { text: noteText },
             {
                 headers: {
@@ -703,7 +737,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     else {
 
         await axios.patch(
-            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${realId}`,
+            `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,
             { summary: noteText },
             {
                 headers: {
@@ -798,7 +832,7 @@ ${faxDocLink}
     }
 
     const addLogRes = await axios.post(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+        `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
         { text: noteText },
         {
             headers: {
@@ -839,7 +873,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     if (messageType === "SMS") {
 
         const getLogRes = await axios.get(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
             {
                 headers: {
                     Authorization: `Bearer ${auth}`,
@@ -920,7 +954,7 @@ ${faxDocLink}
     }
 
     const addLogRes = await axios.post(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+        `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
         { text: noteText },
         {
             headers: {
@@ -971,7 +1005,7 @@ async function getCallLog({ user, callLogId }) {
         if (logType === "job") {
 
             const jobRes = await axios.get(
-                `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${realId}`,
+                 `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,
                 {
                     headers: {
                         Authorization: `Bearer ${auth}`,
@@ -1022,7 +1056,7 @@ async function getCallLog({ user, callLogId }) {
             const contactId = existingCallLogDetails.contactId;
 
             const getLogRes = await axios.get(
-                `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+                `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
                 {
                     headers: {
                         Authorization: `Bearer ${auth}`,
