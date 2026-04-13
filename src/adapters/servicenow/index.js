@@ -511,6 +511,11 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
+    let subject =
+        (user.userSettings?.addCallLogSubject?.value ?? true)
+            ? (callLog?.customSubject?.trim() || "")
+            : "";
+
     let body = '';
     if (user.userSettings?.addCallLogNote?.value ?? true) { body = upsertCallAgentNote({ body, note }); }
     if (user.userSettings?.addCallLogContactNumber?.value ?? true) { body = upsertContactPhoneNumber({ body, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
@@ -566,7 +571,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
 
     const postBody = {
-        short_description: callLog.customSubject ?? `[Call] ${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name} [${contactInfo.phoneNumber}]`,
+        short_description: subject,
         work_notes: body //? `${workNotes} ${body}` : workNotes
     }
 
@@ -717,6 +722,17 @@ async function getCallLog({ user, callLogId, authHeader }) {
         {
             headers: { 'Authorization': authHeader }
         });
+    
+    const journalRes = await axios.get(
+        `https://${hostname}/api/now/table/sys_journal_field?sysparm_query=element_id=${callLogId}^element=work_notes&sysparm_fields=value,sys_created_on`,
+        {
+            headers: { Authorization: authHeader }
+        });
+    
+    const latestNote = journalRes.data.result
+        .sort((a, b) => new Date(b.sys_created_on) - new Date(a.sys_created_on))[0]?.value || '';
+    const agentNoteMatch = latestNote.match(/- Agent note:\s*(.*)/i);
+    const agentNote = agentNoteMatch ? agentNoteMatch[1].trim() : '';
 
     //-------------------------------------------------------------------------------------
     //---CHECK.5: In extension, for a logged call, click edit to see if info is fetched ---
@@ -724,7 +740,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     return {
         callLogInfo: {
             subject: getLogRes.data.result.short_description,
-            note: getLogRes.data.result.work_notes,
+            note: agentNote,
         },
         returnMessage: {
             message: 'Call log fetched.',
@@ -752,8 +768,15 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             headers: { 'Authorization': authHeader }
         });
     const originalNote = getLogRes?.data?.result?.work_notes ?? '';
+    const originalSubject = getLogRes?.data?.result?.short_description || '';
     let patchBody = {};
 
+    let subjectToUse = originalSubject || "";
+
+    if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+        subjectToUse = subject.trim();
+    }
+    
     let logBody = originalNote;
     if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
     if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
@@ -763,8 +786,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
 
     patchBody = {
-            short_description: subject,
-            work_notes: logBody
+        short_description: subjectToUse,
+        work_notes: logBody
     }
 
     const patchLog = await axios.patch(
