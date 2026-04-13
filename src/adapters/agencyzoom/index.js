@@ -555,7 +555,6 @@ async function updateCallLog({ user, existingCallLog, subject, startTime, durati
     };
   }
 
-
   const contactId = existingCallLog.contactId;
   const logId = existingCallLog.thirdPartyLogId;
 
@@ -571,21 +570,29 @@ async function updateCallLog({ user, existingCallLog, subject, startTime, durati
   const resolvedDirection = oldDirection || existingCallLog?.direction || "";
   const resolvedDuration = duration ?? existingCallLog?.duration ?? 0;
   const resolvedStartTime = startTime || existingCallLog?.startTime || null;
-  const resolvedSubject =
-    (user.userSettings?.addCallLogSubject?.value ?? true)
-      ? (subject?.trim() || "")
-      : ""
+  const subjectMatch = typeof oldBody === "string" ? oldBody.match(/Subject:\s*(.*?)(?:\n|$)/)?.[1] || "" : "";
+  let subjectToUse = subjectMatch || "";
+  if (!subjectToUse || subjectToUse.toLowerCase().startsWith("direction:")) {
+    subjectToUse = "";
+  }
 
   let description = "";
 
-  if (note && (user.userSettings?.addCallLogNote?.value ?? true))
+  if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+    subjectToUse = subject.trim();
+  }
+
+  if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
     description += `Agent Notes: ${note}\n`;
+  }
 
-  if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
+  if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
     description += `AI Note: ${aiNote}\n`;
+  }
 
-  if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
+  if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
     description += `Transcript: ${transcript}\n`;
+  }
 
   if (recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) {
     let decodedLink = recordingLink;
@@ -608,7 +615,7 @@ async function updateCallLog({ user, existingCallLog, subject, startTime, durati
 [RingCentral Call Log]
 RC_LOG_ID: ${logId}
 
-Subject: ${resolvedSubject}
+Subject: ${subjectToUse}
 Direction: ${resolvedDirection}
 Result: ${result ?? existingCallLog?.result ?? ""}
 Duration: ${resolvedDuration} sec
