@@ -348,18 +348,20 @@ async function getUserInfo({ authHeader, hostname, query }) {
       };
     }
 
-    const userDataResponse = await fetch("https://api.monday.com/v2", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
+    const userDataResponse = await axios.post(
+      MONDAY_API_URL,
+      {
         query: "query { me { id name email } }"
-      })
-    });
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
-    const result = await userDataResponse.json();
+    const result = userDataResponse.data;
 
     // Check if user data is available
     if (!result?.data?.me) {
@@ -772,17 +774,11 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
 
   const oldBody = res?.data?.updates?.[0]?.body || ''
   const parsed = parseMondayCallLogBody(oldBody)
-  let subjectToUse = ""
+  let subjectToUse = parsed.subject
 
-    if (user.userSettings?.addCallLogSubject?.value ?? true) {
-        if (subject === undefined || subject === "") {
-            subjectToUse = parsed.subject;
-        } else if (subject.trim() === "") {
-            subjectToUse = "";
-        } else {
-            subjectToUse = subject.trim();
-        }
-    }
+  if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+    subjectToUse = subject.trim()
+  }
 
   let sections = []
 
@@ -1305,7 +1301,7 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, hostname }
     })
 
     const response = await axios.post(
-      'https://api.monday.com/v2/file',
+      `${MONDAY_API_URL}/file`,
       formData,
       {
         headers: {
