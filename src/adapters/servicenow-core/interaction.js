@@ -193,21 +193,24 @@ async function findTypeValueById(hostname, authHeader, inputId) {
     
 }
 
-async function findAccountByName(hostname, authHeader, inputValue) {
-    try {
-        console.log("findAccountByName called with:", inputValue);
+function findAccountByNameFromList(accounts, inputValue) {
+    const sanitizedInput = (inputValue || '').trim();
+    if (!sanitizedInput) return null;
 
-        const sanitizedInput = (inputValue || '').trim();
-        if (!sanitizedInput) {
-            return null;
+    const collapseLabel = (val = '') => val.toLowerCase().replace(/\s+/g, '');
+    const collapsedInput = collapseLabel(sanitizedInput);
+
+    for (const acc of accounts) {
+        if (collapseLabel(acc.name || '') === collapsedInput) {
+            return acc.sys_id;
         }
+    }
 
-        // collapse spaces + lowercase
-        const collapseLabel = (val = '') => val.toLowerCase().replace(/\s+/g, '');
+    return null;
+}
 
-        const collapsedInput = collapseLabel(sanitizedInput);
-
-        // fetch accounts
+async function getAllAccounts(hostname, authHeader) {
+    try {
         const response = await axios.get(
             `https://${hostname}/api/now/account`,
             {
@@ -215,27 +218,16 @@ async function findAccountByName(hostname, authHeader, inputValue) {
             }
         );
 
-        const accounts = response.data?.result || [];
-
-        for (const acc of accounts) {
-            const collapsedAccount = collapseLabel(acc.name);
-
-            if (collapsedAccount === collapsedInput) {
-                return acc.sys_id;
-            }
-        }
-
-        return null;
-
+        return response.data?.result || [];
     } catch (error) {
-        console.log("Error in findAccountByName:", error);
-        return null;
+        console.log("Error fetching accounts:", error);
+        return [];
     }
 }
-
 
 exports.findStateValueByName = findStateValueByName;
 exports.findStateValueById = findStateValueById;
 exports.findTypeValueByName = findTypeValueByName;
 exports.findTypeValueById = findTypeValueById;
-exports.findAccountByName = findAccountByName;
+exports.findAccountByNameFromList = findAccountByNameFromList;
+exports.getAllAccounts = getAllAccounts;
