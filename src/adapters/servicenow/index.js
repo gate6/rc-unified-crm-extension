@@ -2,7 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
-const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById } = require('../servicenow-core/interaction');
+const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, findAccountByName } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
@@ -1049,7 +1049,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     };
 }
 
-async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType }) {
+async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType, additionalSubmission }) {
+    console.log("Additional Submission", additionalSubmission)
     // ----------------------------------------
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
@@ -1059,6 +1060,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
+    const accountName = additionalSubmission?.accountName;
 
     const companyData = await models.companies.findOne({
         where: {
@@ -1076,13 +1078,15 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const isExtensionNumber = phoneNumber.toString().length <= 8 && phoneNumber.toString().length >= 3;
 
     if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
-        const account = await axios.get(`https://${hostname}/api/now/account`, {
-            headers: {
-                'Authorization': authHeader
-            }
-        });
+        if (accountName) {
+            const accountId = await findAccountByName(hostname, authHeader, accountName);
 
-        postBody.account = account.data.result[0].sys_id;
+            if (accountId) {
+                postBody.account = accountId;
+            } else {
+                console.log("No matching account found for:", accountName);
+            }
+        }
         postBody.name = newContactName?.toLowerCase();
         contactInfoRes = await axios.post(
             `https://${hostname}/api/now/contact`,

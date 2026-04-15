@@ -193,8 +193,49 @@ async function findTypeValueById(hostname, authHeader, inputId) {
     
 }
 
+async function findAccountByName(hostname, authHeader, inputValue) {
+    try {
+        console.log("findAccountByName called with:", inputValue);
+
+        const sanitizedInput = (inputValue || '').trim();
+        if (!sanitizedInput) {
+            return null;
+        }
+
+        // collapse spaces + lowercase
+        const collapseLabel = (val = '') => val.toLowerCase().replace(/\s+/g, '');
+
+        const collapsedInput = collapseLabel(sanitizedInput);
+
+        // fetch accounts
+        const response = await axios.get(
+            `https://${hostname}/api/now/account`,
+            {
+                headers: { Authorization: authHeader }
+            }
+        );
+
+        const accounts = response.data?.result || [];
+
+        for (const acc of accounts) {
+            const collapsedAccount = collapseLabel(acc.name);
+
+            if (collapsedAccount === collapsedInput) {
+                return acc.sys_id;
+            }
+        }
+
+        return null;
+
+    } catch (error) {
+        console.log("Error in findAccountByName:", error);
+        return null;
+    }
+}
+
 
 exports.findStateValueByName = findStateValueByName;
 exports.findStateValueById = findStateValueById;
 exports.findTypeValueByName = findTypeValueByName;
 exports.findTypeValueById = findTypeValueById;
+exports.findAccountByName = findAccountByName;
