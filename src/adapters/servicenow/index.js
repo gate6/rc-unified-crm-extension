@@ -2,7 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
-const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById } = require('../servicenow-core/interaction');
+const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, findAccountByNameFromList, getAllAccounts } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
@@ -403,6 +403,25 @@ async function unAuthorize({ user }) {
     //--------------------------------------------------------------
 }
 
+function generateFormatsFromE164(e164Number) {
+    const digits = e164Number.replace(/\D/g, '');
+
+    // assume US (1 + 10 digits)
+    if (digits.length === 11 && digits.startsWith('1')) {
+        const d = digits.slice(1);
+
+        return [
+            e164Number,                 // +18003534676
+            digits,                     // 18003534676
+            d,                          // 8003534676
+            `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`, // (800) 353-4676
+            `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`    // 800-353-4676
+        ];
+    }
+
+    return [e164Number];
+}
+
 async function findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension }) {
     // ----------------------------------------
     // ---TODO.3: Implement contact matching---
@@ -410,30 +429,15 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
-    const numberToQueryArray = [];
     console.log("authHeader", authHeader)
+    let numberToQueryArray = [];
 
-    if (overridingFormat === '') {
-        numberToQueryArray.push(phoneNumber.replace(/^\+/, ''));
-    }
-    else {
-        const formats = overridingFormat.split(',');
-        for (var format of formats) {
-            let phoneNumberObj;
-            if(isExtension) {
-                numberToQueryArray.push(phoneNumber);
-            } else {
-                phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
-                if (phoneNumberObj.valid) {
-                    const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
-                    let formattedNumber = format;
-                    for (const numberBit of phoneNumberWithoutCountryCode) {
-                        formattedNumber = formattedNumber.replace('*', numberBit);
-                    }
-                    numberToQueryArray.push(formattedNumber);
-                }
-            }
-        }
+    const isRealExtension = isExtension === true || isExtension === 'true';
+
+    if (isRealExtension && phoneNumber.length <= 8) {
+        numberToQueryArray = [phoneNumber];
+    } else {
+        numberToQueryArray = generateFormatsFromE164(phoneNumber);
     }
 
     const userInfo = await getHostname(user.dataValues.hostname);
@@ -468,7 +472,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const matchedContactInfo = [];
     const isExtensionBool = isExtension === true || isExtension === 'true';
     const contactTable = (companyData?.contactTable?.trim().toLowerCase() == 'user' || isExtensionBool) ? 'table/sys_user' : 'contact';
-
+    
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await axios.get(
             `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}^ORmobile_phoneLIKE${numberToQuery}`,
@@ -1049,7 +1053,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     };
 }
 
-async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType }) {
+async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType, additionalSubmission }) {
     // ----------------------------------------
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
@@ -1076,13 +1080,25 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const isExtensionNumber = phoneNumber.toString().length <= 8 && phoneNumber.toString().length >= 3;
 
     if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
-        const account = await axios.get(`https://${hostname}/api/now/account`, {
-            headers: {
-                'Authorization': authHeader
-            }
-        });
+        const accountName = additionalSubmission?.accountName;
+        const accounts = await getAllAccounts(hostname, authHeader);
+        let accountId = null;
 
-        postBody.account = account.data.result[0].sys_id;
+        if (!accountName || accountName.trim() === '') {
+            accountId = accounts[0]?.sys_id;
+        } else {
+            accountId = findAccountByNameFromList(accounts, accountName);
+
+            if (!accountId) {
+                console.log("No match found, falling back");
+                accountId = accounts[0]?.sys_id;
+            }
+        }
+
+        if (accountId){
+            postBody.account = accountId;
+        }
+
         postBody.name = newContactName?.toLowerCase();
         contactInfoRes = await axios.post(
             `https://${hostname}/api/now/contact`,
