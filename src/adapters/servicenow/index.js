@@ -471,6 +471,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     // You can use parsePhoneNumber functions to further parse the phone number
     const matchedContactInfo = [];
+    const matchedContactIds = new Set();
     const isExtensionBool = isExtension === true || isExtension === 'true';
     const contactTable = (companyData?.contactTable?.trim().toLowerCase() == 'user' || isExtensionBool) ? 'table/sys_user' : 'contact';
     
@@ -483,8 +484,13 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
         if (personInfo.data.result.length > 0) {
             for (var result of personInfo.data.result) {
+                const contactId = (result?.sys_id || '').toString().trim();
+                if (!contactId || matchedContactIds.has(contactId)) {
+                    continue;
+                }
+                matchedContactIds.add(contactId);
                 matchedContactInfo.push({
-                    id: result.sys_id,
+                    id: contactId,
                     name: (contactTable == 'table/sys_user') ? result.user_name : result.name,
                     phone: numberToQuery,
                     additionalInfo: {state: states, type: interactionType}
