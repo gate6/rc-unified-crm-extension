@@ -132,6 +132,16 @@
                 }
             ],
             "page": {
+                "newContact": {
+                    "additionalFields": [
+                        {
+                            "const": "account",
+                            "title": "Account",
+                            "type": "selection",
+                            "contactDependent": false
+                        }
+                    ]
+                },
                 "callLog": {
                     "additionalFields": [
                         {
