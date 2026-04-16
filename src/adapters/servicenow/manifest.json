@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://rcservicenowapi.gate6.com",
+    "serverUrl": "https://unpicaresque-rob-supersilently.ngrok-free.dev",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6",
@@ -135,10 +135,10 @@
                 "newContact": {
                     "additionalFields": [
                         {
-                            "const": "accountName",
-                            "title": "Account Name",
-                            "type": "inputField",
-                            "placeholder": "Enter account name"
+                            "const": "account",
+                            "title": "Account",
+                            "type": "selection",
+                            "contactDependent": false
                         }
                     ]
                 },
