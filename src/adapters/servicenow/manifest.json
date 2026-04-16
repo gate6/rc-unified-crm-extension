@@ -136,10 +136,10 @@
                 "newContact": {
                     "additionalFields": [
                         {
-                            "const": "accountName",
-                            "title": "Account Name",
-                            "type": "inputField",
-                            "placeholder": "Enter account name"
+                            "const": "account",
+                            "title": "Account",
+                            "type": "selection",
+                            "contactDependent": false
                         }
                     ]
                 },
