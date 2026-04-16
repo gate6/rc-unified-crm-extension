@@ -1063,7 +1063,6 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 }
 
 async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType, additionalSubmission }) {
-    console.log("Additional submission for account :", additionalSubmission);
     // ----------------------------------------
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
