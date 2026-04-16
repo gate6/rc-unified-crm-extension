@@ -2,7 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
-const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, findAccountByNameFromList, getAllAccounts } = require('../servicenow-core/interaction');
+const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
@@ -406,20 +406,21 @@ async function unAuthorize({ user }) {
 function generateFormatsFromE164(e164Number) {
     const digits = e164Number.replace(/\D/g, '');
 
-    // assume US (1 + 10 digits)
     if (digits.length === 11 && digits.startsWith('1')) {
         const d = digits.slice(1);
-
         return [
-            e164Number,                 // +18003534676
-            digits,                     // 18003534676
-            d,                          // 8003534676
-            `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`, // (800) 353-4676
-            `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`    // 800-353-4676
+            e164Number,                                               // +18003534676
+            digits,                                                   // 18003534676
+            d,                                                        // 8003534676
+            `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`,      // (800) 353-4676
+            `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`,        // 800-353-4676
+            `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6)}`,        // 800.353.4676
+            `+1 (${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`,   // +1 (800) 353-4676
+            `+1-${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`,     // +1-800-353-4676
+            `(${d.slice(0,3)})${d.slice(3,6)}-${d.slice(6)}`,       // (800)353-4676
         ];
     }
-
-    return [e164Number];
+    return [e164Number, digits];
 }
 
 async function findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension }) {
@@ -492,10 +493,18 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         }
     }
 
+    const accounts = await getAllAccounts(hostname, authHeader);
+    const accountOptions = accounts.map((account) => ({
+        const: account.sys_id,
+        title: account.name
+    }));
+
     matchedContactInfo.push({
         id: 'createNewContact',
         name: 'Create new contact...',
-        additionalInfo: null,
+        additionalInfo: {
+            account: accountOptions
+        },
         isNewContact: true
     });
 
@@ -1080,19 +1089,12 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const isExtensionNumber = phoneNumber.toString().length <= 8 && phoneNumber.toString().length >= 3;
 
     if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
-        const accountName = additionalSubmission?.accountName;
+        const selectedAccountId = (additionalSubmission?.account || '').trim();
         const accounts = await getAllAccounts(hostname, authHeader);
-        let accountId = null;
+        let accountId = accounts[0]?.sys_id;
 
-        if (!accountName || accountName.trim() === '') {
-            accountId = accounts[0]?.sys_id;
-        } else {
-            accountId = findAccountByNameFromList(accounts, accountName);
-
-            if (!accountId) {
-                console.log("No match found, falling back");
-                accountId = accounts[0]?.sys_id;
-            }
+        if (selectedAccountId && accounts.some((account) => account.sys_id === selectedAccountId)) {
+            accountId = selectedAccountId;
         }
 
         if (accountId){

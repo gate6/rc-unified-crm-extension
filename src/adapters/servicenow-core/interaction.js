@@ -193,22 +193,6 @@ async function findTypeValueById(hostname, authHeader, inputId) {
     
 }
 
-function findAccountByNameFromList(accounts, inputValue) {
-    const sanitizedInput = (inputValue || '').trim();
-    if (!sanitizedInput) return null;
-
-    const collapseLabel = (val = '') => val.toLowerCase().replace(/\s+/g, '');
-    const collapsedInput = collapseLabel(sanitizedInput);
-
-    for (const acc of accounts) {
-        if (collapseLabel(acc.name || '') === collapsedInput) {
-            return acc.sys_id;
-        }
-    }
-
-    return null;
-}
-
 async function getAllAccounts(hostname, authHeader) {
     try {
         const response = await axios.get(
@@ -229,5 +213,4 @@ exports.findStateValueByName = findStateValueByName;
 exports.findStateValueById = findStateValueById;
 exports.findTypeValueByName = findTypeValueByName;
 exports.findTypeValueById = findTypeValueById;
-exports.findAccountByNameFromList = findAccountByNameFromList;
 exports.getAllAccounts = getAllAccounts;
