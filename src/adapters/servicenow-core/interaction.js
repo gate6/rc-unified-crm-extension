@@ -193,8 +193,24 @@ async function findTypeValueById(hostname, authHeader, inputId) {
     
 }
 
+async function getAllAccounts(hostname, authHeader) {
+    try {
+        const response = await axios.get(
+            `https://${hostname}/api/now/account`,
+            {
+                headers: { Authorization: authHeader }
+            }
+        );
+
+        return response.data?.result || [];
+    } catch (error) {
+        console.log("Error fetching accounts:", error);
+        return [];
+    }
+}
 
 exports.findStateValueByName = findStateValueByName;
 exports.findStateValueById = findStateValueById;
 exports.findTypeValueByName = findTypeValueByName;
 exports.findTypeValueById = findTypeValueById;
+exports.getAllAccounts = getAllAccounts;
