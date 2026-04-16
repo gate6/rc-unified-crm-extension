@@ -209,6 +209,22 @@ function findAccountByNameFromList(accounts, inputValue) {
     return null;
 }
 
+function findAccountByNumberFromList(accounts, inputValue) {
+    const sanitizedInput = (inputValue || '').trim();
+    if (!sanitizedInput) return null;
+
+    const collapseLabel = (val = '') => val.toLowerCase().replace(/\s+/g, '');
+    const collapsedInput = collapseLabel(sanitizedInput);
+
+    for (const acc of accounts) {
+        if (collapseLabel(acc.number || '') === collapsedInput) {
+            return acc.sys_id;
+        }
+    }
+
+    return null;
+}
+
 async function getAllAccounts(hostname, authHeader) {
     try {
         const response = await axios.get(
@@ -229,5 +245,6 @@ exports.findStateValueByName = findStateValueByName;
 exports.findStateValueById = findStateValueById;
 exports.findTypeValueByName = findTypeValueByName;
 exports.findTypeValueById = findTypeValueById;
+exports.findAccountByNumberFromList = findAccountByNumberFromList;
 exports.findAccountByNameFromList = findAccountByNameFromList;
 exports.getAllAccounts = getAllAccounts;

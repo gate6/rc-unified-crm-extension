@@ -2,7 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
-const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, findAccountByNameFromList, getAllAccounts } = require('../servicenow-core/interaction');
+const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, findAccountByNumberFromList, findAccountByNameFromList, getAllAccounts } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
@@ -406,20 +406,21 @@ async function unAuthorize({ user }) {
 function generateFormatsFromE164(e164Number) {
     const digits = e164Number.replace(/\D/g, '');
 
-    // assume US (1 + 10 digits)
     if (digits.length === 11 && digits.startsWith('1')) {
         const d = digits.slice(1);
-
         return [
-            e164Number,                 // +18003534676
-            digits,                     // 18003534676
-            d,                          // 8003534676
-            `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`, // (800) 353-4676
-            `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`    // 800-353-4676
+            e164Number,                                               // +18003534676
+            digits,                                                   // 18003534676
+            d,                                                        // 8003534676
+            `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`,      // (800) 353-4676
+            `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`,        // 800-353-4676
+            `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6)}`,        // 800.353.4676
+            `+1 (${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`,   // +1 (800) 353-4676
+            `+1-${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`,     // +1-800-353-4676
+            `(${d.slice(0,3)})${d.slice(3,6)}-${d.slice(6)}`,       // (800)353-4676
         ];
     }
-
-    return [e164Number];
+    return [e164Number, digits];
 }
 
 async function findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension }) {
@@ -495,7 +496,12 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     matchedContactInfo.push({
         id: 'createNewContact',
         name: 'Create new contact...',
-        additionalInfo: null,
+        additionalInfo: {
+            accountSelection: [
+                { const: 'accountNumber', title: 'Account Number' },
+                { const: 'accountName', title: 'Account Name' }
+            ]
+        },
         isNewContact: true
     });
 
@@ -1054,6 +1060,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 }
 
 async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType, additionalSubmission }) {
+    console.log("Additional submission for account :", additionalSubmission);
     // ----------------------------------------
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
@@ -1080,14 +1087,17 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const isExtensionNumber = phoneNumber.toString().length <= 8 && phoneNumber.toString().length >= 3;
 
     if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
-        const accountName = additionalSubmission?.accountName;
+        const accountInput = (additionalSubmission?.account || '').trim();
+        const accountSelection = (additionalSubmission?.accountSelection || '').trim();
         const accounts = await getAllAccounts(hostname, authHeader);
-        let accountId = null;
+        let accountId = accounts[0]?.sys_id;
 
-        if (!accountName || accountName.trim() === '') {
-            accountId = accounts[0]?.sys_id;
-        } else {
-            accountId = findAccountByNameFromList(accounts, accountName);
+        if (accountInput && accountSelection) {
+            if (accountSelection === 'accountName') {
+                accountId = findAccountByNameFromList(accounts, accountInput);
+            } else if (accountSelection === 'accountNumber') {
+                accountId = findAccountByNumberFromList(accounts, accountInput);
+            }
 
             if (!accountId) {
                 console.log("No match found, falling back");
