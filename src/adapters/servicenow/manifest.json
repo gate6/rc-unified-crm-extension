@@ -136,15 +136,10 @@
                 "newContact": {
                     "additionalFields": [
                         {
-                            "const": "accountSelection",
-                            "title": "Account Selection",
-                            "type": "selection",
-                            "contactDependent": false
-                        },
-                        {
                             "const": "account",
                             "title": "Account",
-                            "type": "inputField"
+                            "type": "selection",
+                            "contactDependent": false
                         }
                     ]
                 },

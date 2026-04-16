@@ -2,7 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
-const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, findAccountByNumberFromList, findAccountByNameFromList, getAllAccounts } = require('../servicenow-core/interaction');
+const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
@@ -493,14 +493,17 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         }
     }
 
+    const accounts = await getAllAccounts(hostname, authHeader);
+    const accountOptions = accounts.map((account) => ({
+        const: account.sys_id,
+        title: account.name
+    }));
+
     matchedContactInfo.push({
         id: 'createNewContact',
         name: 'Create new contact...',
         additionalInfo: {
-            accountSelection: [
-                { const: 'accountNumber', title: 'Account Number' },
-                { const: 'accountName', title: 'Account Name' }
-            ]
+            account: accountOptions
         },
         isNewContact: true
     });
@@ -1087,22 +1090,12 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const isExtensionNumber = phoneNumber.toString().length <= 8 && phoneNumber.toString().length >= 3;
 
     if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
-        const accountInput = (additionalSubmission?.account || '').trim();
-        const accountSelection = (additionalSubmission?.accountSelection || '').trim();
+        const selectedAccountId = (additionalSubmission?.account || '').trim();
         const accounts = await getAllAccounts(hostname, authHeader);
         let accountId = accounts[0]?.sys_id;
 
-        if (accountInput && accountSelection) {
-            if (accountSelection === 'accountName') {
-                accountId = findAccountByNameFromList(accounts, accountInput);
-            } else if (accountSelection === 'accountNumber') {
-                accountId = findAccountByNumberFromList(accounts, accountInput);
-            }
-
-            if (!accountId) {
-                console.log("No match found, falling back");
-                accountId = accounts[0]?.sys_id;
-            }
+        if (selectedAccountId && accounts.some((account) => account.sys_id === selectedAccountId)) {
+            accountId = selectedAccountId;
         }
 
         if (accountId){
