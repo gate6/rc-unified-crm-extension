@@ -1139,7 +1139,6 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
         const selectedAccountId = (additionalSubmission?.account || '').trim();
 
         if (selectedAccountId) {
-            console.log("Selected Account Id", selectedAccountId)
             postBody.account = selectedAccountId;
         } else {
             const account = await axios.get(
@@ -1148,7 +1147,6 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             );
             const fallbackAccountId = account?.data?.result?.[0]?.sys_id;
             if (fallbackAccountId) {
-                console.log("Fall Back account Id",fallbackAccountId)
             postBody.account = fallbackAccountId;
             }
         }
