@@ -196,7 +196,7 @@ async function findTypeValueById(hostname, authHeader, inputId) {
 async function getAllAccounts(hostname, authHeader) {
     try {
         const response = await axios.get(
-            `https://${hostname}/api/now/account`,
+            `https://${hostname}/api/now/account?sysparm_limit=1000`,
             {
                 headers: { Authorization: authHeader }
             }

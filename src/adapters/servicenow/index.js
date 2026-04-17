@@ -500,10 +500,12 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     }
 
     const accounts = await getAllAccounts(hostname, authHeader);
-    const accountOptions = accounts.map((account) => ({
-        const: account.sys_id,
-        title: account.name
-    }));
+    const accountOptions = accounts
+        .map((account) => ({
+            const: account.sys_id,
+            title: account.name
+        }))
+        .sort((a, b) => (a.title || '').localeCompare((b.title || ''), undefined, { sensitivity: 'base' }));
 
     matchedContactInfo.push({
         id: 'createNewContact',
