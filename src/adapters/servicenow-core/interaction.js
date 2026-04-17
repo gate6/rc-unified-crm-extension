@@ -193,19 +193,25 @@ async function findTypeValueById(hostname, authHeader, inputId) {
     
 }
 
+const accountCache = new Map(); // key: hostname, value: { data, expiresAt }
+const ACCOUNT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 async function getAllAccounts(hostname, authHeader) {
+    const cached = accountCache.get(hostname);
+    if (cached && Date.now() < cached.expiresAt) {
+        return cached.data;
+    }
     try {
         const response = await axios.get(
-            `https://${hostname}/api/now/account`,
-            {
-                headers: { Authorization: authHeader }
-            }
+            `https://${hostname}/api/now/account?sysparm_limit=1000`,
+            { headers: { Authorization: authHeader } }
         );
-
-        return response.data?.result || [];
+        const data = response.data?.result || [];
+        accountCache.set(hostname, { data, expiresAt: Date.now() + ACCOUNT_CACHE_TTL_MS });
+        return data;
     } catch (error) {
-        console.log("Error fetching accounts:", error);
-        return [];
+        console.log('Error fetching accounts:', error);
+        return cached?.data || []; // return stale data if available
     }
 }
 
