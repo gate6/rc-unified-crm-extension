@@ -16,6 +16,7 @@ const path = require("path");
 const FormData = require("form-data");
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
+const crypto = require('crypto');
 
 async function getLicenseStatus({ userId }) {
     try {
@@ -591,9 +592,47 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     // const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
 
+    const callKeyParts = [
+        callLog?.telephonySessionId || callLog?.id,
+        callLog?.startTime,
+        contactInfo?.id
+    ]
+        .map((value) => (value ?? '').toString().trim())
+        .filter(Boolean);
+
+    const uniqueCallId = callKeyParts.length > 0
+        ? `rc_${crypto.createHash('sha1').update(callKeyParts.join('|')).digest('hex').slice(0, 32)}`
+        : '';
+    if (uniqueCallId) {
+        const queryParts = [`correlation_id=${uniqueCallId}`];
+        if (contactInfo?.id) {
+            queryParts.push(`opened_for=${contactInfo.id}`);
+        }
+        const existing = await axios.get(
+            `https://${hostname}/api/now/table/interaction?sysparm_query=${encodeURIComponent(queryParts.join('^'))}&sysparm_fields=sys_id,short_description,opened_for,sys_created_on&sysparm_limit=1`,
+            { headers: { 'Authorization': authHeader } }
+        );
+        if (existing.data?.result?.length > 0) {
+            const existingLog = existing.data.result[0];
+            const existingOpenedFor = (existingLog?.opened_for?.value || existingLog?.opened_for || '').toString().trim();
+            const isSameContact = !!contactInfo?.id && existingOpenedFor === contactInfo.id.toString().trim();
+            const isSameSubject = (existingLog?.short_description || '').toString().trim() === (subject || '').toString().trim();
+            const existingCreatedAt = Date.parse(existingLog?.sys_created_on || '');
+            const isRecent = Number.isFinite(existingCreatedAt) && (Date.now() - existingCreatedAt) <= 10 * 60 * 1000;
+
+            if (isSameContact && isSameSubject && isRecent) {
+                return {
+                    logId: existingLog.sys_id,
+                    returnMessage: { message: 'Call log already exists.', messageType: 'warning', ttl: 3000 }
+                };
+            }
+        }
+    }
+
     const postBody = {
         short_description: subject,
-        work_notes: body //? `${workNotes} ${body}` : workNotes
+        work_notes: body,
+        ...(uniqueCallId && { correlation_id: uniqueCallId })
     }
 
     postBody.assigned_to = caller_id.data.result.id;
@@ -1098,17 +1137,20 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
 
     if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
         const selectedAccountId = (additionalSubmission?.account || '').trim();
-        const accounts = await getAllAccounts(hostname, authHeader);
-        let accountId = accounts[0]?.sys_id;
 
-        if (selectedAccountId && accounts.some((account) => account.sys_id === selectedAccountId)) {
-            accountId = selectedAccountId;
+        if (selectedAccountId) {
+            postBody.account = selectedAccountId;
+        } else {
+            const account = await axios.get(
+            `https://${hostname}/api/now/account?sysparm_limit=1`,
+            { headers: { Authorization: authHeader } }
+            );
+            const fallbackAccountId = account?.data?.result?.[0]?.sys_id;
+            if (fallbackAccountId) {
+            postBody.account = fallbackAccountId;
+            }
         }
-
-        if (accountId){
-            postBody.account = accountId;
-        }
-
+    
         postBody.name = newContactName?.toLowerCase();
         contactInfoRes = await axios.post(
             `https://${hostname}/api/now/contact`,
