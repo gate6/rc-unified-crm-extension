@@ -448,10 +448,12 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     }
 
     const accounts = await getAllAccounts(hostname, authHeader);
-    const accountOptions = accounts.map((account) => ({
-        const: account.sys_id,
-        title: account.name
-    }));
+    const accountOptions = accounts
+        .map((account) => ({
+            const: account.sys_id,
+            title: account.name
+        }))
+        .sort((a, b) => (a.title || '').localeCompare((b.title || ''), undefined, { sensitivity: 'base' }));
 
     matchedContactInfo.push({
         id: 'createNewContact',
@@ -1031,15 +1033,17 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
 
     if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
         const selectedAccountId = (additionalSubmission?.account || '').trim();
-        const accounts = await getAllAccounts(hostname, authHeader);
-        let accountId = accounts[0]?.sys_id;
-
-        if (selectedAccountId && accounts.some((account) => account.sys_id === selectedAccountId)) {
-            accountId = selectedAccountId;
-        }
-
-        if (accountId){
-            postBody.account = accountId;
+        if (selectedAccountId) {
+            postBody.account = selectedAccountId;
+        } else {
+            const account = await axios.get(
+            `https://${hostname}/api/now/account?sysparm_limit=1`,
+            { headers: { Authorization: authHeader } }
+            );
+            const fallbackAccountId = account?.data?.result?.[0]?.sys_id;
+            if (fallbackAccountId) {
+            postBody.account = fallbackAccountId;
+            }
         }
         postBody.name = newContactName?.toLowerCase();
         contactInfoRes = await axios.post(
