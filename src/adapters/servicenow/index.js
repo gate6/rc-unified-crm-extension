@@ -17,6 +17,31 @@ const FormData = require("form-data");
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
+const serviceNowApiClient = axios.create();
+
+function stringifyForLog(value, maxLength = 1200) {
+    try {
+        const str = typeof value === 'string' ? value : JSON.stringify(value);
+        return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
+    } catch (error) {
+        return String(value);
+    }
+}
+
+serviceNowApiClient.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        console.error('[ServiceNow][apiError]', {
+            method: error?.config?.method || '',
+            url: error?.config?.url || '',
+            status: error?.response?.status || null,
+            statusText: error?.response?.statusText || '',
+            responseBody: stringifyForLog(error?.response?.data),
+            errorMessage: error?.message || ''
+        });
+        return Promise.reject(error);
+    }
+);
 
 async function getLicenseStatus({ userId }) {
     try {
@@ -216,7 +241,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
             raw:true
         })
 
-        const userInfoResponse = await axios.get(`${getCompanyDetails.instanceUrl}/api/${getCompanyDetails.userDetailsPath}`, {
+        const userInfoResponse = await serviceNowApiClient.get(`${getCompanyDetails.instanceUrl}/api/${getCompanyDetails.userDetailsPath}`, {
             headers: {
                 'Authorization': authHeader
             }
@@ -384,7 +409,7 @@ async function unAuthorize({ user }) {
     // const revokeBody = {
     //     token: user.accessToken
     // }
-    // const accessTokenRevokeRes = await axios.post(
+    // const accessTokenRevokeRes = await serviceNowApiClient.post(
     //     revokeUrl,
     //     revokeBody,
     //     {
@@ -453,13 +478,13 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         }
     });
 
-    const stateSelection = await axios.get(
+    const stateSelection = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
         });
     
-    const typeSelection = await axios.get(
+    const typeSelection = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
         {
             headers: { 'Authorization':  authHeader }
@@ -477,7 +502,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const contactTable = (companyData?.contactTable?.trim().toLowerCase() == 'user' || isExtensionBool) ? 'table/sys_user' : 'contact';
     
     for (var numberToQuery of numberToQueryArray) {
-        const personInfo = await axios.get(
+        const personInfo = await serviceNowApiClient.get(
             `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}^ORmobile_phoneLIKE${numberToQuery}`,
             {
                 headers: { 'Authorization':  authHeader }
@@ -501,7 +526,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     }
 
     const accounts = await getAllAccounts(hostname, authHeader);
-        const accountOptions = accounts
+    const accountOptions = accounts
         .map((account) => ({
             const: account.sys_id,
             title: account.name
@@ -584,7 +609,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact';
     
-    const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
+    const caller_id = await serviceNowApiClient.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
         }
@@ -608,7 +633,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         if (contactInfo?.id) {
             queryParts.push(`opened_for=${contactInfo.id}`);
         }
-        const existing = await axios.get(
+        const existing = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/interaction?sysparm_query=${encodeURIComponent(queryParts.join('^'))}&sysparm_fields=sys_id,short_description,opened_for,sys_created_on&sysparm_limit=1`,
             { headers: { 'Authorization': authHeader } }
         );
@@ -651,7 +676,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         postBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
     }
 
-    const addLogRes = await axios.post(
+    const addLogRes = await serviceNowApiClient.post(
         `https://${hostname}/api/now/table/interaction`,
         postBody,
         {
@@ -777,13 +802,13 @@ async function getCallLog({ user, callLogId, authHeader }) {
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
-    const getLogRes = await axios.get(
+    const getLogRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/interaction/${callLogId}`,
         {
             headers: { 'Authorization': authHeader }
         });
     
-    const journalRes = await axios.get(
+    const journalRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/sys_journal_field?sysparm_query=element_id=${callLogId}^element=work_notes&sysparm_fields=value,sys_created_on`,
         {
             headers: { Authorization: authHeader }
@@ -822,7 +847,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const hostname = userInfo.hostname;
 
     const existingLogId = existingCallLog.thirdPartyLogId;
-    const getLogRes = await axios.get(
+    const getLogRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         {
             headers: { 'Authorization': authHeader }
@@ -850,7 +875,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         work_notes: logBody
     }
 
-    const patchLog = await axios.patch(
+    const patchLog = await serviceNowApiClient.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
@@ -922,7 +947,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         };
     }
 
-    const caller_id = await axios.get(`https://${hostname}/api/${userDetailsPath}`, {
+    const caller_id = await serviceNowApiClient.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
         }
@@ -957,7 +982,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         postBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
     }
 
-    const addLogRes = await axios.post(
+    const addLogRes = await serviceNowApiClient.post(
         `https://${hostname}/api/now/table/interaction`,
         postBody,
         {
@@ -1028,7 +1053,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         };
     }
 
-    const getLogRes = await axios.get(
+    const getLogRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         { headers: { 'Authorization': authHeader } }
     );
@@ -1063,7 +1088,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         patchBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
     }
 
-    const updateLogRes = await axios.patch(
+    const updateLogRes = await serviceNowApiClient.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
@@ -1137,10 +1162,11 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
 
     if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
         const selectedAccountId = (additionalSubmission?.account || '').trim();
+
         if (selectedAccountId) {
             postBody.account = selectedAccountId;
         } else {
-            const account = await axios.get(
+            const account = await serviceNowApiClient.get(
             `https://${hostname}/api/now/account?sysparm_limit=1`,
             { headers: { Authorization: authHeader } }
             );
@@ -1149,9 +1175,9 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             postBody.account = fallbackAccountId;
             }
         }
-
+    
         postBody.name = newContactName?.toLowerCase();
-        contactInfoRes = await axios.post(
+        contactInfoRes = await serviceNowApiClient.post(
             `https://${hostname}/api/now/contact`,
             postBody,
             {
@@ -1160,7 +1186,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
         );
     } else {
         postBody.user_name = newContactName?.toLowerCase();
-        contactInfoRes = await axios.post(
+        contactInfoRes = await serviceNowApiClient.post(
             `https://${hostname}/api/now/table/sys_user`,
             postBody,
             {
@@ -1199,7 +1225,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
 
     try {
 
-        const response = await axios.get(url, {
+        const response = await serviceNowApiClient.get(url, {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
             },
@@ -1239,7 +1265,7 @@ async function uploadToServiceNow(s3Url, hostname, accessToken, sys_id, fileName
         formData.append("table_sys_id", sys_id);
         formData.append("file", fileStream, { filename: s3Key, contentType: "audio/mpeg" });
 
-        const response = await axios.post(serviceNowURL, formData, {
+        const response = await serviceNowApiClient.post(serviceNowURL, formData, {
             headers: {
                 "Authorization": accessToken,
                 ...formData.getHeaders(),
