@@ -1,4 +1,29 @@
 const axios = require('axios');
+const serviceNowApiClient = axios.create();
+
+function stringifyForLog(value, maxLength = 1200) {
+    try {
+        const str = typeof value === 'string' ? value : JSON.stringify(value);
+        return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
+    } catch (error) {
+        return String(value);
+    }
+}
+
+serviceNowApiClient.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        console.error('[ServiceNow][interaction][apiError]', {
+            method: error?.config?.method || '',
+            url: error?.config?.url || '',
+            status: error?.response?.status || null,
+            statusText: error?.response?.statusText || '',
+            responseBody: stringifyForLog(error?.response?.data),
+            errorMessage: error?.message || ''
+        });
+        return Promise.reject(error);
+    }
+);
 
 const stateMapping = {
     // "wrap up": "wrap_up",
@@ -36,7 +61,7 @@ function collapseLabel(value = '') {
 }
 
 async function fetchChoices(hostname, authHeader, element) {
-    const response = await axios.get(
+    const response = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=${element}&sysparm_fields=label,value&sysparm_limit=500`,
         {
             headers: { 'Authorization': authHeader }
@@ -117,7 +142,7 @@ async function findStateValueById(hostname, authHeader, inputId){
             console.log("Invalid state id provided.");
         }
         
-        const stateSelection = await axios.get(
+        const stateSelection = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${inputId}&sysparm_fields=sys_id,label,value`,
             {
                 headers: { 'Authorization':  authHeader }
@@ -175,7 +200,7 @@ async function findTypeValueById(hostname, authHeader, inputId) {
             console.log("Invalid type id provided.");
         }
         
-        const typeSelection = await axios.get(
+        const typeSelection = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${inputId}&sysparm_fields=sys_id,label,value`,
             {
                 headers: { 'Authorization': authHeader }
@@ -202,7 +227,7 @@ async function getAllAccounts(hostname, authHeader) {
         return cached.data;
     }
     try {
-        const response = await axios.get(
+        const response = await serviceNowApiClient.get(
             `https://${hostname}/api/now/account?sysparm_limit=1000`,
             { headers: { Authorization: authHeader } }
         );
