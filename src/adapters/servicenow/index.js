@@ -2,7 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
-const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts } = require('../servicenow-core/interaction');
+const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts, applyClosedDatesIfNeeded } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
@@ -478,21 +478,26 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         }
     });
 
-    const stateSelection = await serviceNowApiClient.get(
-        `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
-        {
-            headers: { 'Authorization':  authHeader }
-        });
-    
-    const typeSelection = await serviceNowApiClient.get(
-        `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
-        {
-            headers: { 'Authorization':  authHeader }
-        });
-
-    const states = stateSelection.data.result.length > 0 ? stateSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
-
-    const interactionType = typeSelection.data.result.length > 0 ? typeSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : null;
+    let states = [];
+    let interactionType = [];
+    try {
+        const stateSelection = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
+            { headers: { 'Authorization': authHeader } }
+        );
+        states = stateSelection.data.result.length > 0 ? stateSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : [];
+    } catch (err) {
+        console.log('sys_choice state lookup failed, continuing without state options:', err.response?.status);
+    }
+    try {
+        const typeSelection = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
+            { headers: { 'Authorization': authHeader } }
+        );
+        interactionType = typeSelection.data.result.length > 0 ? typeSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : [];
+    } catch (err) {
+        console.log('sys_choice type lookup failed, continuing without type options:', err.response?.status);
+    }
     
 
     // You can use parsePhoneNumber functions to further parse the phone number
@@ -515,11 +520,18 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
                     continue;
                 }
                 matchedContactIds.add(contactId);
+                const additionalInfo = {};
+                if (states.length > 0) {
+                    additionalInfo.state = states;
+                }
+                if (interactionType.length > 0) {
+                    additionalInfo.type = interactionType;
+                }
                 matchedContactInfo.push({
                     id: contactId,
                     name: (contactTable == 'table/sys_user') ? result.user_name : result.name,
                     phone: numberToQuery,
-                    additionalInfo: {state: states, type: interactionType}
+                    additionalInfo
                 })
             }
         }
@@ -659,6 +671,9 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         work_notes: body,
         ...(uniqueCallId && { correlation_id: uniqueCallId })
     }
+    if (callLog?.startTime) {
+        postBody.opened_at = callLog.startTime;
+    }
 
     postBody.assigned_to = caller_id.data.result.id;
 
@@ -667,6 +682,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     if (additionalSubmission?.state) {
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
         postBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
+        applyClosedDatesIfNeeded(postBody, postBody.state, callLog);
     }
 
     postBody.opened_for = contactInfo.id;
@@ -972,9 +988,14 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         opened_for: contactInfo.id
     };
 
+    if(message?.startTime){
+        postBody.opened_at = message.startTime;
+    }
+
     if (additionalSubmission?.state) {
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
         postBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
+        applyClosedDatesIfNeeded(postBody, postBody.state, null);
     }
 
     if (additionalSubmission?.type) {
@@ -1081,6 +1102,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     if (additionalSubmission?.state) {
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
         patchBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
+        applyClosedDatesIfNeeded(patchBody, patchBody.state, null);
     }
 
     if (additionalSubmission?.type) {
