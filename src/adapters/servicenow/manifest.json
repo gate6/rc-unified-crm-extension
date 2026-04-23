@@ -149,7 +149,7 @@
                             "title": "State",
                             "type": "selection",
                             "contactDependent": true,
-                            "allowCustomValue": false,
+                            "allowCustomValue": true,
                             "defaultSettingId": "serviceNowState",
                             "defaultSettingValues": {
                                 "inboundCall": {
@@ -165,7 +165,7 @@
                             "title": "Type",
                             "type": "selection",
                             "contactDependent": true,
-                            "allowCustomValue": false,
+                            "allowCustomValue": true,
                             "defaultSettingId": "serviceNowType",
                             "defaultSettingValues": {
                                 "inboundCall": {

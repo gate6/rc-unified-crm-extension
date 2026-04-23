@@ -759,7 +759,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     }
 }
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, recordingDownloadLink, subject, note, startTime, duration, result, aiNote, transcript }) {
+async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, recordingDownloadLink, subject, note, startTime, duration, result, aiNote, transcript, additionalSubmission }) {
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
@@ -788,6 +788,13 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     patchBody = {
             short_description: subject,
             work_notes: logBody
+    }
+
+    const updateCallContext = { startTime, duration };
+    if (additionalSubmission?.state) {
+        const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
+        patchBody.state = returnedState ?? await findStateValueByName(hostname, authHeader, additionalSubmission.state);
+        applyClosedDatesIfNeeded(patchBody, patchBody.state, updateCallContext);
     }
 
     const patchLog = await serviceNowApiClient.patch(
