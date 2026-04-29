@@ -35,6 +35,7 @@ adapterRegistry.registerAdapter('servicenow-dev226973', servicenow, require('./a
 adapterRegistry.registerAdapter('servicenow-powertest2', servicenow, require('./adapters/servicenow-powertest2/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-powertest1', servicenow, require('./adapters/servicenow-powertest1/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-kerridgecs', servicenow, require('./adapters/servicenow-kerridgecs/manifest.json'));
+adapterRegistry.registerAdapter('servicenow-kerridgecsdev', servicenow, require('./adapters/servicenow-kerridgecsdev/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-spiegsa', servicenow, require('./adapters/servicenow-spiegsa/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-ven06766', servicenow, require('./adapters/servicenow-ven06766/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-cmscpidev', servicenow, require('./adapters/servicenow-cmscpidev/manifest.json'));
