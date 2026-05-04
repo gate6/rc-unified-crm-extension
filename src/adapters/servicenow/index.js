@@ -449,19 +449,6 @@ function generateFormatsFromE164(e164Number) {
     return [e164Number, digits];
 }
 
-function toDigits(value = '') {
-    return String(value).replace(/\D/g, '');
-}
-
-function isSamePhone(candidate, target) {
-    const a = toDigits(candidate);
-    const b = toDigits(target);
-    if (!a || !b) {
-        return false;
-    }
-    return a === b || a.slice(-10) === b.slice(-10);
-}
-
 async function findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension }) {
     // ----------------------------------------
     // ---TODO.3: Implement contact matching---
@@ -519,28 +506,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const isExtensionBool = isExtension === true || isExtension === 'true';
     const contactTable = (companyData?.contactTable?.trim().toLowerCase() == 'user' || isExtensionBool) ? 'table/sys_user' : 'contact';
     
-    const rcDigits = toDigits(phoneNumber);
-    const addMatchedContact = (result) => {
-        const contactId = (result?.sys_id || '').toString().trim();
-        if (!contactId || matchedContactIds.has(contactId)) {
-            return;
-        }
-        matchedContactIds.add(contactId);
-        const additionalInfo = {};
-        if (states.length > 0) {
-            additionalInfo.state = states;
-        }
-        if (interactionType.length > 0) {
-            additionalInfo.type = interactionType;
-        }
-        matchedContactInfo.push({
-            id: contactId,
-            name: (contactTable == 'table/sys_user') ? result.user_name : result.name,
-            phone: phoneNumber,
-            additionalInfo
-        });
-    };
-
     for (var numberToQuery of numberToQueryArray) {
         const personInfo = await serviceNowApiClient.get(
             `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}^ORmobile_phoneLIKE${numberToQuery}`,
@@ -550,26 +515,24 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
         if (personInfo.data.result.length > 0) {
             for (var result of personInfo.data.result) {
-                addMatchedContact(result);
-            }
-        }
-    }
-
-    if (!isExtensionBool && matchedContactInfo.length === 0 && rcDigits.length >= 10) {
-        const last10 = rcDigits.slice(-10);
-        const area = last10.slice(0, 3);
-        const prefix = last10.slice(3, 6);
-        const line = last10.slice(6);
-        const fallbackQuery = `phoneLIKE${area}^ORmobile_phoneLIKE${area}^ORphoneLIKE${prefix}^ORmobile_phoneLIKE${prefix}^ORphoneLIKE${line}^ORmobile_phoneLIKE${line}`;
-
-        const fallbackRes = await serviceNowApiClient.get(
-            `https://${hostname}/api/now/${contactTable}?sysparm_query=${encodeURIComponent(fallbackQuery)}&sysparm_limit=200`,
-            { headers: { 'Authorization': authHeader } }
-        );
-
-        for (const result of (fallbackRes.data?.result || [])) {
-            if (isSamePhone(result?.phone, rcDigits) || isSamePhone(result?.mobile_phone, rcDigits)) {
-                addMatchedContact(result);
+                const contactId = (result?.sys_id || '').toString().trim();
+                if (!contactId || matchedContactIds.has(contactId)) {
+                    continue;
+                }
+                matchedContactIds.add(contactId);
+                const additionalInfo = {};
+                if (states.length > 0) {
+                    additionalInfo.state = states;
+                }
+                if (interactionType.length > 0) {
+                    additionalInfo.type = interactionType;
+                }
+                matchedContactInfo.push({
+                    id: contactId,
+                    name: (contactTable == 'table/sys_user') ? result.user_name : result.name,
+                    phone: numberToQuery,
+                    additionalInfo
+                })
             }
         }
     }
