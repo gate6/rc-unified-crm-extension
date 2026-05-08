@@ -2,7 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
-const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts, applyClosedDatesIfNeeded } = require('../servicenow-core/interaction');
+const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts, applyClosedDatesIfNeeded, formatDuration } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
@@ -674,6 +674,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     if (callLog?.startTime) {
         postBody.opened_at = callLog.startTime;
     }
+
+    postBody.u_actual_call_duration = formatDuration(callLog.duration);
 
     postBody.assigned_to = caller_id.data.result.id;
 
