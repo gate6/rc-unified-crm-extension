@@ -285,33 +285,6 @@ function applyClosedDatesIfNeeded(payload, stateValue, callLog) {
     }
 }
 
-function formatDuration(seconds) {
-    seconds = Number(seconds);
-
-    if (seconds < 60) {
-        return `${seconds} Second${seconds !== 1 ? 's' : ''}`;
-    }
-
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const remainingSeconds = seconds % 60;
-
-    let result = '';
-
-    if (hours > 0) {
-        result += `${hours} Hour${hours !== 1 ? 's' : ''} `;
-    }
-
-    if (minutes > 0) {
-        result += `${minutes} Minute${minutes !== 1 ? 's' : ''} `;
-    }
-
-    if (remainingSeconds > 0) {
-        result += `${remainingSeconds} Second${remainingSeconds !== 1 ? 's' : ''}`;
-    }
-
-    return result.trim();
-}
 
 exports.findStateValueByName = findStateValueByName;
 exports.findStateValueById = findStateValueById;
@@ -319,4 +292,3 @@ exports.findTypeValueByName = findTypeValueByName;
 exports.findTypeValueById = findTypeValueById;
 exports.getAllAccounts = getAllAccounts;
 exports.applyClosedDatesIfNeeded = applyClosedDatesIfNeeded;
-exports.formatDuration = formatDuration;
