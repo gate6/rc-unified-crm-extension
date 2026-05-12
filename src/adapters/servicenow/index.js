@@ -755,7 +755,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         postBody.opened_at = callLog.startTime;
     }
 
-    postBody.u_actual_call_duration = formatDuration(callLog.duration);
+    postBody.u_call_duration = formatDuration(callLog.duration);
 
     postBody.assigned_to = caller_id.data.result.id;
 
