@@ -232,15 +232,15 @@ async function getUserInfo(authHeader) {
       }
 
       await models.customer.create({
-        sysId: userData.id,
-        email: userData.email,
+        sysId: `az-user-${username}`,
+        email: username,
         companyId: company.id,
         hostname: hostname,
-        accessToken: accessToken,
+        accessToken: token,
         tokenExpiry: Date.now() + (365 * 24 * 60 * 60 * 1000),
         platformAdditionalInfo: {
-          client_id: clientId,
-          client_secret: clientSecret,
+          username,
+          password,
           expiresAt: Date.now() + (365 * 24 * 60 * 60 * 1000)
         },
         status: true,
