@@ -2,6 +2,7 @@
 
 const axios = require("axios");
 const moment = require("moment");
+const { encode, decoded } = require("@app-connect/core/lib/encode");
 const { parsePhoneNumber } = require("awesome-phonenumber");
 const { UserModel } = require('@app-connect/core/models/userModel');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
@@ -140,7 +141,8 @@ async function getRefreshedAuthToken(user) {
   if (user.accessToken) return user.accessToken;
 
   const username = user.platformAdditionalInfo?.username;
-  const password = user.platformAdditionalInfo?.password;
+  const encodedPassword = user.platformAdditionalInfo?.password;
+  const password = encodedPassword ? decoded(encodedPassword) : null;
   if (!username || !password) {
     throw new Error("AgencyZoom credentials are missing for token refresh");
   }
@@ -240,7 +242,7 @@ async function getUserInfo(authHeader) {
         tokenExpiry: Date.now() + (365 * 24 * 60 * 60 * 1000),
         platformAdditionalInfo: {
           username,
-          password,
+          password: encode(password),
           expiresAt: Date.now() + (365 * 24 * 60 * 60 * 1000)
         },
         status: true,
@@ -259,7 +261,7 @@ async function getUserInfo(authHeader) {
         overridingApiKey: token,
         platformAdditionalInfo: {
           username,
-          password
+          password: encode(password)
         }
       },
       returnMessage: {
