@@ -2,7 +2,7 @@ const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
-const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts, applyClosedDatesIfNeeded } = require('../servicenow-core/interaction');
+const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts, applyClosedDatesIfNeeded, formatDuration } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
@@ -673,6 +673,9 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         work_notes: body //? `${workNotes} ${body}` : workNotes
     }
 
+    postBody.u_call_duration = formatDuration(callLog.duration);
+    console.log("postBody.u_call_duration", postBody.u_call_duration);
+
     postBody.assigned_to = caller_id.data.result.id;
     if (callLog?.startTime) {
         postBody.opened_at = callLog.startTime;
@@ -866,9 +869,12 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
 
     patchBody = {
-            short_description: subject,
-            work_notes: logBody
+        short_description: subject,
+        work_notes: logBody
     }
+
+    patchBody.u_call_duration = formatDuration(duration);
+    console.log("patchBody", patchBody.u_call_duration);
 
     const patchLog = await serviceNowApiClient.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
