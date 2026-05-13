@@ -973,6 +973,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         work_notes: logBody
     }
 
+    patchBody.u_call_duration = formatDuration(duration);
+
     const patchLog = await serviceNowApiClient.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
