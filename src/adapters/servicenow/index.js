@@ -674,7 +674,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     }
 
     postBody.u_call_duration = formatDuration(callLog.duration);
-    console.log("postBody.u_call_duration", postBody.u_call_duration);
 
     postBody.assigned_to = caller_id.data.result.id;
     if (callLog?.startTime) {
@@ -874,7 +873,6 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 
     patchBody.u_call_duration = formatDuration(duration);
-    console.log("patchBody", patchBody.u_call_duration);
 
     const patchLog = await serviceNowApiClient.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
