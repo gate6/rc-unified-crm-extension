@@ -8,6 +8,7 @@ const { UserModel } = require('@app-connect/core/models/userModel');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
+const analytics = require('../servicenow-core/analytics');
 const models = initModels(sequelize);
 
 const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
@@ -251,6 +252,11 @@ async function getUserInfo(authHeader) {
       });
     }
 
+    await analytics.trackUserConnected({
+      adapterName: 'agencyzoom',
+      companyIdentifier: hostname
+    });
+
     // Success response
     return {
       successful: true,
@@ -468,6 +474,11 @@ async function createContact({ user, phoneNumber, newContactName }) {
     }
   );
 
+  await analytics.trackContactCreated({
+    adapterName: 'agencyzoom',
+    companyIdentifier: user.hostname || user.dataValues?.hostname
+  });
+
   return {
     contactInfo: {
       id: res.data.id,
@@ -526,6 +537,13 @@ ${description}
     { note: noteBody },
     { headers: { Authorization: `Bearer ${auth}` } }
   );
+
+  await analytics.trackCallLogCreated({
+    adapterName: 'agencyzoom',
+    companyIdentifier: user.hostname || user.dataValues?.hostname,
+    callDirection: callLog.direction,
+    callDurationSeconds: callLog.duration
+  });
 
   return {
     logId,
@@ -632,6 +650,11 @@ ${description}
     { note: noteBody },
     { headers: { Authorization: `Bearer ${auth}` } }
   );
+
+  await analytics.trackCallLogUpdated({
+    adapterName: 'agencyzoom',
+    companyIdentifier: user.hostname || user.dataValues?.hostname
+  });
 
   return {
     logId,
@@ -798,6 +821,13 @@ ${description}
     { headers: { Authorization: `Bearer ${auth}` } }
   );
 
+  await analytics.trackMessageLogCreated({
+    adapterName: 'agencyzoom',
+    companyIdentifier: user.hostname || user.dataValues?.hostname,
+    recordingLink,
+    faxDocLink
+  });
+
   return {
     logId,
     contactId: Number(contactInfo.id),
@@ -902,6 +932,13 @@ ${updatedConversation}
     { note: noteBody },
     { headers: { Authorization: `Bearer ${auth}` } }
   );
+
+  await analytics.trackMessageLogUpdated({
+    adapterName: 'agencyzoom',
+    companyIdentifier: user.hostname || user.dataValues?.hostname,
+    recordingLink,
+    faxDocLink
+  });
 
   return {
     logId,

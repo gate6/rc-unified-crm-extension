@@ -17,6 +17,7 @@ const FormData = require("form-data");
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
+const analytics = require('../servicenow-core/analytics');
 const serviceNowApiClient = axios.create();
 
 function stringifyForLog(value, maxLength = 1200) {
@@ -289,6 +290,10 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                 //if the max numbers of users is greater than the active customers we allow to insert new customer
 
                 if (userData.name == 'admin' && checkActiveUsers.customers.some(customer => customer.email === email)) {
+                    await analytics.trackUserConnected({
+                        adapterName: 'servicenow',
+                        companyIdentifier: hostname
+                    });
                     return {
                         successful: true,
                         platformUserInfo: {
@@ -309,6 +314,10 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                 if (checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers) {
 
                     if (checkActiveUsers.customers.some(customer => customer.sysId === id)) {
+                        await analytics.trackUserConnected({
+                            adapterName: 'servicenow',
+                            companyIdentifier: hostname
+                        });
                         return {
                             successful: true,
                             platformUserInfo: {
@@ -329,6 +338,10 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                         const accessToken = authHeader.split(' ')[1];
                         //Save the auth token and new user information in the MYSQL customers table
                         await saveUserInfo(userData, accessToken, checkActiveUsers.dataValues.hostname, checkActiveUsers.dataValues.id);
+                        await analytics.trackUserConnected({
+                            adapterName: 'servicenow',
+                            companyIdentifier: hostname
+                        });
                         return {
                             successful: true,
                             platformUserInfo: {
@@ -790,6 +803,13 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         await uploadToServiceNow(s3Url, hostname, authHeader, addLogRes?.data?.result?.sys_id, fileName);
     }
 
+    await analytics.trackCallLogCreated({
+        adapterName: 'servicenow',
+        companyIdentifier: user.hostname || user.dataValues?.hostname,
+        callDirection: callLog.direction,
+        callDurationSeconds: callLog.duration
+    });
+
     //----------------------------------------------------------------------------
     //---CHECK.4: Open db.sqlite and CRM website to check if call log is saved ---
     //----------------------------------------------------------------------------
@@ -992,6 +1012,11 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         await uploadToServiceNow(s3Url, hostname, authHeader, existingLogId, fileName)
     }
 
+    await analytics.trackCallLogUpdated({
+        adapterName: 'servicenow',
+        companyIdentifier: user.hostname || user.dataValues?.hostname
+    });
+
     const patchLogRes = {
         data: {
             id: patchLog.data.result.sys_id
@@ -1120,6 +1145,13 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         );
     }
 
+    await analytics.trackMessageLogCreated({
+        adapterName: 'servicenow',
+        companyIdentifier: user.hostname || user.dataValues?.hostname,
+        recordingLink,
+        faxDocLink
+    });
+
     //-------------------------------------------------------------------------------------------------------------
     //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
     //-------------------------------------------------------------------------------------------------------------
@@ -1227,6 +1259,13 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         );
     }
 
+    await analytics.trackMessageLogUpdated({
+        adapterName: 'servicenow',
+        companyIdentifier: user.hostname || user.dataValues?.hostname,
+        recordingLink,
+        faxDocLink
+    });
+
     //---------------------------------------------------------------------------------------------------------------------------------------------
     //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
     //---------------------------------------------------------------------------------------------------------------------------------------------
@@ -1300,6 +1339,11 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             }
         );
     }
+
+    await analytics.trackContactCreated({
+        adapterName: 'servicenow',
+        companyIdentifier: user.hostname || user.dataValues?.hostname
+    });
 
     //--------------------------------------------------------------------------------
     //---CHECK.9: In extension, try create a new contact against an unknown number ---
