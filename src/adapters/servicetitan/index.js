@@ -13,6 +13,7 @@ const { initModels } = require('../servicenow-models/init-models');
 const models = initModels(sequelize);
 const analytics = require('../servicenow-core/analytics');
 
+const ADAPTER_NAME = 'servicetitan';
 const SERVICE_TITAN_JPM_URL= "https://api-integration.servicetitan.io/jpm/v2/tenant"
 const SERVICE_TITAN_CRM_URL= "https://api-integration.servicetitan.io/crm/v2/tenant"
 
@@ -193,7 +194,7 @@ async function getUserInfo(authHeader) {
         }
 
         await analytics.trackUserConnected({
-            adapterName: 'servicetitan',
+            adapterName: ADAPTER_NAME,
             companyIdentifier: hostname
         });
 
@@ -426,7 +427,7 @@ async function createContact({ user, phoneNumber, newContactName }) {
         const createdContact = response.data;
 
         await analytics.trackContactCreated({
-            adapterName: 'servicetitan',
+            adapterName: ADAPTER_NAME,
             companyIdentifier: user.hostname || user.dataValues?.hostname
         });
 
@@ -600,7 +601,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     }
 
     await analytics.trackCallLogCreated({
-        adapterName: 'servicetitan',
+        adapterName: ADAPTER_NAME,
         companyIdentifier: user.hostname || user.dataValues?.hostname,
         callDirection: callLog.direction,
         callDurationSeconds: callLog.duration
@@ -782,7 +783,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     }
 
     await analytics.trackCallLogUpdated({
-        adapterName: 'servicetitan',
+        adapterName: ADAPTER_NAME,
         companyIdentifier: user.hostname || user.dataValues?.hostname
     });
 
@@ -867,7 +868,7 @@ ${faxDocLink}
     );
 
     await analytics.trackMessageLogCreated({
-        adapterName: 'servicetitan',
+        adapterName: ADAPTER_NAME,
         companyIdentifier: user.hostname || user.dataValues?.hostname,
         recordingLink,
         faxDocLink
@@ -1007,7 +1008,7 @@ ${faxDocLink}
     }
 
     await analytics.trackMessageLogUpdated({
-        adapterName: 'servicetitan',
+        adapterName: ADAPTER_NAME,
         companyIdentifier: user.hostname || user.dataValues?.hostname,
         recordingLink,
         faxDocLink

@@ -10,6 +10,7 @@ const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 const analytics = require('../servicenow-core/analytics');
 
+const ADAPTER_NAME = 'monday';
 const MONDAY_API_URL = process.env.MONDAY_API_URL;
 const MONDAY_AUTHORIZE_URL = process.env.MONDAY_AUTHORIZE_URL;
 var MONDAY_CLIENT_SECRET = '';
@@ -423,7 +424,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
     }
 
     await analytics.trackUserConnected({
-      adapterName: 'monday',
+      adapterName: ADAPTER_NAME,
       companyIdentifier: hostname
     });
 
@@ -652,7 +653,7 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
   )
 
   await analytics.trackContactCreated({
-    adapterName: 'monday',
+    adapterName: ADAPTER_NAME,
     companyIdentifier: user.hostname || user.dataValues?.hostname
   })
 
@@ -754,7 +755,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   }
 
   await analytics.trackCallLogCreated({
-    adapterName: 'monday',
+    adapterName: ADAPTER_NAME,
     companyIdentifier: user.hostname || user.dataValues?.hostname,
     callDirection: callLog.direction,
     callDurationSeconds: callLog.duration
@@ -847,7 +848,7 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   )
 
   await analytics.trackCallLogUpdated({
-    adapterName: 'monday',
+    adapterName: ADAPTER_NAME,
     companyIdentifier: user.hostname || user.dataValues?.hostname
   })
 
@@ -1030,7 +1031,7 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
   }
 
   await analytics.trackMessageLogCreated({
-    adapterName: 'monday',
+    adapterName: ADAPTER_NAME,
     companyIdentifier: user.hostname || user.dataValues?.hostname,
     recordingLink,
     faxDocLink
@@ -1240,7 +1241,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
   }
 
   await analytics.trackMessageLogUpdated({
-    adapterName: 'monday',
+    adapterName: ADAPTER_NAME,
     companyIdentifier: user.hostname || user.dataValues?.hostname,
     recordingLink,
     faxDocLink

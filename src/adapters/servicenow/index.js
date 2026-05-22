@@ -20,6 +20,8 @@ const crypto = require('crypto');
 const analytics = require('../servicenow-core/analytics');
 const serviceNowApiClient = axios.create();
 
+const ADAPTER_NAME = 'servicenow';
+
 function stringifyForLog(value, maxLength = 1200) {
     try {
         const str = typeof value === 'string' ? value : JSON.stringify(value);
@@ -291,7 +293,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
 
                 if (userData.name == 'admin' && checkActiveUsers.customers.some(customer => customer.email === email)) {
                     await analytics.trackUserConnected({
-                        adapterName: 'servicenow',
+                        adapterName: ADAPTER_NAME,
                         companyIdentifier: hostname
                     });
                     return {
@@ -315,7 +317,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
 
                     if (checkActiveUsers.customers.some(customer => customer.sysId === id)) {
                         await analytics.trackUserConnected({
-                            adapterName: 'servicenow',
+                            adapterName: ADAPTER_NAME,
                             companyIdentifier: hostname
                         });
                         return {
@@ -339,7 +341,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                         //Save the auth token and new user information in the MYSQL customers table
                         await saveUserInfo(userData, accessToken, checkActiveUsers.dataValues.hostname, checkActiveUsers.dataValues.id);
                         await analytics.trackUserConnected({
-                            adapterName: 'servicenow',
+                            adapterName: ADAPTER_NAME,
                             companyIdentifier: hostname
                         });
                         return {
@@ -804,7 +806,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     }
 
     await analytics.trackCallLogCreated({
-        adapterName: 'servicenow',
+        adapterName: ADAPTER_NAME,
         companyIdentifier: user.hostname || user.dataValues?.hostname,
         callDirection: callLog.direction,
         callDurationSeconds: callLog.duration
@@ -1013,7 +1015,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 
     await analytics.trackCallLogUpdated({
-        adapterName: 'servicenow',
+        adapterName: ADAPTER_NAME,
         companyIdentifier: user.hostname || user.dataValues?.hostname
     });
 
@@ -1146,7 +1148,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     }
 
     await analytics.trackMessageLogCreated({
-        adapterName: 'servicenow',
+        adapterName: ADAPTER_NAME,
         companyIdentifier: user.hostname || user.dataValues?.hostname,
         recordingLink,
         faxDocLink
@@ -1260,7 +1262,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     }
 
     await analytics.trackMessageLogUpdated({
-        adapterName: 'servicenow',
+        adapterName: ADAPTER_NAME,
         companyIdentifier: user.hostname || user.dataValues?.hostname,
         recordingLink,
         faxDocLink
@@ -1341,7 +1343,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 
     await analytics.trackContactCreated({
-        adapterName: 'servicenow',
+        adapterName: ADAPTER_NAME,
         companyIdentifier: user.hostname || user.dataValues?.hostname
     });
 

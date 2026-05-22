@@ -11,6 +11,7 @@ const { initModels } = require('../servicenow-models/init-models');
 const analytics = require('../servicenow-core/analytics');
 const models = initModels(sequelize);
 
+const ADAPTER_NAME = 'agencyzoom';
 const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
 
 async function getLicenseStatus({ userId }) {
@@ -253,7 +254,7 @@ async function getUserInfo(authHeader) {
     }
 
     await analytics.trackUserConnected({
-      adapterName: 'agencyzoom',
+      adapterName: ADAPTER_NAME,
       companyIdentifier: hostname
     });
 
@@ -475,7 +476,7 @@ async function createContact({ user, phoneNumber, newContactName }) {
   );
 
   await analytics.trackContactCreated({
-    adapterName: 'agencyzoom',
+    adapterName: ADAPTER_NAME,
     companyIdentifier: user.hostname || user.dataValues?.hostname
   });
 
@@ -539,7 +540,7 @@ ${description}
   );
 
   await analytics.trackCallLogCreated({
-    adapterName: 'agencyzoom',
+    adapterName: ADAPTER_NAME,
     companyIdentifier: user.hostname || user.dataValues?.hostname,
     callDirection: callLog.direction,
     callDurationSeconds: callLog.duration
@@ -652,7 +653,7 @@ ${description}
   );
 
   await analytics.trackCallLogUpdated({
-    adapterName: 'agencyzoom',
+    adapterName: ADAPTER_NAME,
     companyIdentifier: user.hostname || user.dataValues?.hostname
   });
 
@@ -822,7 +823,7 @@ ${description}
   );
 
   await analytics.trackMessageLogCreated({
-    adapterName: 'agencyzoom',
+    adapterName: ADAPTER_NAME,
     companyIdentifier: user.hostname || user.dataValues?.hostname,
     recordingLink,
     faxDocLink
@@ -934,7 +935,7 @@ ${updatedConversation}
   );
 
   await analytics.trackMessageLogUpdated({
-    adapterName: 'agencyzoom',
+    adapterName: ADAPTER_NAME,
     companyIdentifier: user.hostname || user.dataValues?.hostname,
     recordingLink,
     faxDocLink

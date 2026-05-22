@@ -1,5 +1,8 @@
 const axios = require('axios');
 const crypto = require('crypto');
+const { sequelize } = require('../servicenow-models/sequelize');
+const { initModels } = require('../servicenow-models/init-models');
+const models = initModels(sequelize);
 
 const GA_COLLECT_URL = 'https://www.google-analytics.com/mp/collect';
 const DEFAULT_EVENT_PARAMS = {
@@ -15,23 +18,21 @@ function getMessageType({ recordingLink, faxDocLink }) {
     return 'sms';
 }
 
-function getCompanyKey(companyIdentifier) {
+async function getCompanyName(companyIdentifier) {
     if (!companyIdentifier) return undefined;
 
-    const hashKey = process.env.GA_COMPANY_HASH_KEY || process.env.HASH_KEY;
-    if (hashKey) {
-        return crypto
-            .createHmac('sha256', hashKey)
-            .update(companyIdentifier)
-            .digest('hex')
-            .slice(0, 32);
+    try {
+        const company = await models.companies.findOne({
+            where: { hostname: companyIdentifier },
+            raw: true
+        });
+        return company?.companyName;
+    } catch (error) {
+        console.warn('[AdapterAnalytics][companyNameLookupFailed]', {
+            message: error?.message || ''
+        });
+        return undefined;
     }
-
-    return crypto
-        .createHash('sha256')
-        .update(companyIdentifier)
-        .digest('hex')
-        .slice(0, 32);
 }
 
 function getPositiveNumber(value) {
@@ -63,10 +64,13 @@ async function track({ eventName, adapterName, companyIdentifier, params = {} })
     }
 
     try {
+        const companyName = await getCompanyName(companyIdentifier);
+
         if (process.env.GA_ANALYTICS_LOG === 'true') {
             console.log('[AdapterAnalytics][sending]', {
                 eventName,
                 adapterName,
+                companyName,
                 params
             });
         }
@@ -82,7 +86,7 @@ async function track({ eventName, adapterName, companyIdentifier, params = {} })
                         session_id: GA_SESSION_ID,
                         ...(process.env.GA_DEBUG_MODE === 'true' && { debug_mode: true }),
                         adapter_name: adapterName,
-                        company_key: getCompanyKey(companyIdentifier),
+                        company_name: companyName,
                         ...params
                     })
                 }]
