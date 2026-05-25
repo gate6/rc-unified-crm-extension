@@ -339,7 +339,7 @@ async function findContact({ user, phoneNumber }) {
 
     let matchedContactInfo = customers.map(c => ({
       id: c.id,
-      name: `${c.firstname || ""} ${c.lastname || ""}`.trim(),
+      name: c.housename || [c.firstname, c.middlename, c.lastname].filter(Boolean).join(" "),
       phone: c.phone,
       type: "contact"
     }));
@@ -392,7 +392,7 @@ async function findContactWithName({ user, name }) {
 
     const matchedContactInfo = customers.map(c => ({
       id: c.id,
-      name: `${c.firstname || ""} ${c.lastname || ""}`.trim(),
+      name: c.housename || [c.firstname, c.middlename, c.lastname].filter(Boolean).join(" "),
       type: "contact"
     }));
 
