@@ -8,7 +8,9 @@ const models = initModels(sequelize);
 const FormData = require('form-data')
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
+const analytics = require('../servicenow-core/analytics');
 
+const ADAPTER_NAME = 'monday';
 const MONDAY_API_URL = process.env.MONDAY_API_URL;
 const MONDAY_AUTHORIZE_URL = process.env.MONDAY_AUTHORIZE_URL;
 var MONDAY_CLIENT_SECRET = '';
@@ -421,6 +423,11 @@ async function getUserInfo({ authHeader, hostname, query }) {
       });
     }
 
+    await analytics.trackUserConnected({
+      adapterName: ADAPTER_NAME,
+      companyIdentifier: hostname
+    });
+
     return {
       successful: true,
       platformUserInfo: {
@@ -645,6 +652,11 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
     }
   )
 
+  await analytics.trackContactCreated({
+    adapterName: ADAPTER_NAME,
+    companyIdentifier: user.hostname || user.dataValues?.hostname
+  })
+
   return {
     contactInfo: {
       id: res.data.create_item.id,
@@ -742,6 +754,13 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     })
   }
 
+  await analytics.trackCallLogCreated({
+    adapterName: ADAPTER_NAME,
+    companyIdentifier: user.hostname || user.dataValues?.hostname,
+    callDirection: callLog.direction,
+    callDurationSeconds: callLog.duration
+  })
+
   return {
     logId: updateId,
     contactId: Number(contactInfo.id),
@@ -827,6 +846,11 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
       body
     }
   )
+
+  await analytics.trackCallLogUpdated({
+    adapterName: ADAPTER_NAME,
+    companyIdentifier: user.hostname || user.dataValues?.hostname
+  })
 
   return {
     logId: updateRes.data.edit_update.id,
@@ -1005,6 +1029,13 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
       hostname: user.dataValues.hostname
     })
   }
+
+  await analytics.trackMessageLogCreated({
+    adapterName: ADAPTER_NAME,
+    companyIdentifier: user.hostname || user.dataValues?.hostname,
+    recordingLink,
+    faxDocLink
+  })
 
   return {
     logId: updateId,
@@ -1208,6 +1239,13 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
       hostname: user.dataValues.hostname
     })
   }
+
+  await analytics.trackMessageLogUpdated({
+    adapterName: ADAPTER_NAME,
+    companyIdentifier: user.hostname || user.dataValues?.hostname,
+    recordingLink,
+    faxDocLink
+  })
 
   return {
     logId: newThreadId,

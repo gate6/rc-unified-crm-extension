@@ -11,7 +11,9 @@ const qs = require('qs');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = initModels(sequelize);
+const analytics = require('../servicenow-core/analytics');
 
+const ADAPTER_NAME = 'servicetitan';
 const SERVICE_TITAN_JPM_URL= "https://api-integration.servicetitan.io/jpm/v2/tenant"
 const SERVICE_TITAN_CRM_URL= "https://api-integration.servicetitan.io/crm/v2/tenant"
 
@@ -190,6 +192,11 @@ async function getUserInfo(authHeader) {
                 updatedAt: new Date()
             });
         }
+
+        await analytics.trackUserConnected({
+            adapterName: ADAPTER_NAME,
+            companyIdentifier: hostname
+        });
 
         return {
             successful: true,
@@ -419,6 +426,11 @@ async function createContact({ user, phoneNumber, newContactName }) {
 
         const createdContact = response.data;
 
+        await analytics.trackContactCreated({
+            adapterName: ADAPTER_NAME,
+            companyIdentifier: user.hostname || user.dataValues?.hostname
+        });
+
         return {
             contactInfo: {
                 id: createdContact.id,
@@ -587,6 +599,13 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
         logType = "job";
     }
+
+    await analytics.trackCallLogCreated({
+        adapterName: ADAPTER_NAME,
+        companyIdentifier: user.hostname || user.dataValues?.hostname,
+        callDirection: callLog.direction,
+        callDurationSeconds: callLog.duration
+    });
 
     return {
         logId: `${addNoteRes.data.id}_${logType}`,
@@ -763,6 +782,11 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         await logID_db.save();
     }
 
+    await analytics.trackCallLogUpdated({
+        adapterName: ADAPTER_NAME,
+        companyIdentifier: user.hostname || user.dataValues?.hostname
+    });
+
     return {
         logId: newLogId,
         returnMessage: {
@@ -842,6 +866,13 @@ ${faxDocLink}
             }
         }
     );
+
+    await analytics.trackMessageLogCreated({
+        adapterName: ADAPTER_NAME,
+        companyIdentifier: user.hostname || user.dataValues?.hostname,
+        recordingLink,
+        faxDocLink
+    });
 
     return {
         logId: addLogRes.data.id,
@@ -975,6 +1006,13 @@ ${faxDocLink}
         messageLogID_db.thirdPartyLogId = addLogRes.data.id;
         await messageLogID_db.save();
     }
+
+    await analytics.trackMessageLogUpdated({
+        adapterName: ADAPTER_NAME,
+        companyIdentifier: user.hostname || user.dataValues?.hostname,
+        recordingLink,
+        faxDocLink
+    });
 
     return {
         logId: addLogRes.data.id,
