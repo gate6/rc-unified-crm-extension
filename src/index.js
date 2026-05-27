@@ -19,6 +19,8 @@ const servicenow = require('./connectors/servicenow');
 const serviceTitan = require('./connectors/servicetitan');
 const googleSheetsExtra = require('./connectors/googleSheets/extra.js');
 const adminCore = require('@app-connect/core/handlers/admin');
+const monday = require('./connectors/monday');
+const agencyzoom = require('./connectors/agencyzoom');
 
 // Register connectors
 connectorRegistry.setDefaultManifest(require('./connectors/manifest.json'));
@@ -41,6 +43,9 @@ connectorRegistry.registerConnector('servicenow-ven06766', servicenow, require('
 connectorRegistry.registerConnector('servicenow-cmscpidev', servicenow, require('./connectors/servicenow-cmscpidev/manifest.json'));
 connectorRegistry.registerConnector('servicenow-cmscpi', servicenow, require('./connectors/servicenow-cmscpi/manifest.json'));
 connectorRegistry.registerConnector('proxy', proxyConnector);
+connectorRegistry.registerConnector('monday', monday, require('./connectors/monday/manifest.json'));
+connectorRegistry.registerConnector('monday-QA', monday, require('./connectors/monday-QA/manifest.json'));
+connectorRegistry.registerConnector('agencyzoom', agencyzoom, require('./connectors/agencyzoom/manifest.json'));
 
 // Create Express app with core functionality
 const app = createCoreApp();
@@ -132,7 +137,7 @@ app.post('/googleSheets/selectedSheet', async function (req, res) {
     });
     const data = response?.data;
     const user = await UserModel.findByPk(`${data?.sub}-googleSheets`);
-    if (!user) {    
+    if (!user) {
         res.status(400).send('User not found');
         return;
     }
@@ -152,7 +157,7 @@ app.get('/admin/googleSheets/filePicker', async function (req, res) {
                 res.status(400).send('User not found');
                 return;
             }
-            const fileContent = await googleSheetsExtra.renderAdminPickerFile({ user,rcAccessToken:req.query.rcAccessToken });
+            const fileContent = await googleSheetsExtra.renderAdminPickerFile({ user, rcAccessToken: req.query.rcAccessToken });
             res.send(fileContent);
         } else {
             res.status(400).send('Please authorize admin access');
@@ -173,14 +178,14 @@ app.post('/admin/googleSheets/sheet', async function (req, res) {
                 res.status(400).send('User not found');
                 return;
             }
-             const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
-        if (isValidated) {
+            const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+            if (isValidated) {
                 const { successful, sheetName, sheetUrl } = await googleSheetsExtra.createNewSheet({ user, data: req.body });
                 if (successful) {
                     // Store admin configuration
-                    await googleSheetsExtra.setAdminGoogleSheetsConfig({ 
+                    await googleSheetsExtra.setAdminGoogleSheetsConfig({
                         rcAccountId,
-                        sheetName, 
+                        sheetName,
                         sheetUrl,
                         customizable: req.body.customizable || false
                     });
@@ -211,7 +216,7 @@ app.post('/admin/googleSheets/selectedSheet', async function (req, res) {
         });
         const data = response?.data;
         const user = await UserModel.findByPk(`${data?.sub}-googleSheets`);
-        if (!user) {    
+        if (!user) {
             res.status(400).send('User not found');
             return;
         }
@@ -220,9 +225,9 @@ app.post('/admin/googleSheets/selectedSheet', async function (req, res) {
             const { successful, sheetName, sheetUrl } = await googleSheetsExtra.updateSelectedSheet({ user, data: req.body });
             if (successful) {
                 // Store admin configuration
-                await googleSheetsExtra.setAdminGoogleSheetsConfig({  
+                await googleSheetsExtra.setAdminGoogleSheetsConfig({
                     rcAccountId,
-                    sheetName, 
+                    sheetName,
                     sheetUrl,
                     customizable: req.body.customizable || false
                 });

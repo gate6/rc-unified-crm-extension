@@ -50,7 +50,7 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, query }) {
             hostname: platformUserInfo?.overridingHostname ? platformUserInfo.overridingHostname : hostname,
             accessToken,
             refreshToken,
-            tokenExpiry: expires,
+            tokenExpiry: isNaN(expires) ? null : expires,
             rcAccountId: query.rcAccountId,
             proxyId
         });
