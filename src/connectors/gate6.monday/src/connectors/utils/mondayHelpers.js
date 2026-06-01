@@ -2,14 +2,24 @@ const axios = require('axios');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const FormData = require('form-data');
 const AWS = require('aws-sdk');
+const { UserModel } = require('@app-connect/core/models/userModel');
 const s3Helper = require('../../monday-core/s3');
 const { initModels } = require('../../monday-models/init-models');
 const { sequelize } = require('../../monday-models/sequelize');
 const models = initModels(sequelize);
 
-const MONDAY_API_URL = 'https://api.monday.com/v2';
-const MONDAY_AUTHORIZE_URL = 'https://auth.monday.com/oauth2/authorize';
+const MONDAY_API_URL = process.env.MONDAY_API_URL || 'https://api.monday.com/v2';
+const MONDAY_AUTHORIZE_URL = process.env.MONDAY_AUTHORIZE_URL || 'https://auth.monday.com/oauth2/authorize';
 const columnIdCache = new Map();
+let mondayOAuthConfig = {};
+
+function setMondayOAuthConfig(config) {
+  mondayOAuthConfig = { ...config }
+}
+
+function getMondayOAuthConfig() {
+  return mondayOAuthConfig
+}
 
 async function mondayRequest(accessToken, query, variables = {}) {
   const res = await axios.post(
@@ -180,7 +190,7 @@ function parseMondayCallLogBody(body = '') {
 }
 
 async function getCompanyByHostname({ hostname, rcAccountId }) {
-  const where = { hostname, status: "true" }
+  const where = { hostname, status: true }
   if (rcAccountId) where.rcAccountId = rcAccountId
 
   const company = await models.companies.findOne({ where, raw: true })
@@ -189,6 +199,74 @@ async function getCompanyByHostname({ hostname, rcAccountId }) {
     throw new Error('Company not found or inactive')
   }
   return company
+}
+
+async function getLicenseStatus({ userId }) {
+  try {
+    const user = await UserModel.findByPk(userId)
+    if (!user) {
+      return {
+        isLicenseValid: false,
+        licenseStatus: 'User Not Found',
+        licenseStatusDescription: ''
+      }
+    }
+
+    const company = await getCompanyByHostname({
+      hostname: user.hostname,
+      rcAccountId: user.rcAccountId
+    })
+
+    if (!company || company.status !== true) {
+      return {
+        isLicenseValid: false,
+        licenseStatus: 'Inactive',
+        licenseStatusDescription: 'Purchase license to continue'
+      }
+    }
+
+    return {
+      isLicenseValid: true,
+      licenseStatus: 'Active',
+      licenseStatusDescription: 'Basic'
+    }
+  } catch (error) {
+    console.error('getLicenseStatus error:', error)
+    return {
+      isLicenseValid: false,
+      licenseStatus: 'Error',
+      licenseStatusDescription: 'Error validating license'
+    }
+  }
+}
+
+async function validateLicenseOrFail(user) {
+  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id })
+
+  if (!licenseStatus.isLicenseValid) {
+    return {
+      successful: false,
+      returnMessage: {
+        message: 'License validation failed',
+        messageType: 'error',
+        details: [
+          {
+            title: 'License Issue',
+            items: [
+              {
+                id: '1',
+                type: 'text',
+                text: 'Please go to user settings page and refresh license status'
+              }
+            ]
+          }
+        ],
+        ttl: 5000
+      }
+    }
+  }
+
+  return null
 }
 
 async function downloadAudioFile(url, s3Bucket, s3Key) {
@@ -310,12 +388,16 @@ async function uploadToMonday({
 module.exports = {
   MONDAY_API_URL,
   MONDAY_AUTHORIZE_URL,
+  setMondayOAuthConfig,
+  getMondayOAuthConfig,
   mondayRequest,
   getOrCreateCallLogsColumn,
   getColumnIdByName,
   normalizePhone,
   parseMondayCallLogBody,
   getCompanyByHostname,
+  getLicenseStatus,
+  validateLicenseOrFail,
   downloadAudioFile,
   uploadToMonday
 };

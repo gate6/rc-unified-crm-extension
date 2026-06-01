@@ -1,46 +1,35 @@
 const axios = require('axios');
 const moment = require('moment');
-const { getRefreshedAuthToken } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
 
 async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+    const contactId = contactInfo.id;
 
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
-    let subject = '';
-    let description = '';
-    switch (messageType) {
-        case 'SMS':
-            subject = `SMS conversation with ${contactInfo.name}`;
-            description = `SMS from ${message.direction === 'Inbound' ? contactInfo.name : 'user'}: ${message.subject}`;
-            break;
-        case 'Voicemail':
-            subject = `Voicemail from ${contactInfo.name}`;
-            description = `Voicemail recording link: ${recordingLink}\n`;
-            break;
-        case 'Fax':
-            subject = `Fax from ${contactInfo.name}`;
-            description = `Fax document link: ${faxDocLink}`;
-            break;
-    }
+    let noteText = "";
 
-    const contactId = contactInfo.id;
-    let postBody = JSON.stringify({
-        "text": JSON.stringify({
-            start_date: moment(message.creationTime).utc().toISOString(),
-            end_date: moment(message.creationTime).utc().toISOString(),
-            subject,
-            description,
-        })
-    });
+    if (messageType === "SMS") {
+        const direction = message.direction === "Inbound" ? contactInfo.name : "Agent";
+        const line = `[${moment(message.creationTime).format("YYYY-MM-DD HH:mm:ss")}] ${direction}: ${message.subject}`;
+        noteText = `Conversation:\n${line}`.trim();
+    } else if (messageType === "Voicemail") {
+        noteText = `Voicemail from ${contactInfo.name}\n\nRecording:\n${recordingLink}`.trim();
+    } else if (messageType === "Fax") {
+        noteText = `Fax from ${contactInfo.name}\n\nDocument:\n${faxDocLink}`.trim();
+    }
 
     const addLogRes = await axios.post(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
-        postBody,
+        { text: noteText },
         {
             headers: {
-                'Authorization': `Bearer ${auth}`,
+                Authorization: `Bearer ${auth}`,
                 'ST-App-Key': stAppKey,
                 'Content-Type': 'application/json'
             }
@@ -48,6 +37,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 
     return {
         logId: addLogRes.data.id,
+        contactId,
         returnMessage: {
             message: 'Message logged as a note',
             messageType: 'success',

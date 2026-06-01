@@ -27,3 +27,4 @@ exports.getUserList = require('./interfaces/getUserList');
 exports.findContactWithName = require('./interfaces/findContactWithName');
 
 exports.getLicenseStatus = require('./interfaces/getLicenseStatus');
+exports.getRefreshedAuthToken = require('./interfaces/getRefreshedAuthToken');

@@ -1,10 +1,13 @@
 const { initModels } = require('../../monday-models/init-models');
 const { sequelize } = require('../../monday-models/sequelize');
 const models = initModels(sequelize);
-const { mondayRequest, getOrCreateCallLogsColumn, getCompanyByHostname, downloadAudioFile, uploadToMonday } = require('../utils/mondayHelpers');
+const { mondayRequest, getOrCreateCallLogsColumn, getCompanyByHostname, downloadAudioFile, uploadToMonday, validateLicenseOrFail } = require('../utils/mondayHelpers');
 const s3Helper = require('../../monday-core/s3');
 
 async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, composedLogDetails, accessToken, authHeader, user }) {
+  const licenseError = await validateLicenseOrFail(user)
+  if (licenseError) return licenseError
+
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
 

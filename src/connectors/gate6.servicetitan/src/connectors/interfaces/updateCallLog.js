@@ -1,9 +1,12 @@
 const axios = require('axios');
 const moment = require('moment');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
-const { getRefreshedAuthToken, stripHtml, upsertCallRecording } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, stripHtml, upsertCallRecording, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
 
 async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript, additionalSubmission, composedLogDetails, existingCallLogDetails, hashedAccountId }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;

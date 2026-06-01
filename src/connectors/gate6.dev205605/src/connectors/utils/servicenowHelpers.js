@@ -4,9 +4,18 @@ const { parsePhoneNumber } = require('awesome-phonenumber');
 const FormData = require('form-data');
 const AWS = require('aws-sdk');
 const s3Helper = require('../../servicenow-core/s3');
+const { UserModel } = require('@app-connect/core/models/userModel');
 const { initModels } = require('../../servicenow-models/init-models');
 const { sequelize } = require('../../servicenow-models/sequelize');
-const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById } = require('../../servicenow-core/interaction');
+const {
+    findStateValueByName,
+    findStateValueById,
+    findTypeValueByName,
+    findTypeValueById,
+    getAllAccounts,
+    applyClosedDatesIfNeeded,
+    formatDuration
+} = require('../../servicenow-core/interaction');
 const { secondsToHoursMinutesSeconds } = require('@app-connect/core/lib/util');
 const models = initModels(sequelize);
 
@@ -53,6 +62,136 @@ async function getCompanyByHostname(hostname) {
         throw new Error('Company not found or inactive');
     }
     return company;
+}
+
+async function getLicenseStatus({ userId }) {
+    try {
+        const user = await UserModel.findByPk(userId);
+        if (!user) {
+            return {
+                isLicenseValid: false,
+                licenseStatus: 'User Not Found',
+                licenseStatusDescription: ''
+            };
+        }
+
+        const company = await models.companies.findOne({
+            where: {
+                hostname: user.hostname,
+                rcAccountId: user.rcAccountId
+            }
+        });
+
+        if (!company || company.status !== true) {
+            return {
+                isLicenseValid: false,
+                licenseStatus: 'Inactive',
+                licenseStatusDescription: 'Purchase license to continue'
+            };
+        }
+
+        return {
+            isLicenseValid: true,
+            licenseStatus: 'Active',
+            licenseStatusDescription: 'Basic'
+        };
+    } catch (error) {
+        console.error('getLicenseStatus error:', error);
+        return {
+            isLicenseValid: false,
+            licenseStatus: 'Error',
+            licenseStatusDescription: 'Error validating license'
+        };
+    }
+}
+
+async function validateLicenseOrFail(user) {
+    const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+    if (!licenseStatus.isLicenseValid) {
+        return {
+            successful: false,
+            returnMessage: {
+                message: 'License validation failed',
+                messageType: 'error',
+                details: [
+                    {
+                        title: 'License Issue',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: 'Please go to user settings page and refresh license status'
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
+    }
+
+    return null;
+}
+
+function generateFormatsFromE164(e164Number) {
+    const digits = String(e164Number || '').replace(/\D/g, '');
+
+    if (digits.length === 11 && digits.startsWith('1')) {
+        const d = digits.slice(1);
+        return [
+            e164Number,
+            digits,
+            d,
+            `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`,
+            `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`,
+            `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`,
+            `+1 (${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`,
+            `+1-${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`,
+            `(${d.slice(0, 3)})${d.slice(3, 6)}-${d.slice(6)}`
+        ];
+    }
+    return [e164Number, digits].filter(Boolean);
+}
+
+function toDigits(value = '') {
+    return String(value).replace(/\D/g, '');
+}
+
+function isSamePhone(candidate, target) {
+    const a = toDigits(candidate);
+    const b = toDigits(target);
+    if (!a || !b) {
+        return false;
+    }
+    if (a === b || a.endsWith(b) || b.endsWith(a)) {
+        return true;
+    }
+
+    const digitPattern = b.split('').join('\\D*');
+    const flexibleRegex = new RegExp(digitPattern);
+    return flexibleRegex.test(String(candidate || ''));
+}
+
+function buildFallbackTokens(digits) {
+    const clean = toDigits(digits);
+    if (!clean) {
+        return [];
+    }
+    if (clean.length <= 4) {
+        return [clean];
+    }
+
+    const tokens = new Set();
+    tokens.add(clean.slice(-4));
+    tokens.add(clean.slice(0, Math.min(3, clean.length)));
+
+    if (clean.length >= 6) {
+        const midStart = Math.max(0, Math.floor(clean.length / 2) - 1);
+        tokens.add(clean.slice(midStart, midStart + 3));
+    }
+
+    return Array.from(tokens).filter((t) => t.length >= 2);
 }
 
 function upsertCallAgentNote({ body, note }) {
@@ -201,6 +340,12 @@ module.exports = {
     generateAlphanumericString,
     getHostname,
     getCompanyByHostname,
+    getLicenseStatus,
+    validateLicenseOrFail,
+    generateFormatsFromE164,
+    toDigits,
+    isSamePhone,
+    buildFallbackTokens,
     upsertCallAgentNote,
     upsertContactPhoneNumber,
     upsertCallResult,
@@ -213,5 +358,8 @@ module.exports = {
     findStateValueByName,
     findStateValueById,
     findTypeValueByName,
-    findTypeValueById
+    findTypeValueById,
+    getAllAccounts,
+    applyClosedDatesIfNeeded,
+    formatDuration
 };

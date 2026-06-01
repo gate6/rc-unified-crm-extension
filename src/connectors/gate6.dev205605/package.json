@@ -15,7 +15,7 @@
     "deploy": "node ./scripts/serverless-deploy"
   },
   "dependencies": {
-    "@app-connect/core": "^1.7.15",
+    "@app-connect/core": "^1.7.27",
     "awesome-phonenumber": "^5.6.0",
     "axios": "^1.12.2",
     "dotenv": "^16.0.3",

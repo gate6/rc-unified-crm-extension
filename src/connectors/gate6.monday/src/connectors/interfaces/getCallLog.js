@@ -1,6 +1,9 @@
-const { mondayRequest, parseMondayCallLogBody } = require('../utils/mondayHelpers');
+const { mondayRequest, parseMondayCallLogBody, validateLicenseOrFail } = require('../utils/mondayHelpers');
 
 async function getCallLog({ callLogId, accessToken, authHeader, user }) {
+  const licenseError = await validateLicenseOrFail(user)
+  if (licenseError) return licenseError
+
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
 

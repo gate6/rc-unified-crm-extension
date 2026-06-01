@@ -2,7 +2,7 @@ const axios = require('axios');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const getLicenseStatus = require('../interfaces/getLicenseStatus');
 
-const AZ_BASE_URL = process.env.AZ_BASE_URL;
+const AZ_BASE_URL = process.env.AZ_BASE_URL || 'https://api.agencyzoom.com/v1/api';
 
 async function validateLicenseOrFail(user) {
   const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });

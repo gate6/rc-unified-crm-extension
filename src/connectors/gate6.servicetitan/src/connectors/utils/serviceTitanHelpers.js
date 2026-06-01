@@ -1,6 +1,11 @@
 const axios = require('axios');
 const qs = require('qs');
 const moment = require('moment');
+const { UserModel } = require('@app-connect/core/models/userModel');
+const { sequelize } = require('../../servicetitan-models/sequelize');
+const { initModels } = require('../../servicetitan-models/init-models');
+
+const models = initModels(sequelize);
 
 async function generateServiceTitanToken(clientId, clientSecret) {
     const tokenUrl = process.env.SERVICETITAN_ACCESS_TOKEN_URI;
@@ -17,6 +22,76 @@ async function generateServiceTitanToken(clientId, clientSecret) {
     );
 
     return authRes.data.access_token;
+}
+
+async function getLicenseStatus({ userId }) {
+    try {
+        const user = await UserModel.findByPk(userId);
+        if (!user) {
+            return {
+                isLicenseValid: false,
+                licenseStatus: 'User Not Found',
+                licenseStatusDescription: ''
+            };
+        }
+
+        const company = await models.companies.findOne({
+            where: {
+                hostname: user.hostname
+            },
+            raw: true
+        });
+
+        if (!company || company.status !== true) {
+            return {
+                isLicenseValid: false,
+                licenseStatus: 'Inactive',
+                licenseStatusDescription: 'Purchase license to continue'
+            };
+        }
+
+        return {
+            isLicenseValid: true,
+            licenseStatus: 'Active',
+            licenseStatusDescription: 'Basic'
+        };
+    } catch (error) {
+        console.error('getLicenseStatus error:', error);
+        return {
+            isLicenseValid: false,
+            licenseStatus: 'Error',
+            licenseStatusDescription: 'Error validating license'
+        };
+    }
+}
+
+async function validateLicenseOrFail(user) {
+    const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+
+    if (!licenseStatus.isLicenseValid) {
+        return {
+            successful: false,
+            returnMessage: {
+                message: 'License validation failed',
+                messageType: 'error',
+                details: [
+                    {
+                        title: 'License Issue',
+                        items: [
+                            {
+                                id: '1',
+                                type: 'text',
+                                text: 'Please go to user settings page and refresh license status'
+                            }
+                        ]
+                    }
+                ],
+                ttl: 5000
+            }
+        };
+    }
+
+    return null;
 }
 
 async function getRefreshedAuthToken(user) {
@@ -112,6 +187,8 @@ function upsertCallRecording({ body, recordingLink }) {
 
 module.exports = {
     generateServiceTitanToken,
+    getLicenseStatus,
+    validateLicenseOrFail,
     getRefreshedAuthToken,
     formatContact,
     stripHtml,

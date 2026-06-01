@@ -1,8 +1,11 @@
 const axios = require('axios');
 const { parsePhoneNumber } = require('awesome-phonenumber');
-const { getRefreshedAuthToken } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
 
 async function createContact({ user, phoneNumber, newContactName }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;

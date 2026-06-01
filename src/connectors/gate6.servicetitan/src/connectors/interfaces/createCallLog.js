@@ -1,8 +1,10 @@
 const axios = require('axios');
 const moment = require('moment');
-const { getRefreshedAuthToken, stripHtml, fetchJobs, upsertCallRecording } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, stripHtml, fetchJobs, upsertCallRecording, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
 
 async function createCallLog({ user, contactInfo, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails, hashedAccountId }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;

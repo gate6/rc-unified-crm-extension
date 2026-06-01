@@ -1,11 +1,10 @@
 const { initModels } = require('../../monday-models/init-models');
 const { sequelize } = require('../../monday-models/sequelize');
+const { MONDAY_AUTHORIZE_URL, setMondayOAuthConfig } = require('../utils/mondayHelpers');
 const models = initModels(sequelize);
 
-const MONDAY_AUTHORIZE_URL = 'https://auth.monday.com/oauth2/authorize';
-
 async function getOauthInfo({ hostname, rcAccountId }) {
-  const where = { hostname, status: "true" }
+  const where = { hostname, status: true }
   if (rcAccountId) {
     where.rcAccountId = rcAccountId
   }
@@ -16,9 +15,11 @@ async function getOauthInfo({ hostname, rcAccountId }) {
   if (!company) {
     throw new Error('Company not found or inactive')
   }
-  MONDAY_CLIENT_SECRET = company.clientSecret
-  MONDAY_CLIENT_ID = company.clientId
-  MONDAY_REDIRECT_URI = company.crmRedirectUrl
+  setMondayOAuthConfig({
+    clientId: company.clientId,
+    clientSecret: company.clientSecret,
+    redirectUri: company.crmRedirectUrl
+  })
   return {
     clientId: company.clientId,
     clientSecret: company.clientSecret,

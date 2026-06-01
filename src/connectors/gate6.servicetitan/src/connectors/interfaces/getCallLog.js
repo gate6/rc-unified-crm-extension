@@ -1,8 +1,11 @@
 const axios = require('axios');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
-const { getRefreshedAuthToken } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
 
 async function getCallLog({ user, callLogId, authHeader }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
+
     const [realId, logType = 'note'] = callLogId.split('_');
 
     const auth = await getRefreshedAuthToken(user);

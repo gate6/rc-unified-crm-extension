@@ -11,7 +11,9 @@ const {
     upsertAiNote, 
     upsertTranscript,
     downloadAudioFile,
-    uploadToServiceNow
+    uploadToServiceNow,
+    validateLicenseOrFail,
+    formatDuration
 } = require('../utils/servicenowHelpers');
 const models = initModels(sequelize);
 
@@ -22,6 +24,9 @@ const models = initModels(sequelize);
 // - result: final result will be patched to this update function shortly after the call ends
 // - recordingLink: recordingLink updated from RingCentral. It's separated from createCallLog because recordings are not generated right after a call. It needs to be updated into existing call log
 async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, recordingDownloadLink, subject, note, startTime, duration, result, aiNote, transcript }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
+
     const userInfo = await getHostname(user.dataValues.hostname);
     const hostname = userInfo.hostname;
     const existingLogId = existingCallLog.thirdPartyLogId;
@@ -31,6 +36,12 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         { headers: { 'Authorization': authHeader } }
     );
     const originalNote = getLogRes?.data?.result?.work_notes ?? '';
+    const originalSubject = getLogRes?.data?.result?.short_description || '';
+    let subjectToUse = originalSubject || "";
+
+    if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+        subjectToUse = subject.trim();
+    }
 
     let logBody = originalNote;
     if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
@@ -41,9 +52,11 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
 
     const patchBody = {
-        short_description: subject,
+        short_description: subjectToUse,
         work_notes: logBody
     };
+
+    patchBody.u_call_duration = formatDuration(duration);
 
     const patchLog = await axios.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,

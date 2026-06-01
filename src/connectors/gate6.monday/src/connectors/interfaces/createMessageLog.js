@@ -1,7 +1,7 @@
 const { initModels } = require('../../monday-models/init-models');
 const { sequelize } = require('../../monday-models/sequelize');
 const models = initModels(sequelize);
-const { mondayRequest, getCompanyByHostname, downloadAudioFile, uploadToMonday } = require('../utils/mondayHelpers');
+const { mondayRequest, getCompanyByHostname, downloadAudioFile, uploadToMonday, validateLicenseOrFail } = require('../utils/mondayHelpers');
 const s3Helper = require('../../monday-core/s3');
 
 async function createMessageLog({
@@ -10,9 +10,13 @@ async function createMessageLog({
   message,
   recordingLink,
   faxDocLink,
-  accessToken
+  accessToken,
+  authHeader
 }) {
-  const resolvedAccessToken = accessToken || user?.accessToken
+  const licenseError = await validateLicenseOrFail(user)
+  if (licenseError) return licenseError
+
+  const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
 
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname,

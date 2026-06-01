@@ -1,9 +1,12 @@
 const { initModels } = require('../../monday-models/init-models');
 const { sequelize } = require('../../monday-models/sequelize');
 const models = initModels(sequelize);
-const { mondayRequest, getColumnIdByName, normalizePhone, getCompanyByHostname } = require('../utils/mondayHelpers');
+const { mondayRequest, getColumnIdByName, normalizePhone, getCompanyByHostname, validateLicenseOrFail } = require('../utils/mondayHelpers');
 
 async function findContact({ phoneNumber, accessToken, authHeader, user }) {
+  const licenseError = await validateLicenseOrFail(user)
+  if (licenseError) return licenseError
+
   const company = await getCompanyByHostname({
     hostname: user.dataValues.hostname
   })

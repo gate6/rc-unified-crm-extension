@@ -1,4 +1,5 @@
 const axios = require('axios');
+const moment = require('moment');
 
 const stateMapping = {
     // "wrap up": "wrap_up",
@@ -193,8 +194,103 @@ async function findTypeValueById(hostname, authHeader, inputId) {
     
 }
 
+const accountCache = new Map();
+const ACCOUNT_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getAllAccounts(hostname, authHeader) {
+    const cached = accountCache.get(hostname);
+    if (cached && Date.now() < cached.expiresAt) {
+        return cached.data;
+    }
+    try {
+        const response = await axios.get(
+            `https://${hostname}/api/now/account?sysparm_limit=1000`,
+            { headers: { Authorization: authHeader } }
+        );
+        const data = response.data?.result || [];
+        accountCache.set(hostname, { data, expiresAt: Date.now() + ACCOUNT_CACHE_TTL_MS });
+        return data;
+    } catch (error) {
+        console.log('Error fetching accounts:', error);
+        return cached?.data || [];
+    }
+}
+
+function isClosedInteractionState(stateValue) {
+    const normalized = (stateValue || '').toString().trim().toLowerCase();
+    return normalized === 'closed_complete' || normalized === 'closed_abandoned';
+}
+
+function toServiceNowUtcDateTime(valueMs) {
+    const numericMs = Number(valueMs);
+    if (!Number.isFinite(numericMs) || numericMs <= 0) {
+        return moment.utc().format('YYYY-MM-DD HH:mm:ss');
+    }
+    return moment.utc(numericMs).format('YYYY-MM-DD HH:mm:ss');
+}
+
+function applyClosedDatesIfNeeded(payload, stateValue, callLog) {
+    if (!isClosedInteractionState(stateValue)) {
+        return;
+    }
+
+    const startTimeMs = Number(callLog?.startTime);
+    const durationMs = Number(callLog?.durationMs);
+    const durationSec = Number(callLog?.duration);
+    const computedDurationMs = Number.isFinite(durationMs) && durationMs > 0
+        ? durationMs
+        : (Number.isFinite(durationSec) && durationSec > 0 ? durationSec * 1000 : 1000);
+
+    if (Number.isFinite(startTimeMs) && startTimeMs > 0) {
+        if (!payload.opened_at) {
+            payload.opened_at = toServiceNowUtcDateTime(startTimeMs);
+        }
+        if (!payload.closed_at) {
+            payload.closed_at = toServiceNowUtcDateTime(startTimeMs + computedDurationMs);
+        }
+        return;
+    }
+
+    const nowMs = Date.now();
+    if (!payload.opened_at) {
+        payload.opened_at = toServiceNowUtcDateTime(nowMs - 1000);
+    }
+    if (!payload.closed_at) {
+        payload.closed_at = toServiceNowUtcDateTime(nowMs);
+    }
+}
+
+function formatDuration(seconds) {
+    seconds = Number(seconds);
+
+    if (seconds < 60) {
+        return `${seconds} Second${seconds !== 1 ? 's' : ''}`;
+    }
+
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainingSeconds = seconds % 60;
+
+    let result = '';
+
+    if (hours > 0) {
+        result += `${hours} Hour${hours !== 1 ? 's' : ''} `;
+    }
+    if (minutes > 0) {
+        result += `${minutes} Minute${minutes !== 1 ? 's' : ''} `;
+    }
+    if (remainingSeconds > 0) {
+        result += `${remainingSeconds} Second${remainingSeconds !== 1 ? 's' : ''}`;
+    }
+
+    return result.trim();
+}
+
 
 exports.findStateValueByName = findStateValueByName;
 exports.findStateValueById = findStateValueById;
 exports.findTypeValueByName = findTypeValueByName;
 exports.findTypeValueById = findTypeValueById;
+exports.getAllAccounts = getAllAccounts;
+exports.applyClosedDatesIfNeeded = applyClosedDatesIfNeeded;
+exports.formatDuration = formatDuration;

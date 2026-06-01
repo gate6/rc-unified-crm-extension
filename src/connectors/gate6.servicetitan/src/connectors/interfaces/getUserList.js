@@ -1,7 +1,10 @@
 const axios = require('axios');
-const { getRefreshedAuthToken } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
 
 async function getUserList({ user, authHeader }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return [];
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
