@@ -24,6 +24,15 @@ It is the developer's responsibility to update the call log record contents as t
 | `startTime`                 | Updated value of start date/time of this call. |
 | `duration`                 | Updated value of duration of this call.     |
 | `result`                 | Updated value of result of this call.     |
+| `aiNote`       |  AI summary of the phone call   | 
+| `transcript`       |  Transcript of the phone call   | 
+| `ringSenseTranscript`  | The transcript from [ACE](../../users/ace.md) | 
+| `ringSenseSummary`     | The summary from [ACE](../../users/ace.md) | 
+| `ringSenseBulletedSummary`     | The bulleted summary from [ACE](../../users/ace.md) |
+| `ringSenseAIScore`     | The AI score from [ACE](../../users/ace.md) | 
+| `ringSenseLink`     | The link to [ACE](../../users/ace.md) recording | 
+| `composedLogDetails`       |  Formated log details that can be directly put into log body  | 
+| `existingCallLogDetails`       |  Formated log details that's stored in log entity  | 
 
 * Why need `startTime`, `duration` and `result`? Call info could be not as accurate right after the call. Our app uses call info from user local data until it's updated by RingCentral server. If users create call logs before RingCentral server updates the data, another API call will be triggered to call this `updateCallLog` function with true call data.
 
@@ -64,12 +73,12 @@ An object with following properties:
 === "Example CRM"
 
     ```js
-    {!> src/adapters/testCRM/index.js [ln:412-463] !}
+    {!> packages/template/src/connectors/interfaces/updateCallLog.js !}
 	```
 	
 === "Pipedrive"
 
 	```js
-    {!> src/adapters/pipedrive/index.js [ln:352-397] !}
+    {!> src/connectors/pipedrive/index.js [ln:423-480] !}
 	```
 

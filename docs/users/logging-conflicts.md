@@ -22,7 +22,7 @@ We realize that you may want to enter in a lot more information about a contact.
 **Tips and best practices**
 
 * App Connect only prompts you for a name. You may want to edit the contact later to augment it with more information about the contact after the call is logged. 
-* There is a [call-pop setting](making-calls.md#call-pop) that controls whether App Connect will open a browser tab to the newly created contact to aid you in editing the contact after it is created. 
+* There is a [call-pop setting](screen-pop.md) that controls whether App Connect will open a browser tab to the newly created contact to aid you in editing the contact after it is created. 
 * Some CRMs require additional records, like a company, be created and associated with a contact. App Connect will often create placeholder objects that you can edit later.
 * If the contact exists in your CRM, but App Connect cannot find it, consider editing the contact and updating its phone number to use the E.164 format favored by RingCentral and App Connect. 
 
@@ -31,7 +31,7 @@ We realize that you may want to enter in a lot more information about a contact.
 
 ### Search for a contact
 
-Most App Connect adapters support the ability to search for a contact when one is not able to be found via a phone number. If you adapter supports this capability, you will see a "Search for contact" option in the contact pull-down menu. 
+Most App Connect connectors support the ability to search for a contact when one is not able to be found via a phone number. If you connector supports this capability, you will see a "Search for contact" option in the contact pull-down menu. 
 
 <figure markdown>
   ![Search contacts in a CRM](../img/search-contacts.png)
@@ -50,4 +50,23 @@ When multiple contacts are found, users are given an opportunity to disambiguate
   ![Logging calls](../img/multi-contacts.png)
   <figcaption>Disambiguating between contacts when multiple matches are found in the connected CRM</figcaption>
 </figure>
+
+## Resolving conlicts automatically
+
+<!-- md:version 2.0 -->
+
+To help users maximize the efficacy of automated call logging and to log as many calls as possible, settings are available that allow you to select the rules and policies to help determine the best way to log a call when App Connect encounters one of the challenges outlined above. 
+
+For example, when a contact cannot be found, users can elect to have App Connect create a contact automatically. When doing so a user selects the default name and contact type (if applicable) of the contact that will be created. 
+
+When multiple contacts are matched, users can select a policy by which one of those contacts will be selected automatically. We currently support the following policies:
+
+* Select the last updated contact record
+* Select the first contact in alphabetical order
+
+<figure markdown>
+  ![Logging calls](../img/auto-logging-policies.png)
+  <figcaption>Settings to help users resolve conflicts in an automated fashion</figcaption>
+</figure>
+
 

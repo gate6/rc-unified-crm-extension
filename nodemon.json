@@ -4,8 +4,6 @@
     ],
     "ext": "*",
     "ignore": [
-        "node_modules",
-        "downloads/*",
-        "src/adapters/servicenow/downloads/*"
+        "node_modules"
     ]
 }
