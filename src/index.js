@@ -1,53 +1,56 @@
 const {
     createCoreApp,
-    adapterRegistry
+    connectorRegistry,
+    proxyConnector
 } = require('@app-connect/core');
 const path = require('path');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const jwt = require('@app-connect/core/lib/jwt');
 const axios = require('axios');
-const bullhorn = require('./adapters/bullhorn');
-const clio = require('./adapters/clio');
-const googleSheets = require('./adapters/googleSheets');
-const insightly = require('./adapters/insightly');
-const netsuite = require('./adapters/netsuite');
-const pipedrive = require('./adapters/pipedrive');
-const redtail = require('./adapters/redtail');
-const testCRM = require('./adapters/testCRM');
-const googleSheetsExtra = require('./adapters/googleSheets/extra.js');
-const servicenow = require('./adapters/servicenow');
-const servicetitan = require('./adapters/servicetitan');
-const agencyzoom = require('./adapters/agencyzoom');
-const monday = require('./adapters/monday');
-// Register adapters
-adapterRegistry.setDefaultManifest(require('./adapters/manifest.json'));
-adapterRegistry.setReleaseNotes(require('./releaseNotes.json'));
+const authCore = require('@app-connect/core/handlers/auth');
+const bullhorn = require('./connectors/bullhorn');
+const clio = require('./connectors/clio');
+const googleSheets = require('./connectors/googleSheets');
+const insightly = require('./connectors/insightly');
+const netsuite = require('./connectors/netsuite');
+const pipedrive = require('./connectors/pipedrive');
+const redtail = require('./connectors/redtail');
+const servicenow = require('./connectors/servicenow');
+const serviceTitan = require('./connectors/servicetitan');
+const googleSheetsExtra = require('./connectors/googleSheets/extra.js');
+const adminCore = require('@app-connect/core/handlers/admin');
+const monday = require('./connectors/monday');
+const agencyzoom = require('./connectors/agencyzoom');
 
-adapterRegistry.registerAdapter('bullhorn', bullhorn);
-adapterRegistry.registerAdapter('clio', clio);
-adapterRegistry.registerAdapter('googleSheets', googleSheets);
-adapterRegistry.registerAdapter('insightly', insightly);
-adapterRegistry.registerAdapter('netsuite', netsuite);
-adapterRegistry.registerAdapter('pipedrive', pipedrive);
-adapterRegistry.registerAdapter('redtail', redtail);
-adapterRegistry.registerAdapter('servicetitan', servicetitan, require('./adapters/servicetitan/manifest.json'));
-adapterRegistry.registerAdapter('servicenow', servicenow, require('./adapters/servicenow/manifest.json'));
-adapterRegistry.registerAdapter('servicenow-dev226973', servicenow, require('./adapters/servicenow-dev226973/manifest.json'));
-adapterRegistry.registerAdapter('servicenow-powertest2', servicenow, require('./adapters/servicenow-powertest2/manifest.json'));
-adapterRegistry.registerAdapter('servicenow-kerridgecs', servicenow, require('./adapters/servicenow-kerridgecs/manifest.json'));
-adapterRegistry.registerAdapter('servicenow-spiegsa', servicenow, require('./adapters/servicenow-spiegsa/manifest.json'));
-adapterRegistry.registerAdapter('servicenow-ven06766', servicenow, require('./adapters/servicenow-ven06766/manifest.json'));
-adapterRegistry.registerAdapter('servicenow-cmscpidev', servicenow, require('./adapters/servicenow-cmscpidev/manifest.json'));
-adapterRegistry.registerAdapter('servicenow-cmscpi', servicenow, require('./adapters/servicenow-cmscpi/manifest.json'));
-adapterRegistry.registerAdapter('agencyzoom', agencyzoom, require('./adapters/agencyzoom/manifest.json'));
-adapterRegistry.registerAdapter('monday', monday, require('./adapters/monday/manifest.json'));
-adapterRegistry.registerAdapter('monday-QA', monday, require('./adapters/monday-QA/manifest.json'));
-adapterRegistry.registerAdapter('testCRM', testCRM, require('./adapters/testCRM/manifest.json'));
+// Register connectors
+connectorRegistry.setDefaultManifest(require('./connectors/manifest.json'));
+connectorRegistry.setReleaseNotes(require('./releaseNotes.json'));
+
+connectorRegistry.registerConnector('bullhorn', bullhorn);
+connectorRegistry.registerConnector('clio', clio);
+connectorRegistry.registerConnector('googleSheets', googleSheets);
+connectorRegistry.registerConnector('insightly', insightly);
+connectorRegistry.registerConnector('netsuite', netsuite);
+connectorRegistry.registerConnector('pipedrive', pipedrive);
+connectorRegistry.registerConnector('redtail', redtail);
+connectorRegistry.registerConnector('servicetitan', serviceTitan, require('./connectors/servicetitan/manifest.json'));
+connectorRegistry.registerConnector('servicenow', servicenow, require('./connectors/servicenow/manifest.json'));
+connectorRegistry.registerConnector('servicenow-dev226973', servicenow, require('./connectors/servicenow-dev226973/manifest.json'));
+connectorRegistry.registerConnector('servicenow-powertest2', servicenow, require('./connectors/servicenow-powertest2/manifest.json'));
+connectorRegistry.registerConnector('servicenow-kerridgecs', servicenow, require('./connectors/servicenow-kerridgecs/manifest.json'));
+connectorRegistry.registerConnector('servicenow-spiegsa', servicenow, require('./connectors/servicenow-spiegsa/manifest.json'));
+connectorRegistry.registerConnector('servicenow-ven06766', servicenow, require('./connectors/servicenow-ven06766/manifest.json'));
+connectorRegistry.registerConnector('servicenow-cmscpidev', servicenow, require('./connectors/servicenow-cmscpidev/manifest.json'));
+connectorRegistry.registerConnector('servicenow-cmscpi', servicenow, require('./connectors/servicenow-cmscpi/manifest.json'));
+connectorRegistry.registerConnector('proxy', proxyConnector);
+connectorRegistry.registerConnector('monday', monday, require('./connectors/monday/manifest.json'));
+connectorRegistry.registerConnector('monday-QA', monday, require('./connectors/monday-QA/manifest.json'));
+connectorRegistry.registerConnector('agencyzoom', agencyzoom, require('./connectors/agencyzoom/manifest.json'));
 
 // Create Express app with core functionality
 const app = createCoreApp();
 
-// Add custom routes for specific adapters
+// Add custom routes for specific connectors
 // Google Sheets specific routes
 app.get('/googleSheets/filePicker', async function (req, res) {
     try {
@@ -133,19 +136,144 @@ app.post('/googleSheets/selectedSheet', async function (req, res) {
         }
     });
     const data = response?.data;
-    const user = await UserModel.findByPk(data?.sub);
+    const user = await UserModel.findByPk(`${data?.sub}-googleSheets`);
     if (!user) {
-        res.status(400).send();
+        res.status(400).send('User not found');
+        return;
     }
     const { successful, sheetName, sheetUrl } = await googleSheetsExtra.updateSelectedSheet({ user, data: req.body });
 
     res.status(200).send({ message: 'Sheet selected', Id: req.body.field });
 });
 
+// Google Sheets admin routes
+app.get('/admin/googleSheets/filePicker', async function (req, res) {
+    try {
+        const jwtToken = req.query.jwtToken;
+        if (jwtToken) {
+            const unAuthData = jwt.decodeJwt(jwtToken);
+            const user = await UserModel.findByPk(unAuthData?.id);
+            if (!user) {
+                res.status(400).send('User not found');
+                return;
+            }
+            const fileContent = await googleSheetsExtra.renderAdminPickerFile({ user, rcAccessToken: req.query.rcAccessToken });
+            res.send(fileContent);
+        } else {
+            res.status(400).send('Please authorize admin access');
+        }
+    }
+    catch (e) {
+        res.status(500).send(e);
+    }
+});
+
+app.post('/admin/googleSheets/sheet', async function (req, res) {
+    try {
+        const jwtToken = req.query.jwtToken;
+        if (jwtToken) {
+            const unAuthData = jwt.decodeJwt(jwtToken);
+            const user = await UserModel.findByPk(unAuthData?.id);
+            if (!user) {
+                res.status(400).send('User not found');
+                return;
+            }
+            const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+            if (isValidated) {
+                const { successful, sheetName, sheetUrl } = await googleSheetsExtra.createNewSheet({ user, data: req.body });
+                if (successful) {
+                    // Store admin configuration
+                    await googleSheetsExtra.setAdminGoogleSheetsConfig({
+                        rcAccountId,
+                        sheetName,
+                        sheetUrl,
+                        customizable: req.body.customizable || false
+                    });
+                    res.status(200).send({
+                        name: sheetName,
+                        url: sheetUrl
+                    });
+                } else {
+                    res.status(500).send('Failed to create new sheet');
+                }
+            } else {
+                res.status(401).send('Admin validation failed');
+            }
+        }
+    }
+    catch (e) {
+        res.status(500).send(e);
+    }
+});
+
+app.post('/admin/googleSheets/selectedSheet', async function (req, res) {
+    try {
+        const authHeader = `Bearer ${req.body.accessToken}`;
+        const response = await axios.get(`https://www.googleapis.com/oauth2/v3/userinfo`, {
+            headers: {
+                Authorization: authHeader
+            }
+        });
+        const data = response?.data;
+        const user = await UserModel.findByPk(`${data?.sub}-googleSheets`);
+        if (!user) {
+            res.status(400).send('User not found');
+            return;
+        }
+        const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+        if (isValidated) {
+            const { successful, sheetName, sheetUrl } = await googleSheetsExtra.updateSelectedSheet({ user, data: req.body });
+            if (successful) {
+                // Store admin configuration
+                await googleSheetsExtra.setAdminGoogleSheetsConfig({
+                    rcAccountId,
+                    sheetName,
+                    sheetUrl,
+                    customizable: req.body.customizable || false
+                });
+                res.status(200).send({ message: 'Admin sheet configuration saved', Id: req.body.field });
+            } else {
+                res.status(500).send('Failed to configure sheet');
+            }
+        } else {
+            res.status(401).send('Admin validation failed');
+        }
+    }
+    catch (e) {
+        res.status(500).send(e);
+    }
+});
+
+app.get('/admin/googleSheets/config', async function (req, res) {
+    try {
+        const jwtToken = req.query.jwtToken;
+        if (jwtToken) {
+            const unAuthData = jwt.decodeJwt(jwtToken);
+            const user = await UserModel.findByPk(unAuthData?.id);
+            if (!user) {
+                res.status(400).send('User not found');
+                return;
+            }
+            const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+            if (isValidated) {
+                const config = await googleSheetsExtra.getAdminGoogleSheetsConfig({ rcAccountId });
+                res.status(200).send(config);
+            } else {
+                res.status(401).send('Admin validation failed');
+            }
+        } else {
+            res.status(400).send('Please authorize admin access');
+        }
+    }
+    catch (e) {
+        res.status(500).send(e);
+    }
+});
+
 // Pipedrive specific routes
 app.get('/pipedrive-redirect', function (req, res) {
     try {
-        res.sendFile(path.join(__dirname, 'adapters/pipedrive/redirect.html'));
+        res.sendFile(path.join(__dirname, 'connectors/pipedrive/redirect.html'));
     }
     catch (e) {
         console.log(`platform: pipedrive \n${e.stack}`);
@@ -157,7 +285,7 @@ app.delete('/pipedrive-redirect', async function (req, res) {
     try {
         const basicAuthHeader = Buffer.from(`${process.env.PIPEDRIVE_CLIENT_ID}:${process.env.PIPEDRIVE_CLIENT_SECRET}`).toString('base64');
         if (`Basic ${basicAuthHeader}` === req.get('authorization')) {
-            const platformModule = require(`./adapters/pipedrive`);
+            const platformModule = require(`./connectors/pipedrive`);
             await platformModule.unAuthorize({ id: req.body.user_id });
             await UserModel.destroy({
                 where: {

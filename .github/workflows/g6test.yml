@@ -37,5 +37,11 @@ jobs:
           host: ${{ secrets.API_HOST_TEST }}
           username: ${{ secrets.SSH_USER_TEST }}
           key: ${{ secrets.SSH_USER_KEY_TEST }}
-          port: ${{ secrets.PORT }}
-          script: cd /home/rc-crmapi/public_html && unzip -o api.zip && rm -rf api.zip && npm install && pm2 stop src/server.js && pm2 start src/server.js
+          port: ${{ vars.PORT }}
+          script: |
+            cd /home/rc-crmapi/public_html
+            unzip -o api.zip
+            rm -rf api.zip
+            npm install
+            pm2 stop src/server.js || true
+            pm2 start src/server.js

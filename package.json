@@ -1,6 +1,6 @@
 {
   "name": "rc-unified-crm-extension-server",
-  "version": "1.6.6",
+  "version": "1.7.9",
   "description": "RingCentral App Connect",
   "main": "index.js",
   "bin": {
@@ -23,10 +23,13 @@
     "deploy": "node ./scripts/serverless-deploy",
     "build-test": "node ./scripts/serverless-build-test",
     "deploy-test": "node ./scripts/serverless-deploy-test",
+    "build-test-beta": "node ./scripts/serverless-build-test-beta",
+    "deploy-test-beta": "node ./scripts/serverless-deploy-test-beta",
     "dynamo-local": "node ./scripts/dynamo-local.js",
     "dynamo-admin": "dynamodb-admin --port 8001",
     "htt": "node ./tests/highTrafficTestRun.js",
-    "update": "node ./scripts/updateVersion.js"
+    "update": "node ./scripts/updateVersion.js",
+    "s3-local": "minio.exe server ./data --address \":9001\" --console-address \":9002\""
   },
   "repository": {
     "type": "git",
@@ -41,20 +44,18 @@
   "author": "Da Kong",
   "license": "MIT",
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.751.0",
     "@aws-sdk/client-s3": "^3.750.0",
     "@aws-sdk/s3-request-presigner": "^3.750.0",
     "awesome-phonenumber": "^5.6.0",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.12.2",
-    "bcrypt": "^6.0.0",
     "body-parser": "^1.20.1",
     "client-oauth2": "^4.3.3",
     "cors": "^2.8.5",
     "country-state-city": "^3.2.1",
     "deasync": "^0.1.30",
     "dotenv": "^16.0.3",
-    "express": "^4.21.2",
+    "express": "^4.22.1",
     "googleapis": "^148.0.0",
     "moment": "^2.29.4",
     "moment-timezone": "^0.5.39",
