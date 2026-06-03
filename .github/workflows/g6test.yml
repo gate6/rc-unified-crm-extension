@@ -1,41 +1,45 @@
 name: Deploy code to API server
+
 on:
   push:
-    branches: test-gate6
+    branches:
+      - test-gate6
+
 jobs:
   preview:
+    name: Deploy to Test Environment
     runs-on: runner-253.106
+
+    # 👇 Add this block
+    environment:
+      name: test
+    
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
-          
-        # Creating API zip archive to upload 
-      - name: create zip archive
-        env:
-          user: ${{ secrets.SSH_USER_TEST }}
-          host: ${{ secrets.API_HOST_TEST }}
-          privateKey: ${{ secrets.SSH_USER_KEY_TEST}}
 
+      # Creating API zip archive
+      - name: Create zip archive
         run: |
           rm -rf api.zip
-          zip -r api.zip  ./*
-          
-        # deploying api.zip to the API server
-      - name: copy file via SSH password
+          zip -r api.zip ./*
+
+      # Deploying api.zip to the API server
+      - name: Copy file via SSH
         uses: appleboy/scp-action@master
         with:
-           host: ${{ secrets.API_HOST_TEST }}
-           username: ${{ secrets.SSH_USER_TEST }}
-           key: ${{ secrets.SSH_USER_KEY_TEST }}
-           port: ${{ secrets.PORT }}
-           source: "api.zip"
-           target: "public_html"
+          host: ${{ vars.API_HOST_TEST }}
+          username: ${{ vars.SSH_USER_TEST }}
+          key: ${{ secrets.SSH_USER_KEY_TEST }}
+          port: ${{ vars.PORT }}
+          source: "api.zip"
+          target: "public_html"
 
-      - name: executing remote SSH commands using SSH key
+      - name: Execute remote SSH commands
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.API_HOST_TEST }}
-          username: ${{ secrets.SSH_USER_TEST }}
+          host: ${{ vars.API_HOST_TEST }}
+          username: ${{ vars.SSH_USER_TEST }}
           key: ${{ secrets.SSH_USER_KEY_TEST }}
           port: ${{ vars.PORT }}
           script: |
