@@ -5,12 +5,39 @@ const moment = require("moment");
 const { encode, decoded } = require("@app-connect/core/lib/encode");
 const { parsePhoneNumber } = require("awesome-phonenumber");
 const { UserModel } = require('@app-connect/core/models/userModel');
+const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = initModels(sequelize);
 
 const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
+
+const agencyZoomApiClient = axios.create();
+
+function stringifyForLog(value, maxLength = 1200) {
+  try {
+    const str = typeof value === 'string' ? value : JSON.stringify(value);
+    return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
+  } catch (error) {
+    return String(value);
+  }
+}
+
+agencyZoomApiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error('[AgencyZoom][apiError]', {
+      method: error?.config?.method || '',
+      url: error?.config?.url || '',
+      status: error?.response?.status || null,
+      statusText: error?.response?.statusText || '',
+      responseBody: stringifyForLog(error?.response?.data),
+      errorMessage: error?.message || ''
+    });
+    return Promise.reject(error);
+  }
+);
 
 async function getLicenseStatus({ userId }) {
   try {
@@ -120,7 +147,7 @@ function getBasicAuth({ apiKey }) {
 /* ---------------- AUTHENTICATION ---------------- */
 
 async function authenticate(username, password) {
-  const res = await axios.post(
+  const res = await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/auth/login`,
     {
       username,
@@ -323,7 +350,7 @@ async function findContact({ user, phoneNumber }) {
     const auth = await getRefreshedAuthToken(user);
     const phone = normalizePhone(phoneNumber);
 
-    const res = await axios.post(
+    const res = await agencyZoomApiClient.post(
       `${AZ_BASE_URL}/customers`,
       {
         phone
@@ -347,6 +374,24 @@ async function findContact({ user, phoneNumber }) {
     // If multiple contacts found, pick first for auto logging
     if (matchedContactInfo.length > 1) {
       matchedContactInfo = [matchedContactInfo[0]];
+    }
+
+    // No contacts found in AgencyZoom — delete stale cache entry if it exists
+    if (matchedContactInfo.length === 0 && user?.rcAccountId) {
+      try {
+        const deleted = await AccountDataModel.destroy({
+          where: {
+            rcAccountId: user.rcAccountId,
+            platformName: 'agencyzoom',
+            dataKey: `contact-${phoneNumber}`
+          }
+        });
+        if (deleted > 0) {
+          console.log('[AgencyZoom] findContact: deleted stale cache for phone:', phoneNumber);
+        }
+      } catch (err) {
+        console.warn('[AgencyZoom] findContact: failed to delete stale cache:', err.message);
+      }
     }
 
     matchedContactInfo.push({
@@ -379,7 +424,7 @@ async function findContactWithName({ user, name }) {
     const auth = await getRefreshedAuthToken(user);
     const encodedName = encodeURIComponent(name || "");
 
-    const res = await axios.get(
+    const res = await agencyZoomApiClient.get(
       `${AZ_BASE_URL}/customers?name=${encodedName}`,
       {
         headers: {
@@ -452,7 +497,7 @@ async function createContact({ user, phoneNumber, newContactName }) {
     agentId = undefined;
   }
 
-  const res = await axios.post(
+  const res = await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/create`,
     {
       firstname: firstName,
@@ -521,7 +566,7 @@ End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("Y
 ${description}
 `;
 
-  await axios.post(
+  await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/${contactInfo.id}/notes`,
     { note: noteBody },
     { headers: { Authorization: `Bearer ${auth}` } }
@@ -627,7 +672,7 @@ End Time: ${endTimeText}
 ${description}
 `;
 
-  await axios.post(
+  await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/${contactId}/notes`,
     { note: noteBody },
     { headers: { Authorization: `Bearer ${auth}` } }
@@ -679,7 +724,7 @@ async function getCallLog({ user, callLogId }) {
 
   const contactId = log.contactId;
 
-  const res = await axios.get(
+  const res = await agencyZoomApiClient.get(
     `${AZ_BASE_URL}/customers/${contactId}`,
     {
       headers: {
@@ -792,7 +837,7 @@ Conversation:
 ${description}
 `;
 
-  await axios.post(
+  await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/${contactInfo.id}/notes`,
     { note: noteBody },
     { headers: { Authorization: `Bearer ${auth}` } }
@@ -839,7 +884,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
   const contactId = contactInfo.id;
   const logId = existingMessageLog.thirdPartyLogId;
 
-  const res = await axios.get(
+  const res = await agencyZoomApiClient.get(
     `${AZ_BASE_URL}/customers/${contactId}`,
     {
       headers: {
@@ -897,7 +942,7 @@ Conversation:
 ${updatedConversation}
 `;
 
-  await axios.post(
+  await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/${contactId}/notes`,
     { note: noteBody },
     { headers: { Authorization: `Bearer ${auth}` } }
