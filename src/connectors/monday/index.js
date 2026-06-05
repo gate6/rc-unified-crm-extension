@@ -763,7 +763,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   let sections = []
 
   if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
-    sections.push(`Agent Notes:<br>${note}`)
+    sections.push(`Agent Notes:<br>${note.replace(/\r?\n/g, '<br>')}`)
   }
   if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
     sections.push(`Result:<br>${callLog.result}`)
@@ -775,10 +775,10 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     sections.push(`Recording:<br>${callLog.recording.link}`)
   }
   if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-    sections.push(`AI Note:<br>${aiNote}`)
+    sections.push(`AI Note:<br>${aiNote.replace(/\r?\n/g, '<br>')}`)
   }
   if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-    sections.push(`Transcript:<br>${transcript}`)
+    sections.push(`Transcript:<br>${transcript.replace(/\r?\n/g, '<br>')}`)
   }
 
   const optionalSections = sections.join("<br><br>")
@@ -870,7 +870,7 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   let sections = []
 
   if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
-    sections.push(`Agent Notes:<br>${note}`)
+    sections.push(`Agent Notes:<br>${note.replace(/\r?\n/g, '<br>')}`)
   }
   if (parsed.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
     sections.push(`Result:<br>${parsed.result}`)
@@ -882,10 +882,10 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
     sections.push(`Recording:<br>${recordingLink}`)
   }
   if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-    sections.push(`AI Note:<br>${aiNote}`)
+    sections.push(`AI Note:<br>${aiNote.replace(/\r?\n/g, '<br>')}`)
   }
   if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-    sections.push(`Transcript:<br>${transcript}`)
+    sections.push(`Transcript:<br>${transcript.replace(/\r?\n/g, '<br>')}`)
   }
 
   let startTimeToUse = parsed.startTime
@@ -1019,21 +1019,11 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
   }
 
   else if (messageType === "Voicemail") {
-    body =
-      `Voicemail from ${contactInfo.name}
-
-        Recording:
-        ${recordingLink}
-        `
+    body = `Voicemail from ${contactInfo.name}<br><br>Recording:<br>${recordingLink}`
   }
 
   else if (messageType === "Fax") {
-    body =
-      `Fax from ${contactInfo.name}
-
-        Document:
-        ${faxDocLink}
-        `
+    body = `Fax from ${contactInfo.name}<br><br>Document:<br>${faxDocLink}`
   }
 
   const res = await mondayRequest(
@@ -1141,22 +1131,11 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
   if (messageType !== "SMS") {
     let body = ""
     if (messageType === "Voicemail") {
-      body =
-        `Voicemail from ${contactInfo.name}
-
-          Recording:
-          ${recordingLink}
-          `
+      body = `Voicemail from ${contactInfo.name}<br><br>Recording:<br>${recordingLink}`
     }
 
     if (messageType === "Fax") {
-
-      body =
-        `Fax from ${contactInfo.name}
-
-          Document:
-          ${faxDocLink}
-          `
+      body = `Fax from ${contactInfo.name}<br><br>Document:<br>${faxDocLink}`
     }
 
     const res = await mondayRequest(
