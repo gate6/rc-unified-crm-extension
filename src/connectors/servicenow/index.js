@@ -4,6 +4,7 @@ const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
 const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts, applyClosedDatesIfNeeded, formatDuration } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
+const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
 const Sequelize = require('sequelize');
@@ -615,6 +616,24 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
                 }
             }
         }
+    }
+
+    // No contacts found in ServiceNow — delete stale cache entry if it exists
+    if (matchedContactInfo.length === 0 && user?.rcAccountId) {
+      try {
+        const deleted = await AccountDataModel.destroy({
+          where: {
+            rcAccountId: user.rcAccountId,
+            platformName: 'servicenow',
+            dataKey: `contact-${phoneNumber}`
+          }
+        });
+        if (deleted > 0) {
+          console.log('[ServiceNow] findContact: deleted stale cache for phone:', phoneNumber);
+        }
+      } catch (err) {
+        console.warn('[ServiceNow] findContact: failed to delete stale cache:', err.message);
+      }
     }
 
     const accounts = await getAllAccounts(hostname, authHeader);

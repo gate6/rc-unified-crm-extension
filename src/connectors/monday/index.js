@@ -4,6 +4,7 @@ const { parsePhoneNumber } = require('awesome-phonenumber')
 const { initModels } = require('../servicenow-models/init-models');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { UserModel } = require('@app-connect/core/models/userModel');
+const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
 const models = initModels(sequelize);
 const FormData = require('form-data')
 const s3Helper = require('../servicenow-core/s3');
@@ -15,6 +16,32 @@ var MONDAY_CLIENT_SECRET = '';
 var MONDAY_CLIENT_ID = '';
 var MONDAY_REDIRECT_URI = '';
 const columnIdCache = new Map();
+
+const mondayApiClient = axios.create();
+
+function stringifyForLog(value, maxLength = 1200) {
+  try {
+    const str = typeof value === 'string' ? value : JSON.stringify(value);
+    return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
+  } catch (error) {
+    return String(value);
+  }
+}
+
+mondayApiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error('[Monday][apiError]', {
+      method: error?.config?.method || '',
+      url: error?.config?.url || '',
+      status: error?.response?.status || null,
+      statusText: error?.response?.statusText || '',
+      responseBody: stringifyForLog(error?.response?.data),
+      errorMessage: error?.message || ''
+    });
+    return Promise.reject(error);
+  }
+);
 
 async function getLicenseStatus({ userId }) {
   try {
@@ -87,7 +114,7 @@ async function validateLicenseOrFail(user) {
 }
 
 async function mondayRequest(accessToken, query, variables = {}) {
-  const res = await axios.post(
+  const res = await mondayApiClient.post(
     MONDAY_API_URL,
     { query, variables },
     {
@@ -245,6 +272,41 @@ function normalizePhone(phone) {
   return p?.valid ? p.number.e164 : null
 }
 
+// Generate all common formats of a phone number for CRM search matching
+// Reference: ServiceNow connector generateFormatsFromE164 pattern
+function generatePhoneFormats(e164Number) {
+  if (!e164Number) return []
+  const digits = e164Number.replace(/\D/g, '')
+  const parsed = parsePhoneNumber(e164Number)
+
+  // US/Canada numbers: +1XXXXXXXXXX → 11 digits starting with 1
+  if (digits.length === 11 && digits.startsWith('1')) {
+    const d = digits.slice(1) // 10 significant digits
+    return [
+      e164Number,                                             // +16232011860
+      digits,                                                 // 16232011860
+      d,                                                      // 6232011860
+      `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`,    // (623) 201-1860
+      `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`,      // 623-201-1860
+      `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6)}`,      // 623.201.1860
+      `+1 (${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`, // +1 (623) 201-1860
+      `+1-${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`,   // +1-623-201-1860
+      `(${d.slice(0,3)})${d.slice(3,6)}-${d.slice(6)}`,     // (623)201-1860
+    ].filter((v, i, arr) => arr.indexOf(v) === i) // deduplicate
+  }
+
+  // International numbers — include library-formatted variants (e.g. "+62 320 11860")
+  const formats = [
+    e164Number,                                                     // +6232011860
+    digits,                                                         // 6232011860
+    parsed?.valid ? parsed.number.international : null,             // +62 320 11860 (Monday display format)
+    parsed?.valid ? parsed.number.national : null,                  // 032-011-860
+    parsed?.valid ? parsed.number.significant : null,               // 32011860
+  ].filter(Boolean)
+
+  return formats.filter((v, i, arr) => arr.indexOf(v) === i) // deduplicate
+}
+
 function getAuthType() {
   return 'oauth'
 }
@@ -348,7 +410,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
       };
     }
 
-    const userDataResponse = await axios.post(
+    const userDataResponse = await mondayApiClient.post(
       MONDAY_API_URL,
       {
         query: "query { me { id name email } }"
@@ -541,32 +603,39 @@ async function findContact({ phoneNumber, accessToken, authHeader, user }) {
   }
 
   if (phone) {
-    const res = await mondayRequest(
-      resolvedAccessToken,
-      `
-      query ($value: String!) {
-        items_page_by_column_values(
-          board_id: ${boardId},
-          columns: [{ column_id: "${phoneColumnId}", column_values: [$value] }]
-        ) {
-          items {
-            id
-            name
+    // Monday phone column stores as JSON {phone, countryShortName} — try all common formats
+    const phoneFallbacks = generatePhoneFormats(phone)
+
+    let items = []
+    for (const searchValue of phoneFallbacks) {
+      const res = await mondayRequest(
+        resolvedAccessToken,
+        `
+        query ($value: String!) {
+          items_page_by_column_values(
+            board_id: ${boardId},
+            columns: [{ column_id: "${phoneColumnId}", column_values: [$value] }]
+          ) {
+            items { id name }
+          }
+        }
+        `,
+        { value: searchValue }
+      )
+      if (res?.errors?.length) {
+        return {
+          successful: false,
+          returnMessage: {
+            messageType: 'error',
+            message: res.errors[0].message || 'Failed to fetch contacts from Monday.',
+            ttl: 3000
           }
         }
       }
-      `,
-      { value: phone }
-    )
-    const items = res?.data?.items_page_by_column_values?.items
-    if (res?.errors?.length || !items) {
-      return {
-        successful: false,
-        returnMessage: {
-          messageType: 'error',
-          message: res?.errors?.[0]?.message || 'Failed to fetch contacts from Monday.',
-          ttl: 3000
-        }
+      items = res?.data?.items_page_by_column_values?.items || []
+      if (items.length > 0) {
+        console.log('[Monday] findContact: matched', items.length, 'contact(s) with format:', searchValue)
+        break
       }
     }
 
@@ -576,6 +645,24 @@ async function findContact({ phoneNumber, accessToken, authHeader, user }) {
         name: item.name,
         phone
       })
+    }
+
+    // No real contacts found in Monday — delete stale cache entry if it exists
+    if (items.length === 0 && user?.rcAccountId) {
+      try {
+        const deleted = await AccountDataModel.destroy({
+          where: {
+            rcAccountId: user.rcAccountId,
+            platformName: 'monday',
+            dataKey: `contact-${phoneNumber}`
+          }
+        })
+        if (deleted > 0) {
+          console.log('[Monday] findContact: deleted stale cache for phone:', phoneNumber)
+        }
+      } catch (err) {
+        console.warn('[Monday] findContact: failed to delete stale cache:', err.message)
+      }
     }
   }
 
@@ -1238,7 +1325,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
   console.log("Downloading Audio File...");
 
   try {
-    const response = await axios.get(url, {
+    const response = await mondayApiClient.get(url, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
@@ -1300,7 +1387,7 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, hostname }
       contentType: 'audio/mpeg'
     })
 
-    const response = await axios.post(
+    const response = await mondayApiClient.post(
       `${MONDAY_API_URL}/file`,
       formData,
       {
