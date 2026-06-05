@@ -15,6 +15,7 @@
       "urlIdentifier": "*monday.com*",
       "name": "monday",
       "displayName": "Monday",
+      "useLicense": true,
       "enableExtensionNumberLoggingSetting": false,
       "clickToDialMatchAllNumbers": true,
       "requestConfig": {

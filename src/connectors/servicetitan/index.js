@@ -4,6 +4,7 @@ const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const jwt = require('@app-connect/core/lib/jwt');
 const { UserModel } = require('@app-connect/core/models/userModel');
+const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
 const { MessageLogModel } = require('@app-connect/core/models/messageLogModel');
 const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
@@ -14,6 +15,32 @@ const models = initModels(sequelize);
 
 const SERVICE_TITAN_JPM_URL= "https://api-integration.servicetitan.io/jpm/v2/tenant"
 const SERVICE_TITAN_CRM_URL= "https://api-integration.servicetitan.io/crm/v2/tenant"
+
+const serviceTitanApiClient = axios.create();
+
+function stringifyForLog(value, maxLength = 1200) {
+    try {
+        const str = typeof value === 'string' ? value : JSON.stringify(value);
+        return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
+    } catch (error) {
+        return String(value);
+    }
+}
+
+serviceTitanApiClient.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        console.error('[ServiceTitan][apiError]', {
+            method: error?.config?.method || '',
+            url: error?.config?.url || '',
+            status: error?.response?.status || null,
+            statusText: error?.response?.statusText || '',
+            responseBody: stringifyForLog(error?.response?.data),
+            errorMessage: error?.message || ''
+        });
+        return Promise.reject(error);
+    }
+);
 
 async function getLicenseStatus({ userId }) {
   try {
@@ -237,7 +264,7 @@ async function generateServiceTitanToken(clientId, clientSecret) {
         client_secret: clientSecret
     };
 
-    const authRes = await axios.post(
+    const authRes = await serviceTitanApiClient.post(
         tokenUrl,
         qs.stringify(tokenPayload),
         { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
@@ -278,7 +305,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
     if (phoneNumberObj.valid) {
         phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
     }
-    const personInfo = await axios.get(
+    const personInfo = await serviceTitanApiClient.get(
         `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}`,
         {
             headers: {
@@ -293,6 +320,25 @@ async function findContact({ user, phoneNumber, isExtension }) {
             matchedContactInfo.push(formatContact(rawPersonInfo));
         }
     }
+
+    // No contacts found in ServiceTitan — delete stale cache entry if it exists
+    if (matchedContactInfo.length === 0 && user?.rcAccountId) {
+      try {
+        const deleted = await AccountDataModel.destroy({
+          where: {
+            rcAccountId: user.rcAccountId,
+            platformName: 'servicetitan',
+            dataKey: `contact-${phoneNumber}`
+          }
+        });
+        if (deleted > 0) {
+          console.log('[ServiceTitan] findContact: deleted stale cache for phone:', phoneNumber);
+        }
+      } catch (err) {
+        console.warn('[ServiceTitan] findContact: failed to delete stale cache:', err.message);
+      }
+    }
+
     matchedContactInfo.push({
         id: 'createNewContact',
         name: 'Create new contact...',
@@ -320,7 +366,7 @@ async function findContactWithName({ user, name }) {
     }
 
     try {
-        const personInfo = await axios.get(
+        const personInfo = await serviceTitanApiClient.get(
             `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?name=${name}`,
             {
                 headers: {
@@ -405,7 +451,7 @@ async function createContact({ user, phoneNumber, newContactName }) {
             ],
         };
 
-        const response = await axios.post(
+        const response = await serviceTitanApiClient.post(
             `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers`,
             payload,
             {
@@ -449,7 +495,7 @@ async function getUserList({ user, authHeader }) {
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     try {
-        const userListResp = await axios.get(
+        const userListResp = await serviceTitanApiClient.get(
             `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers`,
             {
                 headers: {
@@ -477,7 +523,7 @@ async function fetchJobs({ user, params = {} }) {
         const tenantId = user.dataValues.platformAdditionalInfo.tenant;
         const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-        const resp = await axios.get(
+        const resp = await serviceTitanApiClient.get(
             `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`,
             {
                 headers: {
@@ -557,7 +603,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
     if (!jobs || jobs.length === 0) {
 
-        addNoteRes = await axios.post(
+        addNoteRes = await serviceTitanApiClient.post(
             `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}/notes`,
             { text: noteText },
             {
@@ -573,7 +619,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
         const latestJob = jobs.reduce((max, job) => job.id > max.id ? job : max);
 
-        addNoteRes = await axios.patch(
+        addNoteRes = await serviceTitanApiClient.patch(
             `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${latestJob.id}`,
             { summary: noteText },
             {
@@ -623,7 +669,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     let body = "";
     if (logType === "note") {
 
-        const getLogRes = await axios.get(
+        const getLogRes = await serviceTitanApiClient.get(
             `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
             {
                 headers: {
@@ -639,7 +685,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
             body = targetLog.text || "";
         }
     } else {
-        const jobRes = await axios.get(
+        const jobRes = await serviceTitanApiClient.get(
             `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,
             {
                 headers: {
@@ -717,7 +763,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     if (logType === "note") {
 
-        const addNoteRes = await axios.post(
+        const addNoteRes = await serviceTitanApiClient.post(
             `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
             { text: noteText },
             {
@@ -736,7 +782,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     else {
 
-        await axios.patch(
+        await serviceTitanApiClient.patch(
             `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,
             { summary: noteText },
             {
@@ -831,7 +877,7 @@ ${faxDocLink}
 `.trim();
     }
 
-    const addLogRes = await axios.post(
+    const addLogRes = await serviceTitanApiClient.post(
         `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
         { text: noteText },
         {
@@ -872,7 +918,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     // ---------------- SMS CASE ----------------
     if (messageType === "SMS") {
 
-        const getLogRes = await axios.get(
+        const getLogRes = await serviceTitanApiClient.get(
             `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
             {
                 headers: {
@@ -953,7 +999,7 @@ ${faxDocLink}
 `.trim();
     }
 
-    const addLogRes = await axios.post(
+    const addLogRes = await serviceTitanApiClient.post(
         `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
         { text: noteText },
         {
@@ -1004,7 +1050,7 @@ async function getCallLog({ user, callLogId }) {
         // ---------------- JOB LOG ----------------
         if (logType === "job") {
 
-            const jobRes = await axios.get(
+            const jobRes = await serviceTitanApiClient.get(
                  `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,
                 {
                     headers: {
@@ -1055,7 +1101,7 @@ async function getCallLog({ user, callLogId }) {
 
             const contactId = existingCallLogDetails.contactId;
 
-            const getLogRes = await axios.get(
+            const getLogRes = await serviceTitanApiClient.get(
                 `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
                 {
                     headers: {
@@ -1133,7 +1179,7 @@ async function getRefreshedAuthToken(user) {
         client_secret: client_secret
     };
 
-    const authResponse = await axios.post(
+    const authResponse = await serviceTitanApiClient.post(
         tokenUrl,
         qs.stringify(data),
         {
