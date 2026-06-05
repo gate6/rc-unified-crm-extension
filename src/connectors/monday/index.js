@@ -746,7 +746,6 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
 }
 
 async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, accessToken, authHeader, user }) {
-  console.log("Note", note);
   const licenseError = await validateLicenseOrFail(user);
   if (licenseError) return licenseError;
 
@@ -842,7 +841,6 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
 }
 
 async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user, subject, duration, startTime }) {
-  console.log("Note in update", note)
   const licenseError = await validateLicenseOrFail(user);
   if (licenseError) return licenseError;
 
