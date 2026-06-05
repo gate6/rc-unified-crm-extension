@@ -840,7 +840,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   }
 }
 
-async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user, subject }) {
+async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user, subject, duration, startTime }) {
   const licenseError = await validateLicenseOrFail(user);
   if (licenseError) return licenseError;
 
@@ -875,8 +875,8 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   if (parsed.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
     sections.push(`Result:<br>${parsed.result}`)
   }
-  if (parsed.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
-    sections.push(`Duration:<br>${parsed.duration}`)
+  if (duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+    sections.push(`Duration:<br>${duration} sec`)
   }
   if (recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) {
     sections.push(`Recording:<br>${recordingLink}`)
@@ -888,12 +888,22 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
     sections.push(`Transcript:<br>${transcript}`)
   }
 
+  let startTimeToUse = parsed.startTime
+  let endTimeToUse = parsed.endTime
+
+  if (startTime) {
+    startTimeToUse = moment(startTime).format("YYYY-MM-DD HH:mm:ss")
+    if (duration) {
+      endTimeToUse = moment(startTime).add(duration, "seconds").format("YYYY-MM-DD HH:mm:ss")
+    }
+  }
+
   const optionalSections = sections.join("<br><br>")
   const lines = [
     `Subject: ${subjectToUse}`,
     `Direction: ${parsed.direction}`,
-    `Start Time: ${parsed.startTime}`,
-    `End Time: ${parsed.endTime}`,
+    `Start Time: ${startTimeToUse}`,
+    `End Time: ${endTimeToUse}`,
     "",
     optionalSections
   ].filter(Boolean);
