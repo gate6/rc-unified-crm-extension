@@ -37,6 +37,8 @@ connectorRegistry.registerConnector('servicetitan', serviceTitan, require('./con
 connectorRegistry.registerConnector('servicenow', servicenow, require('./connectors/servicenow/manifest.json'));
 connectorRegistry.registerConnector('servicenow-dev226973', servicenow, require('./connectors/servicenow-dev226973/manifest.json'));
 connectorRegistry.registerConnector('servicenow-powertest2', servicenow, require('./connectors/servicenow-powertest2/manifest.json'));
+connectorRegistry.registerConnector('servicenow-powertest1', servicenow, require('./connectors/servicenow-powertest1/manifest.json'));
+connectorRegistry.registerConnector('servicenow-kerridgecsdev', servicenow, require('./connectors/servicenow-kerridgecsdev/manifest.json'))
 connectorRegistry.registerConnector('servicenow-kerridgecs', servicenow, require('./connectors/servicenow-kerridgecs/manifest.json'));
 connectorRegistry.registerConnector('servicenow-spiegsa', servicenow, require('./connectors/servicenow-spiegsa/manifest.json'));
 connectorRegistry.registerConnector('servicenow-ven06766', servicenow, require('./connectors/servicenow-ven06766/manifest.json'));

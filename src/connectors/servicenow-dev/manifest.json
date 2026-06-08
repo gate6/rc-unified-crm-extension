@@ -46,7 +46,7 @@
             "customState": "",
             "scope": "",
             "canOpenLogPage": true,
-            "contactPageUrl":"https://dev265071.service-now.com/now/nav/ui/classic/params/target/sys_user.do?sys_id={contactId}",
+            "contactPageUrl": "https://dev265071.service-now.com/now/nav/ui/classic/params/target/sys_user.do?sys_id={contactId}",
             "logPageUrl": "https://dev265071.service-now.com/interaction.do?sys_id={logId}",
             "callPopUrl": "https://dev265071.service-now.com/interaction_list.do?sysparm_query=opened_for={contactId}",
             "embeddedOnCrmPage": {
@@ -189,8 +189,8 @@
                             "contactDependent": true
                         }
                     ]
-            },
-            "feedback": {
+                },
+                "feedback": {
                     "url": "https://docs.google.com/forms/d/e/1FAIpQLSd3vF5MVJ5RAo1Uldy0EwsibGR8ZVucPW4E3JUnyAkHz2_Zpw/viewform?usp=pp_url&entry.912199227={score}&entry.2052354973={crmName}&entry.844920872={feedback}&entry.1467064016={userName}&entry.1822789675={userEmail}",
                     "elements": [
                         {
@@ -261,8 +261,9 @@
                             "required": true
                         }
                     ]
-                }}
+                }
             }
+        }
     },
     "version": "1.5.6"
 }
