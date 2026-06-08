@@ -933,7 +933,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     
     const latestNote = journalRes.data.result
         .sort((a, b) => new Date(b.sys_created_on) - new Date(a.sys_created_on))[0]?.value || '';
-    const agentNoteMatch = latestNote.match(/- Agent note:\s*(.*)/i);
+    const agentNoteMatch = latestNote.match(/- Agent note:\s*([\s\S]*?)(?=\n- |$)/i);
     const agentNote = agentNoteMatch ? agentNoteMatch[1].trim() : '';
 
     //-------------------------------------------------------------------------------------
