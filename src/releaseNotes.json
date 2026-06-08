@@ -1,4 +1,248 @@
 {
+    "1.7.30": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Shared SMS for sites"
+            },
+            {
+                "type": "Fix",
+                "description": "Conditional rendering of contact association fields"
+            }
+        ],
+        "clio": [
+            {
+                "type": "Fix",
+                "description": "Clio associated matter paging"
+            }
+        ]
+    },
+    "1.7.29": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Conditional rendering of logging form fields by contact type"
+            }
+        ]
+    },
+    "1.7.27": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Managed OAuth for platforms with dynamic OAuth configs for different accounts"
+            }
+        ]
+    },
+    "1.7.26": {
+        "global": [
+            {
+                "type": "New",
+                "description": "[Appointments](https://appconnect.labs.ringcentral.com/users/appointments/) support (Clio, Bullhorn, NetSuite only)"
+            },
+            {
+                "type": "Fix",
+                "description": "Issue of transferred call overriding first call log"
+            }
+        ]
+    },
+    "1.7.25": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial render issue"
+            }
+        ]
+    },
+    "1.7.24": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Click-to-dial number matcher selection in User Setting -> General"
+            },
+            {
+                "type": "Fix",
+                "description": "Error report upload"
+            }
+        ]
+    },
+    "1.7.23": {
+        "global": [
+            {
+                "type": "Rename",
+                "description": "Rename RingSense to ACE"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "New",
+                "description": "Add copy to contact for Bullhorn logging"
+            }
+        ]
+    },
+    "1.7.22": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Managed auth fields for non-OAuth platforms"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial problem on Bullhorn"
+            }
+        ]
+    },
+    "1.7.21": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Refresh contact for deleted contact issue"
+            },
+            {
+                "type": "Fix",
+                "description": "Click-to-sms button issue"
+            }
+        ],
+        "clio": [
+            {
+                "type": "New",
+                "description": "Add new setting for Clio to enable/disable time entry"
+            }
+        ]
+    },
+    "1.7.20": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial not detecting numbers in input fields"
+            },
+            {
+                "type": "Fix",
+                "description": "Warm transfer call logging issue"
+            }
+        ]
+    },
+    "1.7.19": {
+        "global": [
+            {
+                "type": "Beta",
+                "description": "Plugin system infrastructure. No plugin available yet, but add soon. Take a quick look at its [overview](https://appconnect.labs.ringcentral.com/users/plugins)"
+            },
+            {
+                "type": "Better",
+                "description": "Click-to-dial with wider number match"
+            }
+        ],
+        "clio": [
+            {
+                "type": "Fix",
+                "description": "Clio users can't see closed associated matters"
+            }
+        ]
+    },
+    "1.7.18": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Support for Group SMS logging"
+            },
+            {
+                "type": "Better",
+                "description": "User session will log be revoked is token refresh fails"
+            },
+            {
+                "type": "Fix",
+                "description": "Contact call pop issue"
+            }
+        ]
+    },
+    "1.7.16": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "SMS logging issue of repeatedly logging same messages"
+            },
+            {
+                "type": "Fix",
+                "description": "Mixpanel token issue that blocks certain webpage access"
+            }
+        ]
+    },
+    "1.7.15": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial injection for HTML shadow roots"
+            },
+            {
+                "type": "Fix",
+                "description": "A not-found error for user mapping"
+            }
+        ],
+        "clio": [
+            {
+                "type": "New",
+                "description": "Clio time entries (activities) will be associated with matters"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "Fix",
+                "description": "Edge cases where Bullhorn Note authors are assigned to Contacts/Candidates"
+            }
+        ]
+    },
+    "1.7.14": {
+        "clio": [
+            {
+                "type": "New",
+                "description": "Clio now supports SMS time tracking"
+            }
+        ]
+    },
+    "1.7.12": {
+        "global": [
+            {
+                "type": "New",
+                "description": "A button on Developer settings page to re-initialize user mapping"
+            },
+            {
+                "type": "Better",
+                "description": "Click-to-SMS button is disabled if RingCentral SMS service is not activated"
+            }
+        ]
+    },
+    "1.7.11": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Shared-SMS logging"
+            },
+            {
+                "type": "New",
+                "description": "MCP tools"
+            }
+        ],
+        "netsuite": [
+            {
+                "type": "New",
+                "description": "Netsuite now supports Lead and Prospect"
+            }
+        ]
+    },
+    "1.7.10": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Upon completing warm transfer, it opens contact page for a second time"
+            },
+            {
+                "type": "New",
+                "description": "RingCX RingSense call logging event support for Server-side logging"
+            }
+        ]
+    },
     "1.7.9": {
         "global": [
             {
@@ -160,6 +404,194 @@
             {
                 "type": "Fix",
                 "description": "Remove open all matches in Call-pop since it's not natively supported by Bullhorn"
+            }
+        ]
+    },
+    "1.6.32": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Issue of transferred call overriding first call log"
+            }
+        ]
+    },
+    "1.6.31": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial render issue"
+            }
+        ]
+    },
+    "1.6.30": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Click-to-dial number matcher selection in User Setting -> General"
+            }
+        ]
+    },
+    "1.6.29": {
+        "global": [
+            {
+                "type": "Rename",
+                "description": "Rename RingSense to ACE"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "New",
+                "description": "Add copy to contact for Bullhorn logging"
+            }
+        ]
+    },
+    "1.6.28": {
+        "bullhorn": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial problem on Bullhorn"
+            }
+        ]
+    },
+    "1.6.27": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Refresh contact for deleted contact issue"
+            },
+            {
+                "type": "Fix",
+                "description": "Click-to-sms button issue"
+            }
+        ],
+        "clio": [
+            {
+                "type": "New",
+                "description": "Add new setting for Clio to enable/disable time entry"
+            }
+        ]
+    },
+    "1.6.26": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial not detecting numbers in input fields"
+            },
+            {
+                "type": "Fix",
+                "description": "Warm transfer call logging issue"
+            }
+        ]
+    },
+    "1.6.25": {
+        "global": [
+            {
+                "type": "Better",
+                "description": "Click-to-dial with wider number match"
+            }
+        ],
+        "clio": [
+            {
+                "type": "Fix",
+                "description": "Clio users can't see closed associated matters"
+            }
+        ]
+    },
+    "1.6.24": {
+        "global": [
+            {
+                "type": "Better",
+                "description": "Server-side logging. Admin users can now use user mapping to map and test with their own account"
+            },
+            {
+                "type": "Fix",
+                "description": "Issue of AI toggle missing"
+            },
+            {
+                "type": "Fix",
+                "description": "Issue of AI summary toggled OFF but content is still logged"
+            }
+        ],
+        "clio": [
+            {
+                "type": "Info - Known Issue",
+                "description": "Closed matters cannot be fetched. This appears to be a Clio API issue — we are in contact with them to resolve it."
+            }
+        ]
+    },
+    "1.6.23": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Contact call pop issue"
+            }
+        ]
+    },
+    "1.6.22": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "SMS logging issue of repeatedly logging same messages"
+            },
+            {
+                "type": "Fix",
+                "description": "Mixpanel token issue that blocks certain webpage access"
+            }
+        ]
+    },
+    "1.6.21": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial injection for HTML shadow roots"
+            },
+            {
+                "type": "Fix",
+                "description": "A not-found error for user mapping"
+            }
+        ],
+        "clio": [
+            {
+                "type": "New",
+                "description": "Clio time entries (activities) will be associated with matters"
+            }
+        ],
+        "bullhorn": [
+            {
+                "type": "Fix",
+                "description": "Edge cases where Bullhorn Note authors are assigned to Contacts/Candidates"
+            }
+        ]
+    },
+    "1.6.20": {
+        "clio": [
+            {
+                "type": "New",
+                "description": "Clio now supports SMS time tracking"
+            }
+        ]
+    },
+    "1.6.19": {
+        "global": [
+            {
+                "type": "New",
+                "description": "A button on Developer settings page to re-initialize user mapping"
+            },
+            {
+                "type": "New",
+                "description": "A banner for official announcement"
+            },
+            {
+                "type": "Better",
+                "description": "Click-to-SMS button is disabled if RingCentral SMS service is not activated"
+            }
+        ]
+    },
+    "1.6.18": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Upon completing warm transfer, it opens contact page for a second time"
             }
         ]
     },

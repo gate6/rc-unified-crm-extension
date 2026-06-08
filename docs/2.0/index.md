@@ -2,7 +2,17 @@
 
 App Connect 2.0 is a turning point for the product as not only does it make it easier for developers to connect RingCentral to more CRMs, it contains many new features that will bring greater value to App Connects thousands of users. 
 
-Here are some of the features new to App Connect 2.0. 
+## Download the beta
+
+The App Connect 2.0 beta is being distributed as "App Connect 1.7" via an unlisted and private Chrome Store extension. 
+
+<a href="https://chrome.google.com/webstore/detail/ringcentral-crm-extension/bgpkbcidaabaeioilooghlffdcmlimgk"><img class="mw-350" src="../img/chrome-web-store.png"></a>
+
+!!! info "Things you should know"
+    * Version 2.0 is completely backwards compatible with App Connect 1.6.x. If you experience a problem and wish to revert, you can do so safely without loss of data. 
+	* We will continue to maintain App Connect 1.6.x, but only with bug fixes.
+
+## What's new
 
 <div class="grid cards" markdown>
 
@@ -12,11 +22,15 @@ Here are some of the features new to App Connect 2.0.
 
     Easily view your entire company’s collective performance or drill down into any individual agent to drive coaching and success.
 
+    [Learn more &raquo;](../users/user-report.md)
+
 -   :material-monitor-dashboard:{ .lg .middle } __Call monitoring__
 
     ---
 
     Monitor agent presence, see parked and queued calls, and answer them directly from your view.
+
+    [Learn more &raquo;](../users/hud.md)
 
 -   :fontawesome-solid-square-parking:{ .lg .middle } __Improved call park__
 
@@ -24,11 +38,15 @@ Here are some of the features new to App Connect 2.0.
 
     Select the exact location to park a call and automatically notify a colleague via text to ensure a seamless pickup every time.
 
+    [Learn more &raquo;](../users/hud.md)
+
 -   :material-auto-fix:{ .lg .middle } __Call logging policies__
 
     ---
 
     Create custom rules to automatically log calls that previously failed, eliminating manual effort and capturing every interaction.
+
+    [Learn more &raquo;](../users/logging-conflicts.md#resolving-conflicts-automatically)
 
 -   :material-clipboard-list:{ .lg .middle } __Call-down lists__
 
@@ -36,17 +54,39 @@ Here are some of the features new to App Connect 2.0.
 
     Create and prioritize lists of contacts to call later, viewing and executing your daily schedule with precision.
 
+    [Learn more &raquo;](../users/calldown-lists.md)
+
 -   :material-voicemail:{ .lg .middle } __Voicemail drop__
 
     ---
 
     Pre-record perfect, on-message voicemails, drop them instantly, and move immediately to your next call.
 
+    [Learn more &raquo;](../users/voicemail-drop.md)
+
+-   :material-power-plug-outline:{ .lg .middle } __Plugins__
+
+    ---
+
+    Access a marketplace of plugins to process payloads before they are memorialized in your CRM. 
+
+    [Learn more &raquo;](../users/plugins.md)
+
 -   :fontawesome-solid-mask:{ .lg .middle } __Enhanced phone number privacy__
 
     ---
 
     Mask full customer phone numbers on your agents' displays to comply with strict internal privacy and security controls.
+
+    [Learn more &raquo;](../users/phone-number-formats.md)
+
+-   :material-card-account-phone:{ .lg .middle } __RingCX support (experimental)__
+
+    ---
+
+    Log your RingCX calls to any App Connect-enabled CRM. ACE license required. 
+
+    [Learn more &raquo;](../users/ringcx.md)
 
 </div>
 
@@ -74,31 +114,21 @@ We have commitments from developers to build adapters to the following CRMs usin
 
 <div class="grid cards crm-list" markdown>
 
--    [![RecruiterPM Logo](../img/crm-logo-recruiterpm.png){.crm-logo}](../crm/recruiterpm.md)
-     [RecruiterPM by RecruiterPM](../crm/recruiterpm.md)
+-    [![AgencyZoom Logo](../img/crm-logo-agencyzoom.png){.crm-logo}](../crm/agencyzoom/index.md)
+     [AgencyZoom](../crm/agencyzoom/index.md)
 
--    [![Service Titan Logo](../img/crm-logo-servicetitan.png){.crm-logo}](../crm/servicetitan.md)
-     [Service Titan by Gate6](../crm/servicetitan.md)
+-    [![ServiceTitan Logo](../img/crm-logo-servicetitan.png){.crm-logo}](../crm/servicetitan.md)
+     [ServiceTitan by Gate6](../crm/servicetitan.md)
 
 -    [![Smokeball Logo](../img/crm-logo-smokeball.png){.crm-logo}](../crm/smokeball.md)
-     [Smokeball by ion8](../crm/smokeball.md)
+     [Smokeball by Captivo Labs](../crm/smokeball.md)
 
--    ![Zoho Logo](../img/crm-logo-zoho.png){.crm-logo}
+-    [![Zoho Logo](../img/crm-logo-zoho.png){.crm-logo}](../crm/zoho.md)
      [Zoho by RingClone](../crm/zoho.md)
 
 </div>
 
 !!! warning "RingCentral cannot make guarantees the services above will be supported. We are dependent upon third-party developers."
-
-## Download the beta
-
-The App Connect 2.0 beta is being distributed as "App Connect 1.7" via an unlisted and private Chrome Store extension. 
-
-<a href="https://chrome.google.com/webstore/detail/ringcentral-crm-extension/bgpkbcidaabaeioilooghlffdcmlimgk"><img class="mw-350" src="../img/chrome-web-store.png"></a>
-
-!!! info "Things you should know"
-    * Version 2.0 is completely backwards compatible with App Connect 1.6.x. If you experience a problem and wish to revert, you can do so safely without loss of data. 
-	* We will continue to maintain App Connect 1.6.x, but only with bug fixes.
 
 ## Future costs
 

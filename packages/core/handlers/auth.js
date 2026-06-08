@@ -5,8 +5,12 @@ const Op = require('sequelize').Op;
 const { RingCentral } = require('../lib/ringcentral');
 const adminCore = require('./admin');
 const { Connector } = require('../models/dynamo/connectorSchema');
+const { handleDatabaseError } = require('../lib/errorHandler');
+const managedAuthCore = require('./managedAuth');
+const managedOAuthCore = require('./managedOAuth');
+const { getHashValue } = require('../lib/util');
 
-async function onOAuthCallback({ platform, hostname, tokenUrl, query }) {
+async function onOAuthCallback({ platform, hostname, tokenUrl, query, hashedRcExtensionId, isFromMCP = false }) {
     const callbackUri = query.callbackUri;
     const apiUrl = query.apiUrl;
     const username = query.username;
@@ -17,8 +21,21 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, query }) {
     if (proxyId) {
         proxyConfig = await Connector.getProxyConfig(proxyId);
     }
-    const oauthInfo = await platformModule.getOauthInfo({ tokenUrl, hostname, rcAccountId: query.rcAccountId, proxyId, proxyConfig, userEmail });
-
+    let managedOAuthSource = null;
+    let oauthInfo = null;
+    if (query.rcAccountId) {
+        const managedOAuthResult = await managedOAuthCore.resolveManagedOAuthInfo({
+            rcAccountId: query.rcAccountId,
+            platform
+        });
+        managedOAuthSource = managedOAuthResult.source;
+        oauthInfo = managedOAuthResult.oauthInfo;
+    }
+    if (!oauthInfo) {
+        oauthInfo = await platformModule.getOauthInfo({ tokenUrl, hostname, rcAccountId: query.rcAccountId, proxyId, proxyConfig, userEmail, isFromMCP });
+    }
+    const resolvedHostname = oauthInfo?.hostname ?? hostname;
+    const resolvedTokenUrl = oauthInfo?.accessTokenUri ?? tokenUrl;
     if (oauthInfo.failMessage) {
         return {
             userInfo: null,
@@ -36,26 +53,39 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, query }) {
         overridingOAuthOption = platformModule.getOverridingOAuthOption({ code });
     }
     const oauthApp = oauth.getOAuthApp(oauthInfo);
-    const { accessToken, refreshToken, expires } = await oauthApp.code.getToken(callbackUri, overridingOAuthOption);
+    const { accessToken, refreshToken, expires, data } = await oauthApp.code.getToken(callbackUri, overridingOAuthOption);
     const authHeader = `Bearer ${accessToken}`;
-    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader, tokenUrl, apiUrl, hostname, platform, username, callbackUri, query, proxyId, proxyConfig, userEmail });
+    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader, tokenUrl: resolvedTokenUrl, apiUrl, hostname: resolvedHostname, platform, username, callbackUri, query, proxyId, proxyConfig, userEmail, data });
 
     if (successful) {
-        let userInfo = await saveUserInfo({
-            platformUserInfo,
-            platform,
-            tokenUrl,
-            apiUrl,
-            username,
-            hostname: platformUserInfo?.overridingHostname ? platformUserInfo.overridingHostname : hostname,
-            accessToken,
-            refreshToken,
-            tokenExpiry: isNaN(expires) ? null : expires,
-            rcAccountId: query.rcAccountId,
-            proxyId
-        });
+        let userInfo = null;
+        try {
+            userInfo = await saveUserInfo({
+                platformUserInfo,
+                platform,
+                tokenUrl: resolvedTokenUrl,
+                apiUrl,
+                username,
+                hostname: platformUserInfo?.overridingHostname ? platformUserInfo.overridingHostname : resolvedHostname,
+                accessToken,
+                refreshToken,
+                tokenExpiry: isNaN(expires) ? null : expires,
+                rcAccountId: query?.rcAccountId,
+                hashedRcExtensionId,
+                proxyId
+            });
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error saving user info');
+        }
         if (platformModule.postSaveUserInfo) {
             userInfo = await platformModule.postSaveUserInfo({ userInfo, oauthApp });
+        }
+        if (managedOAuthSource === 'pending') {
+            await managedOAuthCore.migratePendingManagedOAuth({
+                rcAccountId: query.rcAccountId,
+                platform
+            });
         }
         return {
             userInfo,
@@ -70,18 +100,71 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, query }) {
     }
 }
 
-async function onApiKeyLogin({ platform, hostname, apiKey, proxyId, additionalInfo }) {
+async function onApiKeyLogin({ platform, hostname, apiKey, proxyId, rcAccountId, rcExtensionId, connectorId, isPrivate, hashedRcExtensionId, additionalInfo }) {
     const platformModule = connectorRegistry.getConnector(platform);
-    const basicAuth = platformModule.getBasicAuth({ apiKey });
-    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader: `Basic ${basicAuth}`, hostname, platform, additionalInfo, apiKey, proxyId });
-    if (successful) {
-        let userInfo = await saveUserInfo({
-            platformUserInfo,
+    let resolvedAdditionalInfo = {
+        ...(additionalInfo ?? {})
+    };
+    if (resolvedAdditionalInfo.apiKey === undefined && apiKey !== undefined) {
+        resolvedAdditionalInfo.apiKey = apiKey;
+    }
+    let resolvedApiKey = apiKey;
+    let managedFieldDefinitions = [];
+    if (rcAccountId) {
+        managedFieldDefinitions = await managedAuthCore.getManagedFieldDefinitions({ rcAccountId, platform, connectorId, isPrivate });
+        const shouldFallbackToManualAuth = managedFieldDefinitions.length > 0
+            && await managedAuthCore.hasManagedAuthLoginFailure({ rcAccountId, platform, rcExtensionId });
+        const managedAuthResult = await managedAuthCore.resolveApiKeyLoginFields({
             platform,
-            hostname,
-            proxyId,
-            accessToken: platformUserInfo.overridingApiKey ?? apiKey
+            rcAccountId,
+            rcExtensionId,
+            connectorId,
+            isPrivate,
+            apiKey,
+            additionalInfo: resolvedAdditionalInfo,
+            preferSubmittedValuesForManagedFields: shouldFallbackToManualAuth
         });
+        resolvedAdditionalInfo = managedAuthResult.resolvedAdditionalInfo;
+        resolvedApiKey = managedAuthResult.resolvedApiKey;
+        const missingRequiredFieldConsts = managedAuthResult.missingRequiredFieldConsts;
+        if (missingRequiredFieldConsts.length > 0) {
+            return {
+                userInfo: null,
+                returnMessage: {
+                    messageType: 'warning',
+                    message: 'Missing required authentication fields.',
+                    ttl: 3000,
+                    missingRequiredFieldConsts
+                }
+            };
+        }
+    }
+    const basicAuth = platformModule.getBasicAuth({ apiKey: resolvedApiKey });
+    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({
+        authHeader: `Basic ${basicAuth}`,
+        hostname,
+        platform,
+        additionalInfo: resolvedAdditionalInfo,
+        apiKey: resolvedApiKey,
+        proxyId
+    });
+    if (successful) {
+        await managedAuthCore.clearManagedAuthLoginFailure({ rcAccountId, platform, rcExtensionId });
+        let userInfo = null;
+        try {
+            userInfo = await saveUserInfo({
+                platformUserInfo,
+                platform,
+                hostname,
+                proxyId,
+                hashedRcExtensionId,
+                rcAccountId,
+                accessToken: platformUserInfo.overridingApiKey ?? resolvedApiKey
+            });
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error saving user info');
+        }
         if (platformModule.postSaveUserInfo) {
             userInfo = await platformModule.postSaveUserInfo({ userInfo });
         }
@@ -90,15 +173,16 @@ async function onApiKeyLogin({ platform, hostname, apiKey, proxyId, additionalIn
             returnMessage
         };
     }
-    else {
-        return {
-            userInfo: null,
-            returnMessage
-        }
+    if (managedFieldDefinitions.length > 0) {
+        await managedAuthCore.markManagedAuthLoginFailure({ rcAccountId, platform, rcExtensionId });
+    }
+    return {
+        userInfo: null,
+        returnMessage
     }
 }
 
-async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken, refreshToken, tokenExpiry, rcAccountId, proxyId }) {
+async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken, refreshToken, tokenExpiry, rcAccountId, hashedRcExtensionId, proxyId }) {
     const id = platformUserInfo.id;
     const name = platformUserInfo.name;
     const existingUser = await UserModel.findByPk(id);
@@ -107,61 +191,31 @@ async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken,
     const platformAdditionalInfo = platformUserInfo.platformAdditionalInfo || {};
     platformAdditionalInfo.proxyId = proxyId;
     if (existingUser) {
-        await existingUser.update(
-            {
-                platform,
-                hostname,
-                timezoneName,
-                timezoneOffset,
-                accessToken,
-                refreshToken,
-                tokenExpiry,
-                rcAccountId,
-                platformAdditionalInfo: {
-                    ...existingUser.platformAdditionalInfo, // keep existing platformAdditionalInfo
-                    ...platformAdditionalInfo,
+        try {
+            await existingUser.update(
+                {
+                    platform,
+                    hostname,
+                    timezoneName,
+                    timezoneOffset,
+                    accessToken,
+                    refreshToken,
+                    tokenExpiry,
+                    rcAccountId,
+                    hashedRcExtensionId,
+                    platformAdditionalInfo: {
+                        ...existingUser.platformAdditionalInfo, // keep existing platformAdditionalInfo
+                        ...platformAdditionalInfo,
+                    }
                 }
-            }
-        );
+            );
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error saving user info');
+        }
     }
     else {
-        // TEMP: replace user with old ID
-        if (id.endsWith(`-${platform}`)) {
-            const oldID = id.split('-');
-            const userWithOldID = await UserModel.findByPk(oldID[0]);
-            if (userWithOldID) {
-                await UserModel.create({
-                    id,
-                    hostname,
-                    timezoneName,
-                    timezoneOffset,
-                    platform,
-                    accessToken,
-                    refreshToken,
-                    tokenExpiry,
-                    rcAccountId,
-                    platformAdditionalInfo,
-                    userSettings: userWithOldID.userSettings
-                });
-                await userWithOldID.destroy();
-            }
-            else {
-                await UserModel.create({
-                    id,
-                    hostname,
-                    timezoneName,
-                    timezoneOffset,
-                    platform,
-                    accessToken,
-                    refreshToken,
-                    tokenExpiry,
-                    rcAccountId,
-                    platformAdditionalInfo,
-                    userSettings: {}
-                });
-            }
-        }
-        else {
+        try {
             await UserModel.create({
                 id,
                 hostname,
@@ -172,9 +226,13 @@ async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken,
                 refreshToken,
                 tokenExpiry,
                 rcAccountId,
+                hashedRcExtensionId,
                 platformAdditionalInfo,
                 userSettings: {}
             });
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error saving user info');
         }
     }
     return {
@@ -184,8 +242,16 @@ async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken,
 }
 
 async function getLicenseStatus({ userId, platform }) {
+    const user = await UserModel.findByPk(userId);
+    if (!user) {
+        return {
+            isLicenseValid: false,
+            licenseStatus: 'Invalid (User not found)',
+            licenseStatusDescription: ''
+        }
+    }
     const platformModule = connectorRegistry.getConnector(platform);
-    const licenseStatus = await platformModule.getLicenseStatus({ userId, platform });
+    const licenseStatus = await platformModule.getLicenseStatus({ userId, platform, user });
     return licenseStatus;
 }
 
@@ -204,7 +270,12 @@ async function authValidation({ platform, userId }) {
     if (existingUser) {
         const platformModule = connectorRegistry.getConnector(platform);
         const proxyId = existingUser?.platformAdditionalInfo?.proxyId;
-        const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: existingUser?.platformAdditionalInfo?.tokenUrl, hostname: existingUser?.hostname, proxyId })));
+        const managedOAuthResult = await managedOAuthCore.resolveManagedOAuthInfo({
+            rcAccountId: existingUser.rcAccountId,
+            platform
+        });
+        const oauthInfo = managedOAuthResult.oauthInfo ?? await platformModule.getOauthInfo({ tokenUrl: existingUser?.platformAdditionalInfo?.tokenUrl, hostname: existingUser?.hostname, proxyId });
+        const oauthApp = oauth.getOAuthApp(oauthInfo);
         existingUser = await oauth.checkAndRefreshAccessToken(oauthApp, existingUser);
         const { successful, returnMessage, status } = await platformModule.authValidation({ user: existingUser });
         return {
@@ -235,8 +306,9 @@ async function onRingcentralOAuthCallback({ code, rcAccountId }) {
         redirectUri: `${process.env.APP_SERVER}/ringcentral/oauth/callback`
     });
     const { access_token, refresh_token, expire_time } = await rcSDK.generateToken({ code });
+    const hashedRcAccountId = getHashValue(rcAccountId, process.env.HASH_KEY);
     await adminCore.updateAdminRcTokens({
-        hashedRcAccountId: rcAccountId,
+        hashedRcAccountId,
         adminAccessToken: access_token,
         adminRefreshToken: refresh_token,
         adminTokenExpiry: expire_time
