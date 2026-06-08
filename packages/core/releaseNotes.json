@@ -1,4 +1,192 @@
 {
+    "1.7.30": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Shared SMS for sites"
+            },
+            {
+                "type": "Fix",
+                "description": "Conditional rendering of contact association fields"
+            }
+        ]
+    },
+    "1.7.29": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Conditional rendering of logging form fields by contact type"
+            }
+        ]
+    },
+    "1.7.27": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Managed OAuth for platforms with dynamic OAuth configs for different accounts"
+            }
+        ]
+    },
+    "1.7.26": {
+        "global": [
+            {
+                "type": "New",
+                "description": "[Appointments](https://appconnect.labs.ringcentral.com/users/appointments/) support"
+            },
+            {
+                "type": "Fix",
+                "description": "Issue of transferred call overriding first call log"
+            }
+        ]
+    },
+    "1.7.25": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial render issue"
+            }
+        ]
+    },
+    "1.7.24": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Click-to-dial number matcher selection in User Setting -> General"
+            },
+            {
+                "type": "Fix",
+                "description": "Error report upload"
+            }
+        ]
+    },
+    "1.7.23": {
+        "global": [
+            {
+                "type": "Rename",
+                "description": "Rename RingSense to ACE"
+            }
+        ]
+    },
+    "1.7.22": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Managed auth fields for non-OAuth platforms"
+            }
+        ]
+    },
+    "1.7.21": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Refresh contact for deleted contact issue"
+            },
+            {
+                "type": "Fix",
+                "description": "Click-to-sms button issue"
+            }
+        ]
+    },
+    "1.7.20": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial not detecting numbers in input fields"
+            },
+            {
+                "type": "Fix",
+                "description": "Warm transfer call logging issue"
+            }
+        ]
+    },
+    "1.7.19": {
+        "global": [
+            {
+                "type": "Beta",
+                "description": "Plugin system infrastructure. No plugin available yet, but add soon. Take a quick look at its [overview](https://appconnect.labs.ringcentral.com/users/plugins)"
+            },
+            {
+                "type": "Better",
+                "description": "Click-to-dial with wider number match"
+            }
+        ]
+    },
+    "1.7.18": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Support for Group SMS logging"
+            },
+            {
+                "type": "Better",
+                "description": "User session will log be revoked is token refresh fails"
+            },
+            {
+                "type": "Fix",
+                "description": "Contact call pop issue"
+            }
+        ]
+    },
+    "1.7.16": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "SMS logging issue of repeatedly logging same messages"
+            },
+            {
+                "type": "Fix",
+                "description": "Mixpanel token issue that blocks certain webpage access"
+            }
+        ]
+    },
+    "1.7.15": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Click-to-dial injection for HTML shadow roots"
+            },
+            {
+                "type": "Fix",
+                "description": "A not-found error for user mapping"
+            }
+        ]
+    },
+    "1.7.12": {
+        "global": [
+            {
+                "type": "New",
+                "description": "A button on Developer settings page to re-initialize user mapping"
+            },
+            {
+                "type": "Better",
+                "description": "Click-to-SMS button is disabled if RingCentral SMS service is not activated"
+            }
+        ]
+    },
+    "1.7.11": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Shared-SMS logging"
+            },
+            {
+                "type": "New",
+                "description": "MCP tools"
+            }
+        ]
+    },
+    "1.7.10": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Upon completing warm transfer, it opens contact page for a second time"
+            },
+            {
+                "type": "New",
+                "description": "RingCX RingSense call logging event support for Server-side logging"
+            }
+        ]
+    },
     "1.7.9": {
         "global": [
             {
@@ -139,7 +327,7 @@
             }
         ]
     },
-    "1.6.11":{
+    "1.6.11": {
         "global": [
             {
                 "type": "Fix",

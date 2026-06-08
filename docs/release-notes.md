@@ -1,5 +1,98 @@
 # Release notes
 
+## 1.7.30
+
+- Fix: Shared SMS for sites
+- Fix: Conditional rendering of contact association fields
+- Fix: Clio associated matter paging
+
+## 1.7.29
+
+- New: Conditional rendering of logging form fields by contact type
+
+## 1.7.27
+
+- New: Managed OAuth for platforms with dynamic OAuth configs for different accounts
+
+## 1.7.26
+
+- New: [Appointments](https://appconnect.labs.ringcentral.com/users/appointments/) support (Clio, Bullhorn, NetSuite only)
+- Fix: Issue of transferred call overriding first call log
+
+## 1.7.25
+
+- Fix: Click-to-dial render issue
+
+## 1.7.24
+
+- New: Click-to-dial number matcher selection in User Setting -> General
+- Fix: Error report upload
+
+## 1.7.23
+
+- New: Add copy to contact for Bullhorn logging
+- Rename: RingSense to ACE
+
+## 1.7.22
+
+- New: Managed auth fields for non-OAuth platforms
+- Fix: Click-to-dial problem on Bullhorn
+
+## 1.7.21
+
+- New: Add new setting for Clio to enable/disable time entry
+- Fix: Refresh contact for deleted contact issue
+- Fix: Click-to-sms button issue
+
+## 1.7.20
+
+- Fix: Click-to-dial not detecting numbers in input fields
+- Fix: Warm transfer call logging issue
+
+## 1.7.19
+
+- Beta: Plugin system infrastructure. No plugin available yet, but add soon. Take a quick look at its [overview](https://appconnect.labs.ringcentral.com/users/plugins) 
+- Better: Click-to-dial with wider number match
+- Fix: Clio users can't see closed associated matters
+
+## 1.7.18
+
+- New: Support for Group SMS logging
+- Better: User session will log be revoked is token refresh fails
+- Fix: Contact call pop issue
+
+## 1.7.16
+
+- Fix: SMS logging issue of repeatedly logging same messages
+- Fix: Mixpanel token issue that blocks certain webpage access
+
+## 1.7.15
+
+- New: Clio time entries (activities) will be associated with matters
+- Fix: Click-to-dial injection for HTML shadow roots
+- Fix: A not-found error for user mapping
+- Fix: Edge cases where Bullhorn Note authors are assigned to Contacts/Candidates 
+
+## 1.7.14
+
+- New: Clio now supports SMS time tracking
+
+## 1.7.12
+
+- New: A button on Developer settings page to re-initialize user mapping
+- Better: Click-to-SMS button is disabled if RingCentral SMS service is not activated
+
+## 1.7.11
+
+- New: Shared-SMS logging
+- New: MCP tools
+- New: Netsuite now supports Lead and Prospect
+
+## 1.7.10
+
+- New: RingCX ACE call logging event support for Server-side logging
+- Fix: Upon completing warm transfer, it opens contact page for a second time
+
 ## 1.7.9
 
 - Better: Contact match speed optimized
@@ -56,6 +149,80 @@
 ## 1.7.0
 
 Release notes page: https://appconnect.labs.ringcentral.com/2.0/
+
+## 1.6.32
+
+- Fix: Issue of transferred call overriding first call log
+
+## 1.6.31
+
+- Fix: Click-to-dial render issue
+
+## 1.6.30
+
+- New: Click-to-dial number matcher selection in User Setting -> General
+
+## 1.6.29
+
+- New: Add copy to contact for Bullhorn logging
+- Rename: RingSense to ACE
+
+## 1.6.28
+
+- Fix: Click-to-dial problem on Bullhorn
+
+## 1.6.27
+
+- New: Add new setting for Clio to enable/disable time entry
+- Fix: Refresh contact for deleted contact issue
+- Fix: Click-to-sms button issue
+
+## 1.6.26
+
+- Fix: Click-to-dial not detecting numbers in input fields
+- Fix: Warm transfer call logging issue
+
+## 1.6.25
+
+- Better: Click-to-dial with wider number match
+- Fix: Clio users can't see closed associated matters
+
+## 1.6.24
+
+- Better: Server-side logging. Admin users can now use user mapping to map and test with their own account
+- Fix: Issue of AI toggle missing
+- Fix: Issue of AI summary toggled OFF but content is still logged 
+- Clio: Known issue - Closed matters cannot be fetched. This appears to be a Clio API issue — we are in contact with them to resolve it.
+
+## 1.6.23
+
+- Fix: Contact call pop issue
+
+## 1.6.22
+
+- Fix: SMS logging issue of repeatedly logging same messages
+- Fix: Mixpanel token issue that blocks certain webpage access
+
+## 1.6.21
+
+- New: Clio time entries (activities) will be associated with matters
+- Fix: Click-to-dial injection for HTML shadow roots
+- Fix: A not-found error for user mapping
+- Fix: Edge cases where Bullhorn Note authors are assigned to Contacts/Candidates 
+
+## 1.6.20
+
+- New: Clio now supports SMS time tracking
+
+## 1.6.19
+
+- New: A button on Developer settings page to re-initialize user mapping
+- New: A banner for official announcements
+- Better: Click-to-SMS button is disabled if RingCentral SMS service is not activated
+
+## 1.6.18
+
+- Fix: Upon completing warm transfer, it opens contact page for a second time
 
 ## 1.6.17
 

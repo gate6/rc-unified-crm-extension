@@ -2,6 +2,8 @@
 
 Core package for RingCentral App Connect project providing modular APIs for CRM integration, authentication, contact management, and call logging.
 
+For maintainer-facing internal docs about the package internals, see [`docs/README.md`](./docs/README.md). That docs set covers the non-MCP code under `packages/core`.
+
 ## Features
 
 - **Modular API Design**: Flexible Express app setup with customizable middleware and routes
@@ -286,6 +288,7 @@ const logHandler = require('@app-connect/core/handlers/log');
 const adminHandler = require('@app-connect/core/handlers/admin');
 const userHandler = require('@app-connect/core/handlers/user');
 const dispositionHandler = require('@app-connect/core/handlers/disposition');
+const managedAuthHandler = require('@app-connect/core/handlers/managedAuth');
 
 // Available handlers:
 // authHandler      - Authentication operations
@@ -294,6 +297,7 @@ const dispositionHandler = require('@app-connect/core/handlers/disposition');
 // adminHandler     - Admin operations
 // userHandler      - User management
 // dispositionHandler - Call disposition
+// managedAuthHandler - Shared API-key auth field operations
 ```
 
 #### Models
@@ -332,6 +336,7 @@ The core package provides the following API endpoints:
 - `GET /authValidation` - Validate user authentication
 - `GET /oauth-callback` - OAuth callback handler
 - `POST /apiKeyLogin` - API key authentication
+- `GET /apiKeyManagedAuthState` - Get managed-auth required-field readiness for API-key logins
 - `POST /unAuthorize` - Logout user
 
 ### Contact Management
@@ -356,11 +361,13 @@ The core package provides the following API endpoints:
 - `POST /admin/settings` - Update admin settings
 - `GET /admin/serverLoggingSettings` - Get server logging settings
 - `POST /admin/serverLoggingSettings` - Update server logging settings
+- `GET /admin/managedAuth` - Get managed-auth field definitions and masked stored values
+- `POST /admin/managedAuth` - Update org-level or user-level managed auth field values
 
 ### System
 - `GET /releaseNotes` - Get release notes
 - `GET /crmManifest` - Get CRM manifest
-- `GET /is-alive` - Health check
+- `GET /isAlive` - Health check
 - `GET /serverVersionInfo` - Get server version
 - `GET /hostname` - Get user hostname
 - `GET /userInfoHash` - Get hashed user info

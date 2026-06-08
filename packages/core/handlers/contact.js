@@ -1,9 +1,8 @@
 const oauth = require('../lib/oauth');
 const { UserModel } = require('../models/userModel');
-const errorMessage = require('../lib/generalErrorMessage');
 const connectorRegistry = require('../connector/registry');
 const { Connector } = require('../models/dynamo/connectorSchema');
-const { DebugTracer } = require('../lib/debugTracer');
+const { handleApiError } = require('../lib/errorHandler');
 const { AccountDataModel } = require('../models/accountDataModel');
 
 async function findContact({ platform, userId, phoneNumber, overridingFormat, isExtension, tracer, isForceRefreshAccountData = false }) {
@@ -39,7 +38,7 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
         if (!isForceRefreshAccountData) {
             if (existingMatchedContactInfo) {
                 console.log('found existing matched contact info in account data');
-                return { successful: true, returnMessage: null, contact: existingMatchedContactInfo.data, extraDataTracking: null };
+                return { successful: true, returnMessage: null, contact: existingMatchedContactInfo.data, extraDataTracking: { isCached: true } };
             }
         }
         const proxyId = user.platformAdditionalInfo?.proxyId;
@@ -57,6 +56,17 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
             case 'oauth':
                 const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname, proxyId, proxyConfig })));
                 user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
+                if (!user) {
+                    return {
+                        successful: false,
+                        returnMessage: {
+                            message: `User session expired. Please connect again.`,
+                            messageType: 'warning',
+                            ttl: 5000
+                        },
+                        isRevokeUserSession: true
+                    }
+                }
                 authHeader = `Bearer ${user.accessToken}`;
                 tracer?.trace('handler.findContact:oauthAuth', { authHeader });
                 break;
@@ -70,18 +80,18 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
         const { successful, matchedContactInfo, returnMessage, extraDataTracking } = await platformModule.findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension, proxyConfig, tracer, isForceRefreshAccountData });
         tracer?.trace('handler.findContact:platformFindResult', { successful, matchedContactInfo });
 
-        if (matchedContactInfo != null && matchedContactInfo?.filter(c => !c.isNewContact)?.length > 0) {
+        const matchedNonNewContacts = matchedContactInfo?.filter(c => !c.isNewContact) ?? [];
+        if (matchedContactInfo != null && matchedNonNewContacts.length > 0) {
             tracer?.trace('handler.findContact:contactsFound', { count: matchedContactInfo.length });
             // save in org data
             // Danger: it does NOT support one RC account mapping to multiple CRM platforms, because contacts will be shared
             if (user.rcAccountId) {
-                if(existingMatchedContactInfo)
-                {
+                if (existingMatchedContactInfo) {
                     await existingMatchedContactInfo.update({
                         data: matchedContactInfo
                     });
                 }
-                else{
+                else {
                     await AccountDataModel.create({
                         rcAccountId: user.rcAccountId,
                         platformName: platform,
@@ -95,6 +105,10 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
         }
         else {
             tracer?.trace('handler.findContact:noContactsMatched', { matchedContactInfo });
+            if (isForceRefreshAccountData && existingMatchedContactInfo) {
+                await existingMatchedContactInfo.destroy();
+                tracer?.trace('handler.findContact:staleCacheRemoved', { phoneNumber });
+            }
             if (returnMessage) {
                 return {
                     successful,
@@ -126,51 +140,9 @@ async function findContact({ platform, userId, phoneNumber, overridingFormat, is
             };
         }
     } catch (e) {
-        console.error(`platform: ${platform} \n${e.stack} \n${JSON.stringify(e.responxse?.data)}`);
         tracer?.traceError('handler.findContact:error', e, { platform, statusCode: e.response?.status });
+        return handleApiError(e, platform, 'findContact', { userId, overridingFormat, isExtension });
 
-        if (e.response?.status === 429) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.rateLimitErrorMessage({ platform }),
-                extraDataTracking: {
-                    statusCode: e.response?.status,
-                }
-            };
-        }
-        else if (e.response?.status >= 400 && e.response?.status < 410) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.authorizationErrorMessage({ platform }),
-                extraDataTracking: {
-                    statusCode: e.response?.status,
-                }
-            };
-        }
-        return {
-            successful: false,
-            returnMessage:
-            {
-                message: `Error finding contacts`,
-                messageType: 'warning',
-                details: [
-                    {
-                        title: 'Details',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: `Please check if your account has permission to VIEW and LIST contacts`
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            },
-            extraDataTracking: {
-                statusCode: e.response?.status,
-            }
-        };
     }
 }
 
@@ -197,6 +169,17 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
             case 'oauth':
                 const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname, proxyId, proxyConfig })));
                 user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
+                if (!user) {
+                    return {
+                        successful: false,
+                        returnMessage: {
+                            message: `User session expired. Please connect again.`,
+                            messageType: 'warning',
+                            ttl: 5000
+                        },
+                        isRevokeUserSession: true
+                    }
+                }
                 authHeader = `Bearer ${user.accessToken}`;
                 break;
             case 'apiKey':
@@ -212,43 +195,7 @@ async function createContact({ platform, userId, phoneNumber, newContactName, ne
             return { successful: false, returnMessage };
         }
     } catch (e) {
-        console.log(`platform: ${platform} \n${e.stack}`);
-        if (e.response?.status === 429) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.rateLimitErrorMessage({ platform }),
-            };
-        }
-        else if (e.response?.status >= 400 && e.response?.status < 410) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.authorizationErrorMessage({ platform }),
-                extraDataTracking: {
-                    statusCode: e.response?.status,
-                }
-            };
-        }
-        return {
-            successful: false,
-            returnMessage:
-            {
-                message: `Error creating contact`,
-                messageType: 'warning',
-                details: [
-                    {
-                        title: 'Details',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: `A contact with the phone number ${phoneNumber} could not be created. Make sure you have permission to create contacts in ${platform}.`
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
+        return handleApiError(e, platform, 'createContact', { userId, phoneNumber, newContactName, newContactType, additionalSubmission });
     }
 }
 
@@ -282,6 +229,17 @@ async function findContactWithName({ platform, userId, name }) {
             case 'oauth':
                 const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname, proxyId, proxyConfig })));
                 user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
+                if (!user) {
+                    return {
+                        successful: false,
+                        returnMessage: {
+                            message: `User session expired. Please connect again.`,
+                            messageType: 'warning',
+                            ttl: 5000
+                        },
+                        isRevokeUserSession: true
+                    }
+                }
                 authHeader = `Bearer ${user.accessToken}`;
                 break;
             case 'apiKey':
@@ -313,28 +271,7 @@ async function findContactWithName({ platform, userId, name }) {
             };
         }
     } catch (e) {
-        console.error(`platform: ${platform} \n${e.stack} \n${JSON.stringify(e.response?.data)}`);
-        if (e.response?.status === 429) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.rateLimitErrorMessage({ platform })
-            };
-        }
-        else if (e.response?.status >= 400 && e.response?.status < 410) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.authorizationErrorMessage({ platform }),
-            };
-        }
-        return {
-            successful: false,
-            returnMessage:
-            {
-                message: `Error finding contacts`,
-                messageType: 'warning',
-                ttl: 5000
-            }
-        };
+        return handleApiError(e, platform, 'findContactWithName', { userId, name });
     }
 }
 

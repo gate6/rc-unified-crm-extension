@@ -8,7 +8,7 @@ RingCentral's integration with Pipedrive helps streamline communications between
 
 If you have not already done so, begin by [installing App Connect](../getting-started.md) from the Chrome web store. 
 
-<iframe width="825" height="464" src="https://www.youtube.com/embed/Hu0qC13HDkQ?si=XZLWUCalDRhF8ASP" title="App Connect for Insightly - quick start" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+<iframe width="825" height="464" src="https://www.youtube.com/embed/y3Hk07-1dQM" title="App Connect for Insightly - quick start" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
 
 ## Setup the extension
 
@@ -32,6 +32,22 @@ When you login successfully, the Chrome extension will automatically update to s
 </figure>
 
 And with that, you will be connected to Pipedrive and ready to begin using the integration. 
+
+## Enabling SMS logging
+
+SMS logging in Pipedrive requires a custom activity type named **"SMS"** to be created in your Pipedrive account. App Connect looks for an activity type containing the keyword "SMS" — if it doesn't exist, SMS messages will not be logged.
+
+!!! warning "SMS messages not logging?"
+    If you are not seeing SMS messages logged in Pipedrive, this is almost certainly the reason. Create the SMS activity type below and logging will begin immediately.
+
+To create the activity type, a Pipedrive admin should follow these steps:
+
+1. Go to **Settings**
+2. Click **Activities**
+3. Click **Add Activity**
+4. Name the activity **SMS** and select an icon
+
+Once saved, all inbound and outbound SMS messages handled by App Connect will be logged using this activity type.
 
 ## Tailoring your configuration
 

@@ -2,6 +2,8 @@ const axios = require('axios');
 const { AdminConfigModel } = require('../models/adminConfigModel');
 const { getHashValue } = require('../lib/util');
 const connectorRegistry = require('../connector/registry');
+const logger = require('../lib/logger');
+const { handleDatabaseError } = require('../lib/errorHandler');
 
 async function getUserSettingsByAdmin({ rcAccessToken, rcAccountId }) {
     let hashedRcAccountId = null;
@@ -31,6 +33,7 @@ async function getUserSettings({ user, rcAccessToken, rcAccountId }) {
             userSettingsByAdmin = await getUserSettingsByAdmin({ rcAccessToken, rcAccountId });
         }
         catch (e) {
+            logger.error('Error getting user settings by admin', { stack: e.stack });
             userSettingsByAdmin = [];
         }
     }
@@ -46,7 +49,10 @@ async function getUserSettings({ user, rcAccessToken, rcAccountId }) {
             const keys = Object.keys(userSettingsByAdmin.userSettings).concat(Object.keys(userSettings));
             // distinct keys
             for (const key of new Set(keys)) {
-                // from user's own settings
+                // marked as removed
+                if (userSettingsByAdmin.userSettings[key]?.isRemoved) {
+                    continue;
+                }
                 if ((userSettingsByAdmin.userSettings[key] === undefined || userSettingsByAdmin.userSettings[key].customizable) && userSettings[key] !== undefined) {
                     result[key] = {
                         customizable: true,
@@ -54,6 +60,27 @@ async function getUserSettings({ user, rcAccessToken, rcAccountId }) {
                         defaultValue: userSettings[key].defaultValue,
                         options: userSettings[key].options
                     };
+                    // Special case: plugins
+                    if (key.startsWith('plugin_')) {
+                        const config = Object.keys(result[key].value.config)?.length === 0 ? null : result[key].value.config;
+                        if (config) {
+                            const configFromadminSettings = userSettingsByAdmin.userSettings[key].value.config ?? {};
+                            for (const k in config) {
+                                // use admin setting to replace, if not customizable
+                                if (configFromadminSettings[k] && !configFromadminSettings[k].customizable || !config[k].value && configFromadminSettings[k].value) {
+                                    config[k] = configFromadminSettings[k];
+                                }
+                                else {
+                                    config[k].customizable = configFromadminSettings[k]?.customizable ?? true;
+                                }
+                            }
+                            result[key].value.config = config;
+                        }
+                        //Case: no config at all, use admin setting directly
+                        else {
+                            result[key].value.config = userSettingsByAdmin.userSettings[key].value.config;
+                        }
+                    }
                 }
                 // from admin settings
                 else {
@@ -65,7 +92,7 @@ async function getUserSettings({ user, rcAccessToken, rcAccountId }) {
     return result;
 }
 
-async function updateUserSettings({ user, userSettings, platformName }) {
+async function updateUserSettings({ user, userSettings, settingKeysToRemove, platformName }) {
     const keys = Object.keys(userSettings || {});
     let updatedSettings = {
         ...(user.userSettings || {})
@@ -73,13 +100,23 @@ async function updateUserSettings({ user, userSettings, platformName }) {
     for (const k of keys) {
         updatedSettings[k] = userSettings[k];
     }
+    for (const k of settingKeysToRemove) {
+        if (updatedSettings[k]) {
+            delete updatedSettings[k];
+        }
+    }
     const platformModule = connectorRegistry.getConnector(platformName);
     if (platformModule.onUpdateUserSettings) {
         const { successful, returnMessage } = await platformModule.onUpdateUserSettings({ user, userSettings, updatedSettings });
         if (successful) {
-            await user.update({
-                userSettings: updatedSettings
-            });
+            try {
+                await user.update({
+                    userSettings: updatedSettings
+                });
+            }
+            catch (error) {
+                return handleDatabaseError(error, 'Error updating user settings');
+            }
         }
         return {
             successful,
@@ -87,9 +124,14 @@ async function updateUserSettings({ user, userSettings, platformName }) {
         };
     }
     else {
-        await user.update({
-            userSettings: updatedSettings
-        });
+        try {
+            await user.update({
+                userSettings: updatedSettings
+            });
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error updating user settings');
+        }
     }
     return {
         userSettings: user.userSettings

@@ -1,22 +1,55 @@
-# Creating a placeholder contact
+# Placeholder Contacts
 
-{! docs/developers/beta_notice.inc !}
+A placeholder contact is a CRM contact created for a phone number that did not match an existing CRM record. The connector only creates it when the user or an auto-logging rule chooses to log against that unknown number.
 
-In the event that no contact could be found with an associated phone number, then the client application will prompt a user to create a placeholder contact.
+## Runtime Flow
 
-In the framework's logic, contact creation is coupled with call/message logging. It'll only be used in one case: logging a call/message against an unknown contact. Therefore, it can be described as:
+```mermaid
+flowchart TD
+  A[findContact returns no real contacts] --> B{Create contact?}
+  B -->|Manual user action| C[User enters/selects contact details]
+  B -->|Auto-logging rule| D[Core uses caller ID or configured placeholder name]
+  C --> E[createContact]
+  D --> E
+  E --> F[createCallLog or createMessageLog]
+```
 
-logging against an unknown contact = create a placeholder contact + logging against it
+## Connector Responsibilities
 
-## Implement server endpoints
+Implement [`createContact`](interfaces/createContact.md). It receives:
 
-Within your connector's `index.js` file, implement the following methods.
+- `phoneNumber`
+- `newContactName`
+- `newContactType`
+- `additionalSubmission`
+- `user`
+- `authHeader`
 
-* [`createContact`](interfaces/createContact.md) 
+Return `contactInfo` with at least `id` and `name`.
 
-## Test
+## Do Not Auto-Create In findContact
 
-1. Make a call to an uknown contact
-2. Click `+` button near a call record to log the call
-3. Check if the contact is created on CRM platform (`CHECK.9`)
-4. Check if call log is saved on CRM platform and database (`CHECK.9`)
+`findContact` runs for calls and messages the user may never log. Creating contacts there can pollute the CRM. Return no matches and let the configured logging flow decide whether to create a contact.
+
+## Manifest Contact Types
+
+If users need to choose a CRM entity type, define `contactTypes`:
+
+```json
+{
+  "contactTypes": [
+    { "display": "Person", "value": "Person" },
+    { "display": "Company", "value": "Company" }
+  ]
+}
+```
+
+The selected value is passed to `createContact` as `newContactType`.
+
+## Testing
+
+1. Call or message an unknown number.
+2. Log the communication and choose create contact.
+3. Verify `createContact` creates the CRM record.
+4. Verify the log is created against the new contact.
+5. Test the auto-logging placeholder rule if your account uses it.
