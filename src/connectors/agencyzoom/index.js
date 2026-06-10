@@ -976,7 +976,7 @@ async function getUserList() {
 /* ---------------- LOG FORMAT ---------------- */
 
 function getLogFormatType() {
-  return "text";
+  return "text/plain";
 }
 
 /* ---------------- EXPORTS ---------------- */
