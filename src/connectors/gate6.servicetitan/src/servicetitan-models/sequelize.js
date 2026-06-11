@@ -1,9 +1,9 @@
 const { Sequelize } = require('sequelize');
 const path = require('path')
-require('dotenv').config({path:path.join(__dirname,'..','..','.env')});
+require('dotenv').config({path:path.join(__dirname,'..','..','..','..','..', '.env')});
 
 const sequelize = new Sequelize(
-  process.env.SERVICE_TITAN_DB_URL,
+  process.env.SERVICENOW_DB_URL,
   {
     dialect: 'postgres',
     protocol: 'postgres',
