@@ -1,11 +1,11 @@
 const { mondayRequest, parseMondayCallLogBody, validateLicenseOrFail } = require('../utils/mondayHelpers');
 
 async function getCallLog({ callLogId, accessToken, authHeader, user }) {
-  const licenseError = await validateLicenseOrFail(user)
-  if (licenseError) return licenseError
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const resolvedAccessToken =
-    authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
+    authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken;
 
   if (!callLogId) {
     return {
@@ -15,7 +15,7 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
         message: 'Missing call log id for Monday fetch.',
         ttl: 3000
       }
-    }
+    };
   }
 
   const res = await mondayRequest(
@@ -29,7 +29,7 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
     }
     `,
     { updateId: [callLogId] }
-  )
+  );
 
   if (res?.errors?.length || !res?.data?.updates?.length) {
     return {
@@ -39,19 +39,17 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
         message: res?.errors?.[0]?.message || 'Failed to fetch call log in Monday.',
         ttl: 3000
       }
-    }
+    };
   }
 
-  const update = res.data.updates[0]
-  const rawBody = update.body || ''
+  const update = res.data.updates[0];
+  const rawBody = update.body || '';
+  const parsed = parseMondayCallLogBody(rawBody);
 
-  const { subject, agentNote } = parseMondayCallLogBody(rawBody)
-  console.log('subject', subject)
-  console.log('agentNote', agentNote)
   return {
     callLogInfo: {
-      subject,           
-      note: agentNote,   
+      subject: parsed.subject,
+      note: parsed.agentNote,
       fullBody: rawBody,
       fullLogResponse: update
     },
@@ -60,7 +58,7 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
       message: 'Call log fetched',
       ttl: 3000
     }
-  }
+  };
 }
 
 module.exports = getCallLog;

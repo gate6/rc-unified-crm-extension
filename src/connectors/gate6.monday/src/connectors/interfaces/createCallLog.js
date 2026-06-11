@@ -1,45 +1,62 @@
-const { initModels } = require('../../monday-models/init-models');
-const { sequelize } = require('../../monday-models/sequelize');
-const models = initModels(sequelize);
-const { mondayRequest, getOrCreateCallLogsColumn, getCompanyByHostname, downloadAudioFile, uploadToMonday, validateLicenseOrFail } = require('../utils/mondayHelpers');
-const s3Helper = require('../../monday-core/s3');
+const {
+  moment,
+  mondayRequest,
+  getOrCreateCallLogsColumn,
+  getCompanyByHostname,
+  downloadAudioFile,
+  uploadToMonday,
+  validateLicenseOrFail
+} = require('../utils/mondayHelpers');
 
-async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, composedLogDetails, accessToken, authHeader, user }) {
-  const licenseError = await validateLicenseOrFail(user)
-  if (licenseError) return licenseError
+async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, accessToken, authHeader, user }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const resolvedAccessToken =
-    authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
+    authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken;
 
   const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname,
-    models
-  })
-  const boardId = company.tenantId
+    hostname: user.dataValues.hostname
+  });
+  const boardId = company.tenantId;
 
-  const callLogsColumnId = await getOrCreateCallLogsColumn({
-    accessToken: resolvedAccessToken,
-    boardId,
-    columnName: 'Call Logs'
-  })
+  const subject =
+    (user.userSettings?.addCallLogSubject?.value ?? true)
+      ? (callLog?.customSubject?.trim() || '')
+      : '';
 
-  const activityTitle =
-    composedLogDetails ||
-    callLog?.subject ||
-    callLog?.activity ||
-    `${callLog?.direction || 'Call'} Call`
+  let sections = [];
 
-  let body = `${activityTitle}\n`
-  body += `Result: ${callLog?.result || ''}\n`
-  body += `Duration: ${callLog?.duration ?? ''}s\n`
-
-  if (note) body += `\nAgent Note:\n${note}\n`
-  if (aiNote) body += `\nAI Note:\n${aiNote}\n`
-  if (transcript) body += `\nTranscript:\n${transcript}\n`
-
-  if (callLog?.recording?.link) {
-    body += `Recording:\n${callLog.recording.link}\n`
+  if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
+    sections.push(`Agent Notes:<br>${note.replace(/\r?\n/g, '<br>')}`);
   }
+  if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
+    sections.push(`Result:<br>${callLog.result}`);
+  }
+  if (callLog?.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+    sections.push(`Duration:<br>${callLog.duration} sec`);
+  }
+  if (callLog?.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) {
+    sections.push(`Recording:<br>${callLog.recording.link}`);
+  }
+  if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+    sections.push(`AI Note:<br>${aiNote.replace(/\r?\n/g, '<br>')}`);
+  }
+  if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+    sections.push(`Transcript:<br>${transcript.replace(/\r?\n/g, '<br>')}`);
+  }
+
+  const optionalSections = sections.join('<br><br>');
+  const lines = [
+    `Subject: ${subject}`,
+    `Direction: ${callLog.direction}`,
+    `Start Time: ${moment(callLog.startTime).format('YYYY-MM-DD HH:mm:ss')}`,
+    `End Time: ${moment(callLog.startTime).add(callLog.duration, 'seconds').format('YYYY-MM-DD HH:mm:ss')}`,
+    '',
+    optionalSections
+  ].filter(Boolean);
+
+  const body = lines.join('<br>');
 
   const res = await mondayRequest(
     resolvedAccessToken,
@@ -54,7 +71,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, c
       itemId: Number(contactInfo.id),
       body
     }
-  )
+  );
 
   if (res?.errors?.length || !res?.data?.create_update?.id) {
     return {
@@ -64,11 +81,17 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, c
         message: res?.errors?.[0]?.message || 'Failed to create call log in Monday.',
         ttl: 3000
       }
-    }
+    };
   }
 
-  const updateId = res.data.create_update.id
+  const updateId = res.data.create_update.id;
 
+  // ---- Sync body to Call Logs column ----
+  const callLogsColumnId = await getOrCreateCallLogsColumn({
+    accessToken: resolvedAccessToken,
+    boardId,
+    columnName: 'Call Logs'
+  });
   if (callLogsColumnId) {
     await mondayRequest(
       resolvedAccessToken,
@@ -90,39 +113,37 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, c
         columnId: callLogsColumnId,
         value: body
       }
-    )
+    );
   }
 
+  // ---- Recording Upload ----
   if (callLog?.recording?.downloadUrl) {
-    const fileName = `Call-${Date.now()}.mp3`
-    const s3Key = fileName
-
+    const fileName = `Call-${Date.now()}.mp3`;
+    const s3Key = fileName;
     const s3Url = await downloadAudioFile(
       callLog.recording.downloadUrl,
       process.env.S3_BUCKET,
       s3Key
-    )
+    );
 
     await uploadToMonday({
       s3Url,
       accessToken: resolvedAccessToken,
       itemId: Number(contactInfo.id),
       fileName,
-      hostname: user.dataValues.hostname,
-      models,
-      s3Helper
-    })
+      hostname: user.dataValues.hostname
+    });
   }
 
   return {
     logId: updateId,
     contactId: Number(contactInfo.id),
     returnMessage: {
-      messageType: 'success',
       message: 'Call log created',
-      ttl: 3000
+      messageType: 'success',
+      ttl: 2000
     }
-  }
+  };
 }
 
 module.exports = createCallLog;

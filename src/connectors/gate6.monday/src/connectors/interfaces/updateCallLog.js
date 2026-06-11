@@ -1,22 +1,26 @@
-const { initModels } = require('../../monday-models/init-models');
-const { sequelize } = require('../../monday-models/sequelize');
-const models = initModels(sequelize);
-const { mondayRequest, getOrCreateCallLogsColumn, getCompanyByHostname, downloadAudioFile, uploadToMonday, validateLicenseOrFail } = require('../utils/mondayHelpers');
-const s3Helper = require('../../monday-core/s3');
+const {
+  moment,
+  mondayRequest,
+  parseMondayCallLogBody,
+  getCompanyByHostname,
+  getOrCreateCallLogsColumn,
+  downloadAudioFile,
+  uploadToMonday,
+  validateLicenseOrFail
+} = require('../utils/mondayHelpers');
 
-async function updateCallLog({ existingCallLog, callLog, note, aiNote, transcript, recordingLink, duration, result, composedLogDetails, accessToken, authHeader, user }) {
-  const licenseError = await validateLicenseOrFail(user)
-  if (licenseError) return licenseError
+async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user, subject, duration, startTime }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
   const resolvedAccessToken =
-    authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
+    authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken;
 
   const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname,
-    models
-  })
-  const boardId = company.tenantId
-  
+    hostname: user.dataValues.hostname
+  });
+  const boardId = company.tenantId;
+
   if (!existingCallLog?.thirdPartyLogId) {
     return {
       logId: null,
@@ -25,44 +29,74 @@ async function updateCallLog({ existingCallLog, callLog, note, aiNote, transcrip
         message: 'Missing call log id for Monday update.',
         ttl: 3000
       }
-    }
-  }
-
-  const callLogsColumnId = await getOrCreateCallLogsColumn({
-    accessToken: resolvedAccessToken,
-    boardId,
-    columnName: 'Call Logs'
-  })
-
-  const activityTitle =
-    composedLogDetails ||
-    callLog?.subject ||
-    callLog?.activity ||
-    `${callLog?.direction || existingCallLog?.direction || 'Call'} Call`
-
-  let body = `${activityTitle}\n`
-
-  const resolvedResult = callLog?.result ?? result ?? existingCallLog?.result
-  const resolvedDuration =
-    callLog?.duration ?? duration ?? existingCallLog?.duration
-
-  body += `Result: ${resolvedResult || ''}\n`
-  body += `Duration: ${resolvedDuration ?? ''}s\n`
-
-  if (note) body += `\nAgent Note:\n${note}\n`
-  if (aiNote) body += `\nAI Note:\n${aiNote}\n`
-  if (transcript) body += `\nTranscript:\n${transcript}\n`
-
-  const resolvedRecordingLink =
-    callLog?.recording?.downloadUrl ||
-    recordingLink ||
-    existingCallLog?.recording?.downloadUrl
-
-  if (resolvedRecordingLink) {
-    body += `Recording:\n${resolvedRecordingLink}\n`
+    };
   }
 
   const res = await mondayRequest(
+    resolvedAccessToken,
+    `
+    query ($updateId: [ID!]) {
+      updates(ids: $updateId) {
+        id
+        body
+      }
+    }
+    `,
+    { updateId: [existingCallLog.thirdPartyLogId] }
+  );
+
+  const oldBody = res?.data?.updates?.[0]?.body || '';
+  const parsed = parseMondayCallLogBody(oldBody);
+  let subjectToUse = parsed.subject;
+
+  if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+    subjectToUse = subject.trim();
+  }
+
+  let sections = [];
+
+  if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
+    sections.push(`Agent Notes:<br>${note.replace(/\r?\n/g, '<br>')}`);
+  }
+  if (parsed.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
+    sections.push(`Result:<br>${parsed.result}`);
+  }
+  if (duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+    sections.push(`Duration:<br>${duration} sec`);
+  }
+  if (recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) {
+    sections.push(`Recording:<br>${recordingLink}`);
+  }
+  if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+    sections.push(`AI Note:<br>${aiNote.replace(/\r?\n/g, '<br>')}`);
+  }
+  if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+    sections.push(`Transcript:<br>${transcript.replace(/\r?\n/g, '<br>')}`);
+  }
+
+  let startTimeToUse = parsed.startTime;
+  let endTimeToUse = parsed.endTime;
+
+  if (startTime) {
+    startTimeToUse = moment(startTime).format('YYYY-MM-DD HH:mm:ss');
+    if (duration) {
+      endTimeToUse = moment(startTime).add(duration, 'seconds').format('YYYY-MM-DD HH:mm:ss');
+    }
+  }
+
+  const optionalSections = sections.join('<br><br>');
+  const lines = [
+    `Subject: ${subjectToUse}`,
+    `Direction: ${parsed.direction}`,
+    `Start Time: ${startTimeToUse}`,
+    `End Time: ${endTimeToUse}`,
+    '',
+    optionalSections
+  ].filter(Boolean);
+
+  const body = lines.join('<br>');
+
+  const updateRes = await mondayRequest(
     resolvedAccessToken,
     `
     mutation ($updateId: ID!, $body: String!) {
@@ -75,72 +109,59 @@ async function updateCallLog({ existingCallLog, callLog, note, aiNote, transcrip
       updateId: existingCallLog.thirdPartyLogId,
       body
     }
-  )
+  );
 
-  if (res?.errors?.length || !res?.data?.edit_update?.id) {
+  if (updateRes?.errors?.length || !updateRes?.data?.edit_update?.id) {
     return {
       logId: null,
       returnMessage: {
         messageType: 'error',
-        message: res?.errors?.[0]?.message || 'Failed to update call log in Monday.',
+        message: updateRes?.errors?.[0]?.message || 'Failed to update call log in Monday.',
         ttl: 3000
       }
-    }
+    };
   }
 
-  if (callLogsColumnId && existingCallLog.contactId) {
-    await mondayRequest(
-      resolvedAccessToken,
-      `
-      mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
-        change_simple_column_value(
-          board_id: $boardId,
-          item_id: $itemId,
-          column_id: $columnId,
-          value: $value
-        ) {
-          id
-        }
-      }
-      `,
-      {
-        boardId,
-        itemId: Number(existingCallLog.contactId),
-        columnId: callLogsColumnId,
-        value: body
-      }
-    )
-  }
-
-  if (resolvedRecordingLink && existingCallLog.contactId) {
-    const fileName = `Call-${Date.now()}.mp3`
-    const s3Key = fileName
-
-    const s3Url = await downloadAudioFile(
-      resolvedRecordingLink,
-      process.env.S3_BUCKET,
-      s3Key
-    )
-
-    await uploadToMonday({
-      s3Url,
+  // ---- Sync body to Call Logs column ----
+  if (existingCallLog.contactId) {
+    const callLogsColumnId = await getOrCreateCallLogsColumn({
       accessToken: resolvedAccessToken,
-      itemId: Number(existingCallLog.contactId),
-      fileName,
-      hostname: user.dataValues.hostname,
-      models,
-      s3Helper
-    })
+      boardId,
+      columnName: 'Call Logs'
+    });
+    if (callLogsColumnId) {
+      await mondayRequest(
+        resolvedAccessToken,
+        `
+        mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
+          change_simple_column_value(
+            board_id: $boardId,
+            item_id: $itemId,
+            column_id: $columnId,
+            value: $value
+          ) {
+            id
+          }
+        }
+        `,
+        {
+          boardId,
+          itemId: Number(existingCallLog.contactId),
+          columnId: callLogsColumnId,
+          value: body
+        }
+      );
+    }
   }
 
   return {
-    logId: res.data.edit_update.id,
+    logId: updateRes.data.edit_update.id,
     returnMessage: {
-      messageType: 'success',
       message: 'Call log updated',
-      ttl: 3000
+      messageType: 'success',
+      ttl: 2000
     }
-  }
+  };
 }
 
 module.exports = updateCallLog;

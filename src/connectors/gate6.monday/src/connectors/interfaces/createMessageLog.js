@@ -1,60 +1,48 @@
-const { initModels } = require('../../monday-models/init-models');
-const { sequelize } = require('../../monday-models/sequelize');
-const models = initModels(sequelize);
-const { mondayRequest, getCompanyByHostname, downloadAudioFile, uploadToMonday, validateLicenseOrFail } = require('../utils/mondayHelpers');
-const s3Helper = require('../../monday-core/s3');
+const {
+  moment,
+  mondayRequest,
+  getCompanyByHostname,
+  getOrCreateCallLogsColumn,
+  downloadAudioFile,
+  uploadToMonday,
+  validateLicenseOrFail
+} = require('../utils/mondayHelpers');
 
-async function createMessageLog({
-  user,
-  contactInfo,
-  message,
-  recordingLink,
-  faxDocLink,
-  accessToken,
-  authHeader
-}) {
-  const licenseError = await validateLicenseOrFail(user)
-  if (licenseError) return licenseError
+async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink, accessToken, authHeader }) {
+  const licenseError = await validateLicenseOrFail(user);
+  if (licenseError) return licenseError;
 
-  const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
+  const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken;
 
   const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname,
-    models
-  })
+    hostname: user.dataValues.hostname
+  });
+  const boardId = company.tenantId;
+  const itemId = Number(contactInfo.id);
 
-  const boardId = company.tenantId
-  const itemId = Number(contactInfo.id)
+  const callLogsColumnId = await getOrCreateCallLogsColumn({
+    accessToken: resolvedAccessToken,
+    boardId,
+    columnName: 'Call Logs'
+  });
 
-  const messageType = recordingLink
-    ? 'Voicemail'
-    : faxDocLink
-      ? 'Fax'
-      : 'SMS'
+  const messageType =
+    recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+  let body = '';
 
-  let subject = ''
-  let body = ''
-
-  switch (messageType) {
-    case 'SMS':
-      subject = `SMS conversation with ${contactInfo.name}`
-      body =
-        `SMS ${message.direction === 'Inbound' ? 'from' : 'to'} ${contactInfo.name}\n` +
-        `Message: ${message.subject || message.text || ''}`
-      break
-
-    case 'Voicemail':
-      subject = `Voicemail from ${contactInfo.name}`
-      body = `Voicemail received`
-      break
-
-    case 'Fax':
-      subject = `Fax from ${contactInfo.name}`
-      body = `Fax document received`
-      break
+  if (messageType === 'SMS') {
+    const sender =
+      message.direction === 'Inbound'
+        ? contactInfo.name
+        : 'You';
+    const text = message.subject || message.text || '';
+    body = `SMS conversation with ${contactInfo.name}<br>`;
+    body += `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}<br>`;
+  } else if (messageType === 'Voicemail') {
+    body = `Voicemail from ${contactInfo.name}<br><br>Recording:<br>${recordingLink}`;
+  } else if (messageType === 'Fax') {
+    body = `Fax from ${contactInfo.name}<br><br>Document:<br>${faxDocLink}`;
   }
-
-  const fullBody = `${subject}\n${body}`
 
   const res = await mondayRequest(
     resolvedAccessToken,
@@ -67,51 +55,71 @@ async function createMessageLog({
     `,
     {
       itemId,
-      body: fullBody
+      body
     }
-  )
+  );
 
   if (!res?.data?.create_update?.id) {
-    throw new Error('Failed to create message log in Monday')
+    throw new Error('Failed to create message log');
   }
 
-  const updateId = res.data.create_update.id
+  const updateId = res.data.create_update.id;
+
+  if (callLogsColumnId) {
+    await mondayRequest(
+      resolvedAccessToken,
+      `
+      mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
+        change_simple_column_value(
+          board_id: $boardId,
+          item_id: $itemId,
+          column_id: $columnId,
+          value: $value
+        ) {
+          id
+        }
+      }
+      `,
+      {
+        boardId,
+        itemId,
+        columnId: callLogsColumnId,
+        value: body
+      }
+    );
+  }
 
   if (recordingLink || faxDocLink) {
-    const downloadUrl = recordingLink || faxDocLink
+    const downloadUrl = recordingLink || faxDocLink;
     const fileName =
-      messageType === 'Voicemail'
+      recordingLink
         ? `Voicemail-${Date.now()}.mp3`
-        : `Fax-${Date.now()}.pdf`
-
-    const s3Key = fileName
-
+        : `Fax-${Date.now()}.pdf`;
+    const s3Key = fileName;
     const s3Url = await downloadAudioFile(
       downloadUrl,
       process.env.S3_BUCKET,
       s3Key
-    )
+    );
 
     await uploadToMonday({
       s3Url,
       accessToken: resolvedAccessToken,
       itemId,
       fileName,
-      hostname: user.dataValues.hostname,
-      models,
-      s3Helper
-    })
+      hostname: user.dataValues.hostname
+    });
   }
 
   return {
     logId: updateId,
     contactId: itemId,
     returnMessage: {
-      message: 'Message logged in Monday',
+      message: 'Message thread created',
       messageType: 'success',
       ttl: 1000
     }
-  }
+  };
 }
 
 module.exports = createMessageLog;
