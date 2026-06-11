@@ -1,5 +1,4 @@
-const axios = require('axios');
-const { getRefreshedAuthToken, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, validateLicenseOrFail, serviceTitanApiClient } = require('../utils/serviceTitanHelpers');
 
 async function getUserList({ user, authHeader }) {
     const licenseError = await validateLicenseOrFail(user);
@@ -10,7 +9,7 @@ async function getUserList({ user, authHeader }) {
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     try {
-        const userListResp = await axios.get(
+        const userListResp = await serviceTitanApiClient.get(
             `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers`,
             {
                 headers: {

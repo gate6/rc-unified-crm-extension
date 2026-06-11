@@ -1,11 +1,37 @@
 const axios = require('axios');
 const qs = require('qs');
 const moment = require('moment');
-const { UserModel } = require('@app-connect/core/models/userModel');
-const { sequelize } = require('../../servicetitan-models/sequelize');
-const { initModels } = require('../../servicetitan-models/init-models');
+const getLicenseStatus = require('../interfaces/getLicenseStatus');
 
-const models = initModels(sequelize);
+// ----------------------------------------------------------------
+// Shared API client with structured error logging
+// ----------------------------------------------------------------
+
+function stringifyForLog(value, maxLength = 1200) {
+    try {
+        const str = typeof value === 'string' ? value : JSON.stringify(value);
+        return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
+    } catch (error) {
+        return String(value);
+    }
+}
+
+const serviceTitanApiClient = axios.create();
+
+serviceTitanApiClient.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        console.error('[ServiceTitan][apiError]', {
+            method: error?.config?.method || '',
+            url: error?.config?.url || '',
+            status: error?.response?.status || null,
+            statusText: error?.response?.statusText || '',
+            responseBody: stringifyForLog(error?.response?.data),
+            errorMessage: error?.message || ''
+        });
+        return Promise.reject(error);
+    }
+);
 
 async function generateServiceTitanToken(clientId, clientSecret) {
     const tokenUrl = process.env.SERVICETITAN_ACCESS_TOKEN_URI;
@@ -15,54 +41,13 @@ async function generateServiceTitanToken(clientId, clientSecret) {
         client_secret: clientSecret
     };
 
-    const authRes = await axios.post(
+    const authRes = await serviceTitanApiClient.post(
         tokenUrl,
         qs.stringify(tokenPayload),
         { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
 
     return authRes.data.access_token;
-}
-
-async function getLicenseStatus({ userId }) {
-    try {
-        const user = await UserModel.findByPk(userId);
-        if (!user) {
-            return {
-                isLicenseValid: false,
-                licenseStatus: 'User Not Found',
-                licenseStatusDescription: ''
-            };
-        }
-
-        const company = await models.companies.findOne({
-            where: {
-                hostname: user.hostname
-            },
-            raw: true
-        });
-
-        if (!company || company.status !== true) {
-            return {
-                isLicenseValid: false,
-                licenseStatus: 'Inactive',
-                licenseStatusDescription: 'Purchase license to continue'
-            };
-        }
-
-        return {
-            isLicenseValid: true,
-            licenseStatus: 'Active',
-            licenseStatusDescription: 'Basic'
-        };
-    } catch (error) {
-        console.error('getLicenseStatus error:', error);
-        return {
-            isLicenseValid: false,
-            licenseStatus: 'Error',
-            licenseStatusDescription: 'Error validating license'
-        };
-    }
 }
 
 async function validateLicenseOrFail(user) {
@@ -109,7 +94,7 @@ async function getRefreshedAuthToken(user) {
         client_secret: client_secret
     };
 
-    const authResponse = await axios.post(
+    const authResponse = await serviceTitanApiClient.post(
         tokenUrl,
         qs.stringify(data),
         {
@@ -158,7 +143,7 @@ async function fetchJobs({ user, params = {} }) {
         const tenantId = user.dataValues.platformAdditionalInfo.tenant;
         const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-        const resp = await axios.get(
+        const resp = await serviceTitanApiClient.get(
             `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`,
             {
                 headers: {
@@ -186,8 +171,9 @@ function upsertCallRecording({ body, recordingLink }) {
 }
 
 module.exports = {
+    stringifyForLog,
+    serviceTitanApiClient,
     generateServiceTitanToken,
-    getLicenseStatus,
     validateLicenseOrFail,
     getRefreshedAuthToken,
     formatContact,

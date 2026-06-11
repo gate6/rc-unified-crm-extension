@@ -1,6 +1,5 @@
-const axios = require('axios');
 const moment = require('moment');
-const { getRefreshedAuthToken, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, validateLicenseOrFail, serviceTitanApiClient } = require('../utils/serviceTitanHelpers');
 
 async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
     const licenseError = await validateLicenseOrFail(user);
@@ -24,7 +23,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         noteText = `Fax from ${contactInfo.name}\n\nDocument:\n${faxDocLink}`.trim();
     }
 
-    const addLogRes = await axios.post(
+    const addLogRes = await serviceTitanApiClient.post(
         `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
         { text: noteText },
         {

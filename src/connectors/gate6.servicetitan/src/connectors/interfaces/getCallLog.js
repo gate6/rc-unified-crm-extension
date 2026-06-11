@@ -1,6 +1,43 @@
-const axios = require('axios');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
-const { getRefreshedAuthToken, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, validateLicenseOrFail, serviceTitanApiClient } = require('../utils/serviceTitanHelpers');
+
+const SERVICE_TITAN_CRM_URL = 'https://api-integration.servicetitan.io/crm/v2/tenant';
+const SERVICE_TITAN_JPM_URL = 'https://api-integration.servicetitan.io/jpm/v2/tenant';
+
+/**
+ * Parses the plain-text note body written by createCallLog / updateCallLog.
+ *
+ * Expected format:
+ *   Subject: <value>
+ *   Direction: <value>
+ *   Start Time: <value>
+ *   End Time: <value>
+ *
+ *   Agent Notes:
+ *   <note text — may be multi-line with blank lines>
+ *
+ *   Result:
+ *   ...
+ */
+function parseNoteBody(body) {
+    const normalized = body.replace(/\r\n/g, '\n');
+
+    // Extract Subject — single line value after "Subject:"
+    const subjectMatch = normalized.match(/Subject:\s*([^\n]*)/);
+    let subject = subjectMatch?.[1]?.trim() || '';
+    // Guard: if subject accidentally bled into the next field, clear it
+    if (subject.toLowerCase().startsWith('direction:')) {
+        subject = '';
+    }
+
+    // Extract Agent Notes — NO multiline flag so $ = true end-of-string.
+    // Captures everything after "Agent Notes:\n" until the next section header
+    // (a line ending with ":\n", e.g. "Result:\n") or end of string.
+    const agentMatch = normalized.match(/Agent Notes:\n([\s\S]*?)(?=\n[A-Za-z][^\n]*:\n|$)/);
+    const note = agentMatch?.[1]?.trim() || '';
+
+    return { subject, note };
+}
 
 async function getCallLog({ user, callLogId, authHeader }) {
     const licenseError = await validateLicenseOrFail(user);
@@ -17,92 +54,74 @@ async function getCallLog({ user, callLogId, authHeader }) {
     let full_data = {};
 
     try {
+
+        // ---------------- JOB LOG ----------------
         if (logType === 'job') {
-            const jobRes = await axios.get(
-                `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${realId}`,
+
+            const jobRes = await serviceTitanApiClient.get(
+                `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,
                 {
-                    headers: { 'Authorization': `Bearer ${auth}`, 'ST-App-Key': stAppKey },
+                    headers: {
+                        Authorization: `Bearer ${auth}`,
+                        'ST-App-Key': stAppKey
+                    }
                 }
             );
 
-            const jobData = jobRes.data;
-            if (jobData) {
-                const summary = jobData.summary || '';
-
-                const subjectMarker = '<b>Subject</b><br>';
-                const subjectIndex = summary.indexOf(subjectMarker);
-                const agentNotesMarker = '<b>Agent Notes</b><br>';
-                const notesIndex = summary.indexOf(agentNotesMarker);
-                if (subjectIndex !== -1) {
-                    const subjectSection = summary.substring(subjectIndex + subjectMarker.length);
-                    const subjectSectionIndex = subjectSection.indexOf('\n\n<b>');
-                    subject = (subjectSectionIndex !== -1 ? subjectSection.substring(0, subjectSectionIndex) : subjectSection).trim();
-                }
-                if (notesIndex !== -1) {
-                    const notesSection = summary.substring(notesIndex + agentNotesMarker.length);
-                    const nextSectionIndex = notesSection.indexOf('\n\n<b>');
-                    note = (nextSectionIndex !== -1 ? notesSection.substring(0, nextSectionIndex) : notesSection).trim();
-                }
-
+            const summary = jobRes.data?.summary || '';
+            if (summary) {
+                ({ subject, note } = parseNoteBody(summary));
                 full_data = { subject, description: summary };
             }
-        } else {
+        }
+
+        // ---------------- NOTE LOG ----------------
+        else {
+
             const existingCallLogDetails = await CallLogModel.findOne({
-                where: { thirdPartyLogId: callLogId },
+                where: { thirdPartyLogId: callLogId }
             });
 
             if (!existingCallLogDetails) {
-                console.error(`Could not find call log with thirdPartyLogId: ${callLogId}`);
+                console.error(`[getCallLog] No DB record found for thirdPartyLogId: ${callLogId}`);
                 return { callLogInfo: { subject: '', note: '', fullLogResponse: {} } };
             }
 
             const { contactId } = existingCallLogDetails.dataValues;
-            const getLogRes = await axios.get(
-                `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+
+            const getLogRes = await serviceTitanApiClient.get(
+                `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
                 {
-                    headers: { 'Authorization': `Bearer ${auth}`, 'ST-App-Key': stAppKey },
+                    headers: {
+                        Authorization: `Bearer ${auth}`,
+                        'ST-App-Key': stAppKey
+                    }
                 }
             );
 
-            const logData = getLogRes.data;
-            if (Array.isArray(logData.data)) {
-                const targetLog = logData.data.find(log => log.id == realId);
-                if (targetLog) {
-                    try {
-                        let parsedText = targetLog.text;
-                        try { parsedText = JSON.parse(targetLog.text); } catch {}
-                        subject = parsedText.subject || '';
-                        const description = parsedText.description || '';
+            if (Array.isArray(getLogRes.data?.data)) {
+                const targetLog = getLogRes.data.data.find(log => log.id == realId);
 
-                        const agentNotesMarker = '<b>Agent Notes</b><br>';
-                        const notesIndex = description.indexOf(agentNotesMarker);
-
-                        if (notesIndex !== -1) {
-                            const notesSection = description.substring(notesIndex + agentNotesMarker.length);
-                            const nextSectionIndex = notesSection.indexOf('\n\n<b>');
-                            note = (nextSectionIndex !== -1 ? notesSection.substring(0, nextSectionIndex) : notesSection).trim();
-                        } else {
-                            note = description;
-                        }
-
-                        full_data = parsedText;
-                    } catch (err) {
-                        console.error('Error parsing note text:', err);
-                        note = targetLog.text;
-                    }
+                if (targetLog?.text) {
+                    ({ subject, note } = parseNoteBody(targetLog.text));
+                    full_data = targetLog.text;
                 }
             }
         }
+
     } catch (error) {
-        console.error(`Failed to get call log for ${callLogId}:`, error?.response?.data || error.message);
+        console.error(
+            `[getCallLog] Failed to fetch call log for ${callLogId}:`,
+            error?.response?.data || error.message
+        );
     }
 
     return {
         callLogInfo: {
             subject,
-            fullLogResponse: full_data,
             note,
-        },
+            fullLogResponse: full_data
+        }
     };
 }
 

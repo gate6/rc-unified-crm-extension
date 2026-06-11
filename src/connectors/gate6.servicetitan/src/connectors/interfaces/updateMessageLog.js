@@ -1,7 +1,6 @@
-const axios = require('axios');
 const moment = require('moment');
 const { MessageLogModel } = require('@app-connect/core/models/messageLogModel');
-const { getRefreshedAuthToken, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, validateLicenseOrFail, serviceTitanApiClient } = require('../utils/serviceTitanHelpers');
 
 const SERVICE_TITAN_CRM_URL = "https://api-integration.servicetitan.io/crm/v2/tenant";
 
@@ -20,7 +19,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     let noteText = "";
 
     if (messageType === "SMS") {
-        const getLogRes = await axios.get(
+        const getLogRes = await serviceTitanApiClient.get(
             `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
             {
                 headers: {
@@ -60,7 +59,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         noteText = `Fax from ${contactInfo.name}\n\nDocument:\n${faxDocLink}`.trim();
     }
 
-    const addLogRes = await axios.post(
+    const addLogRes = await serviceTitanApiClient.post(
         `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
         { text: noteText },
         {

@@ -1,6 +1,5 @@
-const axios = require('axios');
 const { parsePhoneNumber } = require('awesome-phonenumber');
-const { getRefreshedAuthToken, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, validateLicenseOrFail, serviceTitanApiClient } = require('../utils/serviceTitanHelpers');
 
 async function createContact({ user, phoneNumber, newContactName }) {
     const licenseError = await validateLicenseOrFail(user);
@@ -56,7 +55,7 @@ async function createContact({ user, phoneNumber, newContactName }) {
             ],
         };
 
-        const response = await axios.post(
+        const response = await serviceTitanApiClient.post(
             `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers`,
             payload,
             {

@@ -1,5 +1,4 @@
-const axios = require('axios');
-const { getRefreshedAuthToken, formatContact, validateLicenseOrFail } = require('../utils/serviceTitanHelpers');
+const { getRefreshedAuthToken, formatContact, validateLicenseOrFail, serviceTitanApiClient } = require('../utils/serviceTitanHelpers');
 
 async function findContactWithName({ user, name }) {
     const licenseError = await validateLicenseOrFail(user);
@@ -20,7 +19,7 @@ async function findContactWithName({ user, name }) {
     }
 
     try {
-        const personInfo = await axios.get(
+        const personInfo = await serviceTitanApiClient.get(
             `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers?name=${name}`,
             {
                 headers: {

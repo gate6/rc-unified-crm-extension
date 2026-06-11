@@ -37,7 +37,6 @@ async function getUserInfo(authHeader) {
       clientId,
       clientSecret,
       maxAllowedUsers,
-      status,
       tenantId,
       apiKey : stAppKey,
       customers = []
@@ -54,23 +53,6 @@ async function getUserInfo(authHeader) {
       };
     }
 
-    if (status !== true) {
-      return {
-        successful: false,
-        platformUserInfo: {
-          id: "",
-          name: "",
-          timezoneName: "",
-          timezoneOffset: "",
-          platformAdditionalInfo: {}
-        },
-        returnMessage: {
-          messageType: 'danger',
-          message: 'You do not have an active license. Please contact us.',
-          ttl: 3000
-        }
-      };
-    }
 
     let customer = customers.find(c => c.email === email);
     const accessToken = await generateServiceTitanToken(clientId, clientSecret);
