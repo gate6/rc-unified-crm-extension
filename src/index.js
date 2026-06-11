@@ -47,7 +47,6 @@ connectorRegistry.registerConnector('servicenow-cmscpi', servicenow, require('./
 connectorRegistry.registerConnector('proxy', proxyConnector);
 connectorRegistry.registerConnector('monday', monday, require('./connectors/monday/manifest.json'));
 connectorRegistry.registerConnector('monday-QA', monday, require('./connectors/monday-QA/manifest.json'));
-connectorRegistry.registerConnector('agencyzoom', agencyzoom, require('./connectors/agencyzoom/manifest.json'));
 
 // Create Express app with core functionality
 const app = createCoreApp();
