@@ -50,91 +50,91 @@ describe('callLogComposer', () => {
         });
     });
 
-    describe('RingSense upserts', () => {
+    describe('ACE upserts', () => {
         describe('upsertRingSenseTranscript', () => {
             describe('HTML format', () => {
-                test('should add RingSense transcript', () => {
+                test('should add ACE transcript', () => {
                     const result = upsertRingSenseTranscript({
                         body: '',
                         transcript: 'RS transcript',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
                     });
-                    expect(result).toBe('<div><b>RingSense transcript</b><br>RS transcript</div>');
+                    expect(result).toBe('<div><b>ACE transcript</b><br>RS transcript</div>');
                 });
 
-                test('should replace existing RingSense transcript', () => {
-                    const body = '<div><b>RingSense transcript</b><br>Old</div>';
+                test('should replace existing ACE transcript', () => {
+                    const body = '<div><b>ACE transcript</b><br>Old</div>';
                     const result = upsertRingSenseTranscript({
                         body,
                         transcript: 'New',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
                     });
-                    expect(result).toBe('<div><b>RingSense transcript</b><br>New</div>');
+                    expect(result).toBe('<div><b>ACE transcript</b><br>New</div>');
                 });
             });
 
             describe('Plain text format', () => {
-                test('should add RingSense transcript', () => {
+                test('should add ACE transcript', () => {
                     const result = upsertRingSenseTranscript({
                         body: '',
                         transcript: 'RS transcript',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT
                     });
-                    expect(result).toBe('\n- RingSense transcript:\nRS transcript\n--- END\n');
+                    expect(result).toBe('\n- ACE transcript:\nRS transcript\n--- END\n');
                 });
 
-                test('should replace existing RingSense transcript', () => {
-                    const body = '- RingSense transcript:\nOld transcript\n--- END\n';
+                test('should replace existing ACE transcript', () => {
+                    const body = '- ACE transcript:\nOld transcript\n--- END\n';
                     const result = upsertRingSenseTranscript({
                         body,
                         transcript: 'New transcript',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT
                     });
-                    expect(result).toBe('- RingSense transcript:\nNew transcript\n--- END\n');
+                    expect(result).toBe('- ACE transcript:\nNew transcript\n--- END\n');
                 });
             });
         });
 
         describe('upsertRingSenseSummary', () => {
             describe('HTML format', () => {
-                test('should add RingSense summary', () => {
+                test('should add ACE summary', () => {
                     const result = upsertRingSenseSummary({
                         body: '',
                         summary: 'Summary line 1\nSummary line 2',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
                     });
-                    expect(result).toBe('<div><b>RingSense summary</b><br>Summary line 1<br>Summary line 2</div>');
+                    expect(result).toBe('<div><b>ACE summary</b><br>Summary line 1<br>Summary line 2</div>');
                 });
 
-                test('should replace existing RingSense summary', () => {
-                    const body = '<div><b>RingSense summary</b><br>Old</div>';
+                test('should replace existing ACE summary', () => {
+                    const body = '<div><b>ACE summary</b><br>Old</div>';
                     const result = upsertRingSenseSummary({
                         body,
                         summary: 'New',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
                     });
-                    expect(result).toBe('<div><b>RingSense summary</b><br>New</div>');
+                    expect(result).toBe('<div><b>ACE summary</b><br>New</div>');
                 });
             });
 
             describe('Plain text format', () => {
-                test('should add RingSense summary', () => {
+                test('should add ACE summary', () => {
                     const result = upsertRingSenseSummary({
                         body: '',
                         summary: 'Point A\nPoint B',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT
                     });
-                    expect(result).toBe('\n- RingSense summary:\nPoint A\nPoint B\n--- END\n');
+                    expect(result).toBe('\n- ACE summary:\nPoint A\nPoint B\n--- END\n');
                 });
 
-                test('should replace existing RingSense summary', () => {
-                    const body = '- RingSense summary:\nOld \nsum\n--- END\n';
+                test('should replace existing ACE summary', () => {
+                    const body = '- ACE summary:\nOld \nsum\n--- END\n';
                     const result = upsertRingSenseSummary({
                         body,
                         summary: 'New sum',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT
                     });
-                    expect(result).toBe('- RingSense summary:\nNew sum\n--- END\n');
+                    expect(result).toBe('- ACE summary:\nNew sum\n--- END\n');
                 });
             });
         });
@@ -185,79 +185,79 @@ describe('callLogComposer', () => {
 
         describe('upsertRingSenseBulletedSummary', () => {
             describe('HTML format', () => {
-                test('should add RingSense bulleted summary', () => {
+                test('should add ACE bulleted summary', () => {
                     const result = upsertRingSenseBulletedSummary({
                         body: '',
                         summary: '- Point 1\n- Point 2',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
                     });
-                    expect(result).toBe('<div><b>RingSense bulleted summary</b><br>- Point 1<br>- Point 2</div>');
+                    expect(result).toBe('<div><b>ACE bulleted summary</b><br>- Point 1<br>- Point 2</div>');
                 });
 
-                test('should replace existing RingSense bulleted summary', () => {
-                    const body = '<div><b>RingSense bulleted summary</b><br>Old</div>';
+                test('should replace existing ACE bulleted summary', () => {
+                    const body = '<div><b>ACE bulleted summary</b><br>Old</div>';
                     const result = upsertRingSenseBulletedSummary({
                         body,
                         summary: '- New',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
                     });
-                    expect(result).toBe('<div><b>RingSense bulleted summary</b><br>- New</div>');
+                    expect(result).toBe('<div><b>ACE bulleted summary</b><br>- New</div>');
                 });
             });
 
             describe('Plain text format', () => {
-                test('should add RingSense bulleted summary', () => {
+                test('should add ACE bulleted summary', () => {
                     const result = upsertRingSenseBulletedSummary({
                         body: '',
                         summary: '- A\n- B',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT
                     });
-                    expect(result).toBe('\n- RingSense bulleted summary:\n- A\n- B\n--- END\n');
+                    expect(result).toBe('\n- ACE bulleted summary:\n- A\n- B\n--- END\n');
                 });
             });
         });
 
         describe('upsertRingSenseLink', () => {
             describe('HTML format', () => {
-                test('should add RingSense recording link', () => {
+                test('should add ACE recording link', () => {
                     const result = upsertRingSenseLink({
                         body: '',
                         link: 'https://ringsense.example.com/rec/123',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
                     });
-                    expect(result).toBe('<li><b>RingSense recording link</b>: <a target="_blank" href="https://ringsense.example.com/rec/123">open</a></li>');
+                    expect(result).toBe('<li><b>ACE recording link</b>: <a target="_blank" href="https://ringsense.example.com/rec/123">open</a></li>');
                 });
 
-                test('should replace existing RingSense recording link', () => {
-                    const body = '<li><b>RingSense recording link</b>: <a target="_blank" href="https://old.link">open</a></li>';
+                test('should replace existing ACE recording link', () => {
+                    const body = '<li><b>ACE recording link</b>: <a target="_blank" href="https://old.link">open</a></li>';
                     const result = upsertRingSenseLink({
                         body,
                         link: 'https://ringsense.example.com/new',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
                     });
-                    expect(result).toBe('<li><b>RingSense recording link</b>: <a target="_blank" href="https://ringsense.example.com/new">open</a></li>');
+                    expect(result).toBe('<li><b>ACE recording link</b>: <a target="_blank" href="https://ringsense.example.com/new">open</a></li>');
                 });
             });
 
             describe('Plain text format', () => {
-                test('should add RingSense recording link', () => {
+                test('should add ACE recording link', () => {
                     const result = upsertRingSenseLink({
                         body: '',
                         link: 'https://ringsense.example.com/rec/456',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT
                     });
-                    expect(result).toBe('- RingSense recording link: https://ringsense.example.com/rec/456\n');
+                    expect(result).toBe('- ACE recording link: https://ringsense.example.com/rec/456\n');
                 });
 
-                test('should replace existing RingSense recording link', () => {
-                    const body = '- RingSense recording link: https://old.link\n- Duration: 30 seconds\n';
+                test('should replace existing ACE recording link', () => {
+                    const body = '- ACE recording link: https://old.link\n- Duration: 30 seconds\n';
                     const result = upsertRingSenseLink({
                         body,
                         link: 'https://ringsense.example.com/new',
                         logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT
                     });
                     console.log(result);
-                    expect(result).toBe('- RingSense recording link: https://ringsense.example.com/new\n- Duration: 30 seconds\n');
+                    expect(result).toBe('- ACE recording link: https://ringsense.example.com/new\n- Duration: 30 seconds\n');
                 });
             });
         });
@@ -503,7 +503,33 @@ describe('callLogComposer', () => {
                     timezoneOffset: '+05:30',
                     logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
                 });
-                expect(result).toMatch(/<li><b>Date\/time<\/b>: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [AP]M<\/li>/);
+                expect(result).toBe(
+                    '<li><b>Date/time</b>: 2023-01-01 05:30:00 PM</li>'
+                );
+            });
+
+            test('should add datetime with numeric timezone offset', () => {
+                const result = upsertCallDateTime({
+                    body: '',
+                    startTime: testDate,
+                    timezoneOffset: 330,
+                    logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
+                });
+                expect(result).toBe(
+                    '<li><b>Date/time</b>: 2023-01-01 05:30:00 PM</li>'
+                );
+            });
+
+            test('should add datetime with different format timezone offset', () => {
+                const result = upsertCallDateTime({
+                    body: '',
+                    startTime: testDate,
+                    timezoneOffset: '-4',
+                    logFormat: LOG_DETAILS_FORMAT_TYPE.HTML
+                });
+                expect(result).toBe(
+                    '<li><b>Date/time</b>: 2023-01-01 08:00:00 AM</li>'
+                );
             });
 
             test('should replace existing datetime', () => {
@@ -934,7 +960,7 @@ describe('callLogComposer', () => {
                 addCallLogDuration: { value: true },
                 addCallLogResult: { value: true },
                 addCallLogRecording: { value: true },
-                addCallLogAINote: { value: true },
+                addCallLogAiNote: { value: true },
                 addCallLogTranscript: { value: true },
                 addCallSessionId: { value: true },
                 addCallLogContactNumber: { value: true }
@@ -955,7 +981,7 @@ describe('callLogComposer', () => {
         };
 
         test('should compose complete call log with all fields in HTML format', async () => {
-            const result = await composeCallLog({
+            const result = composeCallLog({
                 logFormat: LOG_DETAILS_FORMAT_TYPE.HTML,
                 callLog: mockCallLog,
                 contactInfo: mockContactInfo,
@@ -983,7 +1009,7 @@ describe('callLogComposer', () => {
         });
 
         test('should compose complete call log with all fields in plain text format', async () => {
-            const result = await composeCallLog({
+            const result = composeCallLog({
                 logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT,
                 callLog: mockCallLog,
                 contactInfo: mockContactInfo,
@@ -1020,7 +1046,7 @@ describe('callLogComposer', () => {
                 }
             };
 
-            const result = await composeCallLog({
+            const result = composeCallLog({
                 logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT,
                 callLog: mockCallLog,
                 contactInfo: mockContactInfo,
@@ -1043,7 +1069,7 @@ describe('callLogComposer', () => {
                 userSettings: {}
             };
 
-            const result = await composeCallLog({
+            const result = composeCallLog({
                 logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT,
                 callLog: mockCallLog,
                 contactInfo: mockContactInfo,
@@ -1063,7 +1089,7 @@ describe('callLogComposer', () => {
 
         test('should handle updating existing body', async () => {
             const existingBody = '- Note: Old note\n- Duration: 30 seconds\n';
-            const result = await composeCallLog({
+            const result = composeCallLog({
                 logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT,
                 existingBody,
                 callLog: mockCallLog,
@@ -1078,8 +1104,8 @@ describe('callLogComposer', () => {
             expect(result).toContain('- Duration: 1 minute, 30 seconds'); // Should be updated
         });
 
-        test('should include RingSense fields when provided in HTML format', async () => {
-            const result = await composeCallLog({
+        test('should include ACE fields when provided in HTML format', async () => {
+            const result = composeCallLog({
                 logFormat: LOG_DETAILS_FORMAT_TYPE.HTML,
                 callLog: mockCallLog,
                 contactInfo: mockContactInfo,
@@ -1091,16 +1117,16 @@ describe('callLogComposer', () => {
                 ringSenseLink: 'https://ringsense.example.com/rec/789'
             });
 
-            expect(result).toContain('<b>RingSense transcript</b>');
+            expect(result).toContain('<b>ACE transcript</b>');
             expect(result).toContain('RS transcript');
-            expect(result).toContain('<b>RingSense summary</b>');
+            expect(result).toContain('<b>ACE summary</b>');
             expect(result).toContain('RS summary');
             expect(result).toContain('<b>Call score</b>: 85');
-            expect(result).toContain('<b>RingSense bulleted summary</b>');
+            expect(result).toContain('<b>ACE bulleted summary</b>');
             expect(result).toContain('<a target="_blank" href="https://ringsense.example.com/rec/789">open</a>');
         });
 
-        test('should respect RingSense user settings and skip disabled RingSense fields', async () => {
+        test('should respect ACE user settings and skip disabled ACE fields', async () => {
             const userWithDisabledRingSense = {
                 ...mockUser,
                 userSettings: {
@@ -1113,7 +1139,7 @@ describe('callLogComposer', () => {
                 }
             };
 
-            const result = await composeCallLog({
+            const result = composeCallLog({
                 logFormat: LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT,
                 callLog: mockCallLog,
                 contactInfo: mockContactInfo,
@@ -1125,11 +1151,11 @@ describe('callLogComposer', () => {
                 ringSenseLink: 'https://ringsense.example.com/rec/789'
             });
 
-            expect(result).not.toContain('- RingSense transcript:');
-            expect(result).not.toContain('- RingSense summary:');
+            expect(result).not.toContain('- ACE transcript:');
+            expect(result).not.toContain('- ACE summary:');
             expect(result).not.toContain('- Call score:');
-            expect(result).not.toContain('- RingSense bulleted summary:');
-            expect(result).not.toContain('- RingSense recording link:');
+            expect(result).not.toContain('- ACE bulleted summary:');
+            expect(result).not.toContain('- ACE recording link:');
         });
     });
 }); 

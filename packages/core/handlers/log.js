@@ -2,23 +2,67 @@ const Op = require('sequelize').Op;
 const { CallLogModel } = require('../models/callLogModel');
 const { MessageLogModel } = require('../models/messageLogModel');
 const { UserModel } = require('../models/userModel');
+const { CacheModel } = require('../models/cacheModel');
 const oauth = require('../lib/oauth');
-const errorMessage = require('../lib/generalErrorMessage');
 const { composeCallLog } = require('../lib/callLogComposer');
+const { composeSharedSMSLog } = require('../lib/sharedSMSComposer');
 const connectorRegistry = require('../connector/registry');
 const { LOG_DETAILS_FORMAT_TYPE } = require('../lib/constants');
 const { NoteCache } = require('../models/dynamo/noteCacheSchema');
 const { Connector } = require('../models/dynamo/connectorSchema');
 const moment = require('moment');
 const { getMediaReaderLinkByPlatformMediaLink } = require('../lib/util');
+const axios = require('axios');
+const { getPluginsFromUserSettings } = require('../lib/util');
+const logger = require('../lib/logger');
+const { handleApiError, handleDatabaseError } = require('../lib/errorHandler');
+const { v4: uuidv4 } = require('uuid');
+const { AccountDataModel } = require('../models/accountDataModel');
+const pluginCore = require('./plugin');
+const {
+    getCallLogExtensionNumber,
+    buildCallLogSessionWhere,
+    findMatchingCallLog,
+} = require('../lib/callLogLookup');
+
+function mergePluginWarnings({ returnMessage, warningMessages }) {
+    if (!warningMessages.length) {
+        return returnMessage;
+    }
+    const warningMessage = warningMessages.join(' ');
+    if (!returnMessage) {
+        return {
+            message: warningMessage,
+            messageType: 'warning',
+            ttl: 5000,
+        };
+    }
+    return {
+        ...returnMessage,
+        message: `${returnMessage.message || ''} ${warningMessage}`.trim(),
+        messageType: returnMessage.messageType === 'error' ? 'error' : 'warning',
+    };
+}
+
+function getPluginWarningMessage({ pluginId }) {
+    return `Plugin ${pluginId} skipped: missing account-level plugin jwtToken. Reinstall or re-register plugin.`;
+}
 
 async function createCallLog({ platform, userId, incomingData, hashedAccountId, isFromSSCL }) {
     try {
-        const existingCallLog = await CallLogModel.findOne({
-            where: {
-                sessionId: incomingData.logInfo.sessionId
-            }
-        });
+        const extensionNumber = getCallLogExtensionNumber(incomingData);
+        let existingCallLog = null;
+        try {
+            existingCallLog = await CallLogModel.findOne({
+                where: buildCallLogSessionWhere({
+                    sessionId: incomingData.logInfo.sessionId,
+                    extensionNumber,
+                })
+            });
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error finding existing call log');
+        }
         if (existingCallLog) {
             return {
                 successful: false,
@@ -29,7 +73,13 @@ async function createCallLog({ platform, userId, incomingData, hashedAccountId, 
                 }
             }
         }
-        let user = await UserModel.findByPk(userId);
+        let user = null;
+        try {
+            user = await UserModel.findByPk(userId);
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error finding user');
+        }
         if (!user || !user.accessToken) {
             return {
                 successful: false,
@@ -40,6 +90,7 @@ async function createCallLog({ platform, userId, incomingData, hashedAccountId, 
                 }
             };
         }
+
         const platformModule = connectorRegistry.getConnector(platform);
         const callLog = incomingData.logInfo;
         const additionalSubmission = incomingData.additionalSubmission;
@@ -63,6 +114,17 @@ async function createCallLog({ platform, userId, incomingData, hashedAccountId, 
             case 'oauth':
                 const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname, proxyId, proxyConfig })));
                 user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
+                if (!user) {
+                    return {
+                        successful: false,
+                        returnMessage: {
+                            message: `User session expired. Please connect again.`,
+                            messageType: 'warning',
+                            ttl: 5000
+                        },
+                        isRevokeUserSession: true
+                    }
+                }
                 authHeader = `Bearer ${user.accessToken}`;
                 break;
             case 'apiKey':
@@ -88,12 +150,92 @@ async function createCallLog({ platform, userId, incomingData, hashedAccountId, 
             type: incomingData.contactType ?? "",
             name: incomingData.contactName ?? ""
         };
-        
+
+
+        const pluginAsyncTaskIds = [];
+        const pluginWarnings = [];
+        // Plugins
+        const accountPlugins = await pluginCore.getPluginsFromRcAccountId({ rcAccountId: user.rcAccountId });
+        const callPlugins = accountPlugins.filter(plugin => plugin.data.supportedLogTypes.includes('call'));
+        for (const plugin of callPlugins) {
+            const pluginId = plugin.id;
+            const pluginJwtToken = plugin.data.jwtToken;
+            const pluginManifest = plugin.data;
+            const pluginEndpointUrl = pluginManifest.endpointUrl;
+            if (!pluginEndpointUrl) {
+                throw new Error('Plugin URL is not set');
+            }
+            const userConfig = pluginCore.getPluginConfigFromUserSettings({ userSettings: user.userSettings, pluginId });
+            if (plugin.data.isAsync) {
+                const asyncTaskId = `${userId}-${uuidv4()}`;
+                pluginAsyncTaskIds.push(asyncTaskId);
+                await CacheModel.create({
+                    id: asyncTaskId,
+                    status: 'initialized',
+                    userId,
+                    cacheKey: `pluginTask-${plugin.data.name}`,
+                    expiry: moment().add(1, 'hour').toDate()
+                });
+                try {
+                    const syncPluginTokenResponse = await axios.post(plugin.data.tokenSyncUrl, {},
+                        {
+                            headers: {
+                                Authorization: `Bearer ${pluginJwtToken}`,
+                            }
+                        }
+                    )
+                    const syncedPluginJwtToken = pluginCore.getRefreshedJwtTokenFromHeaders({ headers: syncPluginTokenResponse.headers });
+                    axios.post(pluginEndpointUrl, {
+                        data: incomingData,
+                        config: userConfig,
+                        asyncTaskId
+                    }, {
+                        headers: {
+                            Authorization: `Bearer ${syncedPluginJwtToken ?? pluginJwtToken}`,
+                        },
+                    });
+                    if (syncedPluginJwtToken) {
+                        pluginCore.persistPluginData({
+                            rcAccountId: user.rcAccountId,
+                            platformName: platform,
+                            pluginId,
+                            jwtToken: syncedPluginJwtToken,
+                        });
+                    }
+                }
+                catch (error) {
+                    logger.error('Error syncing plugin JWT token', { stack: error.stack });
+                }
+            }
+            else {
+                const processedResultResponse = await axios.post(pluginEndpointUrl, {
+                    data: incomingData,
+                    config: userConfig,
+                }, {
+                    headers: {
+                        Authorization: `Bearer ${pluginJwtToken}`,
+                    },
+                });
+                const refreshedPluginJwtToken = pluginCore.getRefreshedJwtTokenFromHeaders({ headers: processedResultResponse.headers });
+                if (refreshedPluginJwtToken) {
+                    pluginCore.persistPluginData({
+                        rcAccountId: user.rcAccountId,
+                        platformName: platform,
+                        pluginId,
+                        jwtToken: refreshedPluginJwtToken,
+                    });
+                }
+                // eslint-disable-next-line no-param-reassign
+                incomingData = processedResultResponse.data;
+                note = incomingData.note;
+            }
+        }
+
         // Compose call log details centrally
         const logFormat = platformModule.getLogFormatType ? platformModule.getLogFormatType(platform, proxyConfig) : LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT;
         let composedLogDetails = '';
         if (logFormat === LOG_DETAILS_FORMAT_TYPE.PLAIN_TEXT || logFormat === LOG_DETAILS_FORMAT_TYPE.HTML || logFormat === LOG_DETAILS_FORMAT_TYPE.MARKDOWN) {
-            composedLogDetails = await composeCallLog({
+            composedLogDetails = composeCallLog({
                 logFormat,
                 callLog,
                 contactInfo,
@@ -115,7 +257,7 @@ async function createCallLog({ platform, userId, incomingData, hashedAccountId, 
             });
         }
 
-        const { logId, returnMessage, extraDataTracking } = await platformModule.createCallLog({
+        let { logId, returnMessage, extraDataTracking } = await platformModule.createCallLog({
             user,
             contactInfo,
             authHeader,
@@ -134,59 +276,46 @@ async function createCallLog({ platform, userId, incomingData, hashedAccountId, 
             isFromSSCL,
             proxyConfig,
         });
+        if (!extraDataTracking) {
+            extraDataTracking = {};
+        }
+        extraDataTracking.withSmartNoteLog = !!aiNote;
+        extraDataTracking.withTranscript = !!transcript;
         if (logId) {
-            await CallLogModel.create({
-                id: incomingData.logInfo.telephonySessionId || incomingData.logInfo.id,
-                sessionId: incomingData.logInfo.sessionId,
-                platform,
-                thirdPartyLogId: logId,
-                userId,
-                contactId
-            });
-        }
-        return { successful: !!logId, logId, returnMessage, extraDataTracking };
-    } catch (e) {
-        console.error(`platform: ${platform} \n${e.stack} \n${JSON.stringify(e.response?.data)}`);
-        if (e.response?.status === 429) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.rateLimitErrorMessage({ platform })
-            };
-        }
-        else if (e.response?.status >= 400 && e.response?.status < 410) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.authorizationErrorMessage({ platform }),
-                extraDataTracking: {
-                    statusCode: e.response?.status,
-                }
-            };
-        }
-        return {
-            successful: false,
-            returnMessage:
-            {
-                message: `Error creating call log`,
-                messageType: 'warning',
-                details: [
-                    {
-                        title: 'Details',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: `Please check if your account has permission to CREATE logs.`
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
+            try {
+                await CallLogModel.create({
+                    id: incomingData.logInfo.telephonySessionId || incomingData.logInfo.id,
+                    sessionId: incomingData.logInfo.sessionId,
+                    extensionNumber,
+                    platform,
+                    thirdPartyLogId: logId,
+                    userId,
+                    contactId
+                });
             }
-        };
+            catch (error) {
+                return handleDatabaseError(error, 'Error creating call log');
+            }
+            return {
+                successful: !!logId,
+                logId,
+                returnMessage: mergePluginWarnings({ returnMessage, warningMessages: pluginWarnings }),
+                extraDataTracking,
+                pluginAsyncTaskIds
+            };
+        }
+        else {
+            return {
+                successful: false,
+                returnMessage
+            };
+        }
+    } catch (e) {
+        return handleApiError(e, platform, 'createCallLog', { userId });
     }
 }
 
-async function getCallLog({ userId, sessionIds, platform, requireDetails }) {
+async function getCallLog({ userId, sessionIds, extensionNumber, platform, requireDetails }) {
     try {
         let user = await UserModel.findByPk(userId);
         if (!user || !user.accessToken) {
@@ -194,7 +323,7 @@ async function getCallLog({ userId, sessionIds, platform, requireDetails }) {
         }
         let logs = [];
         let returnMessage = null;
-        let extraDataTracking = {};;
+        let extraDataTracking = {};
 
         // Handle undefined or null sessionIds
         if (!sessionIds) {
@@ -205,6 +334,7 @@ async function getCallLog({ userId, sessionIds, platform, requireDetails }) {
         if (sessionIdsArray.length > 5) {
             sessionIdsArray = sessionIdsArray.slice(0, 5);
         }
+
         if (requireDetails) {
             const proxyId = user.platformAdditionalInfo?.proxyId;
             let proxyConfig = null;
@@ -218,6 +348,17 @@ async function getCallLog({ userId, sessionIds, platform, requireDetails }) {
                 case 'oauth':
                     const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname, proxyId, proxyConfig })));
                     user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
+                    if (!user) {
+                        return {
+                            successful: false,
+                            returnMessage: {
+                                message: `User session expired. Please connect again.`,
+                                messageType: 'warning',
+                                ttl: 5000
+                            },
+                            isRevokeUserSession: true
+                        }
+                    }
                     authHeader = `Bearer ${user.accessToken}`;
                     break;
                 case 'apiKey':
@@ -226,24 +367,23 @@ async function getCallLog({ userId, sessionIds, platform, requireDetails }) {
                     break;
             }
             const callLogs = await CallLogModel.findAll({
-                where: {
-                    sessionId: {
-                        [Op.in]: sessionIdsArray
-                    }
-                }
+                where: buildCallLogSessionWhere({
+                    sessionIds: sessionIdsArray,
+                    extensionNumber,
+                }),
+                order: [['extensionNumber', 'ASC']]
             });
             for (const sId of sessionIdsArray) {
-                if(sId == 0)
-                {
+                if (sId == 0) {
                     logs.push({ sessionId: sId, matched: false });
                     continue;
                 }
-                const callLog = callLogs.find(c => c.sessionId === sId);
+                const callLog = findMatchingCallLog(callLogs, sId, extensionNumber);
                 if (!callLog) {
                     logs.push({ sessionId: sId, matched: false });
                 }
                 else {
-                    const getCallLogResult = await platformModule.getCallLog({ user, callLogId: callLog.thirdPartyLogId, contactId: callLog.contactId, authHeader, proxyConfig });
+                    const getCallLogResult = await platformModule.getCallLog({ user, telephonySessionId: callLog.id, callLogId: callLog.thirdPartyLogId, contactId: callLog.contactId, authHeader, proxyConfig });
                     returnMessage = getCallLogResult.returnMessage;
                     extraDataTracking = getCallLogResult.extraDataTracking;
                     logs.push({ sessionId: callLog.sessionId, matched: true, logId: callLog.thirdPartyLogId, logData: getCallLogResult.callLogInfo });
@@ -252,14 +392,14 @@ async function getCallLog({ userId, sessionIds, platform, requireDetails }) {
         }
         else {
             const callLogs = await CallLogModel.findAll({
-                where: {
-                    sessionId: {
-                        [Op.in]: sessionIdsArray
-                    }
-                }
+                where: buildCallLogSessionWhere({
+                    sessionIds: sessionIdsArray,
+                    extensionNumber,
+                }),
+                order: [['extensionNumber', 'ASC']]
             });
             for (const sId of sessionIdsArray) {
-                const callLog = callLogs.find(c => c.sessionId === sId);
+                const callLog = findMatchingCallLog(callLogs, sId, extensionNumber);
                 if (!callLog) {
                     logs.push({ sessionId: sId, matched: false });
                 }
@@ -271,65 +411,31 @@ async function getCallLog({ userId, sessionIds, platform, requireDetails }) {
         return { successful: true, logs, returnMessage, extraDataTracking };
     }
     catch (e) {
-        console.error(`platform: ${platform} \n${e.stack} \n${JSON.stringify(e.response?.data)}`);
-        if (e.response?.status === 429) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.rateLimitErrorMessage({ platform }),
-                extraDataTracking: {
-                    statusCode: e.response?.status,
-                }
-            };
-        }
-        else if (e.response?.status >= 400 && e.response?.status < 410) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.authorizationErrorMessage({ platform }),
-                extraDataTracking: {
-                    statusCode: e.response?.status,
-                }
-            };
-        }
-        return {
-            successful: false,
-            returnMessage:
-            {
-                message: `Error getting call log`,
-                messageType: 'warning',
-                details: [
-                    {
-                        title: 'Details',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: `Please check if your account has permission to CREATE logs.`
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            },
-            extraDataTracking: {
-                statusCode: e.response?.status,
-            }
-        };
+        return handleApiError(e, platform, 'getCallLog', { userId, sessionIds, requireDetails, extensionNumber });
     }
 }
 
 async function updateCallLog({ platform, userId, incomingData, hashedAccountId, isFromSSCL }) {
     try {
-        const existingCallLog = await CallLogModel.findOne({
-            where: {
-                sessionId: incomingData.sessionId
-            }
-        });
+        const extensionNumber = getCallLogExtensionNumber(incomingData);
+        let existingCallLog = null;
+        try {
+            existingCallLog = await CallLogModel.findOne({
+                where: buildCallLogSessionWhere({
+                    sessionId: incomingData.sessionId,
+                    extensionNumber,
+                })
+            });
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error finding existing call log');
+        }
         if (existingCallLog) {
-            const platformModule = connectorRegistry.getConnector(platform);
             let user = await UserModel.findByPk(userId);
             if (!user || !user.accessToken) {
                 return { successful: false, message: `Contact not found` };
             }
+            const platformModule = connectorRegistry.getConnector(platform);
             const proxyId = user.platformAdditionalInfo?.proxyId;
             let proxyConfig = null;
             if (proxyId) {
@@ -341,12 +447,101 @@ async function updateCallLog({ platform, userId, incomingData, hashedAccountId, 
                 case 'oauth':
                     const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname, proxyId, proxyConfig })));
                     user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
+                    if (!user) {
+                        return {
+                            successful: false,
+                            returnMessage: {
+                                message: `User session expired. Please connect again.`,
+                                messageType: 'warning',
+                                ttl: 5000
+                            },
+                            isRevokeUserSession: true
+                        }
+                    }
                     authHeader = `Bearer ${user.accessToken}`;
                     break;
                 case 'apiKey':
                     const basicAuth = platformModule.getBasicAuth({ apiKey: user.accessToken });
                     authHeader = `Basic ${basicAuth}`;
                     break;
+            }
+
+            const pluginAsyncTaskIds = [];
+            const pluginWarnings = [];
+            // Plugins
+            const accountPlugins = await pluginCore.getPluginsFromRcAccountId({ rcAccountId: user.rcAccountId });
+            const callPlugins = accountPlugins.filter(plugin => plugin.data.supportedLogTypes.includes('call'));
+            for (const plugin of callPlugins) {
+                const pluginId = plugin.id;
+                const pluginJwtToken = plugin.data.jwtToken;
+                const pluginManifest = plugin.data;
+                const pluginEndpointUrl = pluginManifest.endpointUrl;
+                if (!pluginEndpointUrl) {
+                    throw new Error('Plugin URL is not set');
+                }
+                const userConfig = pluginCore.getPluginConfigFromUserSettings({ userSettings: user.userSettings, pluginId });
+                if (plugin.data.isAsync) {
+                    const asyncTaskId = `${userId}-${uuidv4()}`;
+                    pluginAsyncTaskIds.push(asyncTaskId);
+                    await CacheModel.create({
+                        id: asyncTaskId,
+                        status: 'initialized',
+                        userId,
+                        cacheKey: `pluginTask-${plugin.data.name}`,
+                        expiry: moment().add(1, 'hour').toDate()
+                    });
+                    try {
+                        const syncPluginTokenResponse = await axios.post(plugin.data.tokenSyncUrl, {},
+                            {
+                                headers: {
+                                    Authorization: `Bearer ${pluginJwtToken}`,
+                                },
+                            }
+                        );
+                        const syncedPluginJwtToken = pluginCore.getRefreshedJwtTokenFromHeaders({ headers: syncPluginTokenResponse.headers });
+                        axios.post(pluginEndpointUrl, {
+                            data: { logInfo: incomingData },
+                            config: userConfig,
+                            asyncTaskId
+                        }, {
+                            headers: {
+                                Authorization: `Bearer ${syncedPluginJwtToken ?? pluginJwtToken}`,
+                            },
+                        });
+                        if (syncedPluginJwtToken) {
+                            pluginCore.persistPluginData({
+                                rcAccountId: user.rcAccountId,
+                                platformName: platform,
+                                pluginId,
+                                jwtToken: syncedPluginJwtToken,
+                            });
+                        }
+                    }
+                    catch (error) {
+                        logger.error('Error syncing plugin JWT token', { stack: error.stack });
+                    }
+                }
+                else {
+                    const processedResultResponse = await axios.post(pluginEndpointUrl, {
+                        data: incomingData,
+                        config: userConfig
+                    }, {
+                        headers: {
+                            Authorization: `Bearer ${pluginJwtToken}`,
+                        },
+                    });
+                    const refreshedPluginJwtToken = pluginCore.getRefreshedJwtTokenFromHeaders({ headers: processedResultResponse.headers });
+                    if (refreshedPluginJwtToken) {
+                        pluginCore.persistPluginData({
+                            rcAccountId: user.rcAccountId,
+                            platformName: platform,
+                            pluginId,
+                            jwtToken: refreshedPluginJwtToken,
+                        });
+                    }
+                    // eslint-disable-next-line no-param-reassign
+                    incomingData = processedResultResponse.data;
+                }
             }
 
             // Fetch existing call log details once to avoid duplicate API calls
@@ -358,6 +553,7 @@ async function updateCallLog({ platform, userId, incomingData, hashedAccountId, 
                 try {
                     const getLogResult = await platformModule.getCallLog({
                         user,
+                        telephonySessionId: existingCallLog.id,
                         callLogId: existingCallLog.thirdPartyLogId,
                         contactId: existingCallLog.contactId,
                         authHeader,
@@ -371,9 +567,9 @@ async function updateCallLog({ platform, userId, incomingData, hashedAccountId, 
                         existingBody = getLogResult.callLogInfo.note;
                     }
                 } catch (error) {
-                    console.log('Error getting existing log details, proceeding with empty body', error);
+                    logger.error('Error getting existing log details, proceeding with empty body', { stack: error.stack });
                 }
-                composedLogDetails = await composeCallLog({
+                composedLogDetails = composeCallLog({
                     logFormat,
                     existingBody,
                     callLog: {
@@ -404,7 +600,7 @@ async function updateCallLog({ platform, userId, incomingData, hashedAccountId, 
                 });
             }
 
-            const { updatedNote, returnMessage, extraDataTracking } = await platformModule.updateCallLog({
+            let { updatedNote, returnMessage, extraDataTracking } = await platformModule.updateCallLog({
                 user,
                 existingCallLog,
                 authHeader,
@@ -430,60 +626,25 @@ async function updateCallLog({ platform, userId, incomingData, hashedAccountId, 
                 isFromSSCL,
                 proxyConfig,
             });
-            return { successful: true, logId: existingCallLog.thirdPartyLogId, updatedNote, returnMessage, extraDataTracking };
+            return {
+                successful: true,
+                logId: existingCallLog.thirdPartyLogId,
+                updatedNote,
+                returnMessage: mergePluginWarnings({ returnMessage, warningMessages: pluginWarnings }),
+                extraDataTracking,
+                pluginAsyncTaskIds
+            };
         }
         return { successful: false };
     } catch (e) {
-        console.error(`platform: ${platform} \n${e.stack} \n${JSON.stringify(e.response?.data)}`);
-        if (e.response?.status === 429) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.rateLimitErrorMessage({ platform }),
-                extraDataTracking: {
-                    statusCode: e.response?.status,
-                }
-            };
-        }
-        else if (e.response?.status >= 400 && e.response?.status < 410) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.authorizationErrorMessage({ platform }),
-                extraDataTracking: {
-                    statusCode: e.response?.status,
-                }
-            };
-        }
-        return {
-            successful: false,
-            returnMessage:
-            {
-                message: `Error updating call log`,
-                messageType: 'warning',
-                details: [
-                    {
-                        title: 'Details',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: `Please check if the log entity still exist on ${platform} and your account has permission to EDIT logs.`
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            },
-            extraDataTracking: {
-                statusCode: e.response?.status,
-            }
-        };
+        return handleApiError(e, platform, 'updateCallLog', { userId });
     }
 }
 
 async function createMessageLog({ platform, userId, incomingData }) {
     try {
         let returnMessage = null;
-        let extraDataTracking = {};;
+        let extraDataTracking = {};
         if (incomingData.logInfo.messages.length === 0) {
             return {
                 successful: false,
@@ -498,7 +659,13 @@ async function createMessageLog({ platform, userId, incomingData }) {
         const platformModule = connectorRegistry.getConnector(platform);
         const contactNumber = incomingData.logInfo.correspondents[0].phoneNumber;
         const additionalSubmission = incomingData.additionalSubmission;
-        let user = await UserModel.findByPk(userId);
+        let user = null;
+        try {
+            user = await UserModel.findByPk(userId);
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error finding user');
+        }
         if (!user || !user.accessToken) {
             return {
                 successful: false,
@@ -521,6 +688,17 @@ async function createMessageLog({ platform, userId, incomingData }) {
             case 'oauth':
                 const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname, proxyId, proxyConfig })));
                 user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
+                if (!user) {
+                    return {
+                        successful: false,
+                        returnMessage: {
+                            message: `User session expired. Please connect again.`,
+                            messageType: 'warning',
+                            ttl: 5000
+                        },
+                        isRevokeUserSession: true
+                    }
+                }
                 authHeader = `Bearer ${user.accessToken}`;
                 break;
             case 'apiKey':
@@ -546,139 +724,262 @@ async function createMessageLog({ platform, userId, incomingData }) {
             type: incomingData.contactType ?? "",
             name: incomingData.contactName ?? ""
         };
-        const messageIds = incomingData.logInfo.messages.map(m => { return { id: m.id.toString() }; });
-        const existingMessages = await MessageLogModel.findAll({
-            where: {
-                [Op.or]: messageIds
+        const isGroupSMS = incomingData.logInfo.correspondents.length > 1;
+        // For shared SMS
+        const assigneeName = incomingData.logInfo.assignee?.name;
+        const ownerName = incomingData.logInfo.owner?.name;
+        const isSharedSMS = !!ownerName;
+
+        const pluginAsyncTaskIds = [];
+        const pluginWarnings = [];
+        // Plugins
+        const isSMS = incomingData.logInfo.messages.some(m => m.type === 'SMS');
+        const isFax = incomingData.logInfo.messages.some(m => m.type === 'Fax');
+        const accountPlugins = await pluginCore.getPluginsFromRcAccountId({ rcAccountId: user.rcAccountId });
+        const smsPlugins = isSMS ? accountPlugins.filter(plugin => plugin.data.supportedLogTypes.includes('sms')) : [];
+        const faxPlugins = isFax ? accountPlugins.filter(plugin => plugin.data.supportedLogTypes.includes('fax')) : [];
+        const plugins = [...smsPlugins, ...faxPlugins];
+        for (const plugin of plugins) {
+            const pluginId = plugin.id;
+            const pluginJwtToken = plugin.data.jwtToken;
+            const pluginManifest = plugin.data;
+            const pluginEndpointUrl = pluginManifest.endpointUrl;
+            if (!pluginEndpointUrl) {
+                throw new Error('Plugin URL is not set');
             }
-        });
+            const userConfig = pluginCore.getPluginConfigFromUserSettings({ userSettings: user.userSettings, pluginId });
+            if (plugin.data.isAsync) {
+                const asyncTaskId = `${userId}-${uuidv4()}`;
+                pluginAsyncTaskIds.push(asyncTaskId);
+                await CacheModel.create({
+                    id: asyncTaskId,
+                    status: 'initialized',
+                    userId,
+                    cacheKey: `pluginTask-${plugin.data.name}`,
+                    expiry: moment().add(1, 'hour').toDate()
+                });
+                try {
+                    const syncPluginTokenResponse = await axios.post(plugin.data.tokenSyncUrl, {},
+                        {
+                            headers: {
+                                Authorization: `Bearer ${pluginJwtToken}`,
+                            },
+                        }
+                    );
+                    const syncedPluginJwtToken = pluginCore.getRefreshedJwtTokenFromHeaders({ headers: syncPluginTokenResponse.headers });
+                    axios.post(pluginEndpointUrl, {
+                        data: { logInfo: incomingData },
+                        config: userConfig,
+                        asyncTaskId
+                    }, {
+                        headers: {
+                            Authorization: `Bearer ${syncedPluginJwtToken ?? pluginJwtToken}`,
+                        },
+                    });
+                    if (syncedPluginJwtToken) {
+                        pluginCore.persistPluginData({
+                            rcAccountId: user.rcAccountId,
+                            platformName: platform,
+                            pluginId,
+                            jwtToken: syncedPluginJwtToken,
+                        });
+                    }
+                }
+                catch (error) {
+                    logger.error('Error syncing plugin JWT token', { stack: error.stack });
+                }
+            }
+            else {
+                const processedResultResponse = await axios.post(pluginEndpointUrl, {
+                    data: incomingData,
+                    config: userConfig,
+                }, {
+                    headers: {
+                        Authorization: `Bearer ${pluginJwtToken}`,
+                    },
+                });
+                const refreshedPluginJwtToken = pluginCore.getRefreshedJwtTokenFromHeaders({ headers: processedResultResponse.headers });
+                if (refreshedPluginJwtToken) {
+                    pluginCore.persistPluginData({
+                        rcAccountId: user.rcAccountId,
+                        platformName: platform,
+                        pluginId,
+                        jwtToken: refreshedPluginJwtToken,
+                    });
+                }
+                // eslint-disable-next-line no-param-reassign
+                incomingData = processedResultResponse.data;
+            }
+        }
+
+        let messageIds = [];
+        const correspondents = [];
+        if (isGroupSMS) {
+            messageIds = incomingData.logInfo.messages.map(m => { return { id: m.id.toString() + `-${incomingData.contactId}` }; });
+            for (var i = 0; i < incomingData.logInfo.correspondents.length; i++) {
+                // find cached contact by composite key; findByPk expects raw PK values, so use where clause
+                const correspondentContactInfo = await AccountDataModel.findOne({
+                    where: {
+                        rcAccountId: user.rcAccountId,
+                        platformName: platform,
+                        dataKey: `contact-${incomingData.logInfo.correspondents[i].phoneNumber}`
+                    }
+                })
+                if (correspondentContactInfo && correspondentContactInfo.data[0]?.name != incomingData.contactName) {
+                    correspondents.push(correspondentContactInfo.data);
+                }
+            }
+        }
+        else {
+            messageIds = incomingData.logInfo.messages.map(m => { return { id: m.id.toString() }; });
+        }
+        let existingMessages = null;
+        try {
+            existingMessages = await MessageLogModel.findAll({
+                where: {
+                    [Op.or]: messageIds
+                }
+            });
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error finding existing messages');
+        }
         const existingIds = existingMessages.map(m => m.id);
         const logIds = [];
-        // reverse the order of messages to log the oldest message first
-        const reversedMessages = incomingData.logInfo.messages.reverse();
-        for (const message of reversedMessages) {
-            if (existingIds.includes(message.id.toString())) {
-                continue;
-            }
-            let recordingLink = null;
-            if (message.attachments && message.attachments.some(a => a.type === 'AudioRecording')) {
-                recordingLink = message.attachments.find(a => a.type === 'AudioRecording').link;
-            }
-            let faxDocLink = null;
-            let faxDownloadLink = null;
-            if (message.attachments && message.attachments.some(a => a.type === 'RenderedDocument')) {
-                faxDocLink = message.attachments.find(a => a.type === 'RenderedDocument').link;
-                faxDownloadLink = message.attachments.find(a => a.type === 'RenderedDocument').uri + `?access_token=${incomingData.logInfo.rcAccessToken}`
-            }
-            let imageLink = null;
-            let imageDownloadLink = null;
-            let imageContentType = null;
-            if (message.attachments && message.attachments.some(a => a.type === 'MmsAttachment' && a.contentType.startsWith('image/'))) {
-                const imageAttachment = message.attachments.find(a => a.type === 'MmsAttachment' && a.contentType.startsWith('image/'));
-                if (imageAttachment) {
-                    imageLink = getMediaReaderLinkByPlatformMediaLink(imageAttachment?.uri);
-                    imageDownloadLink = imageAttachment?.uri + `?access_token=${incomingData.logInfo.rcAccessToken}`;
-                    imageContentType = imageAttachment?.contentType;
-                }
-            }
-            let videoLink = null;
-            if (message.attachments && message.attachments.some(a => a.type === 'MmsAttachment')) {
-                const imageAttachment = message.attachments.find(a => a.type === 'MmsAttachment' && a.contentType.startsWith('image/'));
-                if (imageAttachment) {
-                    imageLink = getMediaReaderLinkByPlatformMediaLink(imageAttachment?.uri);
-                }
-                const videoAttachment = message.attachments.find(a => a.type === 'MmsAttachment' && a.contentType.startsWith('video/'));
-                if (videoAttachment) {
-                    videoLink = getMediaReaderLinkByPlatformMediaLink(videoAttachment?.uri);
-                }
-            }
-            const existingSameDateMessageLog = await MessageLogModel.findOne({
+        // Case: Shared SMS
+        if (isSharedSMS) {
+            const existingMessageLog = await MessageLogModel.findOne({
                 where: {
                     conversationLogId: incomingData.logInfo.conversationLogId
                 }
             });
-            let crmLogId = ''
-            if (existingSameDateMessageLog) {
-                const updateMessageResult = await platformModule.updateMessageLog({ user, contactInfo, existingMessageLog: existingSameDateMessageLog, message, authHeader, additionalSubmission, imageLink, videoLink, proxyConfig });
-                crmLogId = existingSameDateMessageLog.thirdPartyLogId;
+            const sharedSMSLogContent = composeSharedSMSLog({ logFormat: platformModule.getLogFormatType(platform, proxyConfig), conversation: incomingData.logInfo, contactName: contactInfo.name, timezoneOffset: user.timezoneOffset });
+            if (existingMessageLog) {
+                const updateMessageResult = await platformModule.updateMessageLog({ user, contactInfo, sharedSMSLogContent, existingMessageLog: existingMessageLog, authHeader, additionalSubmission, proxyConfig });
                 returnMessage = updateMessageResult?.returnMessage;
             }
             else {
-                const createMessageLogResult = await platformModule.createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink, faxDownloadLink, imageLink, imageDownloadLink, imageContentType, videoLink, proxyConfig });
-                crmLogId = createMessageLogResult.logId;
+                const createMessageLogResult = await platformModule.createMessageLog({ user, contactInfo, sharedSMSLogContent, authHeader, additionalSubmission, proxyConfig });
                 returnMessage = createMessageLogResult?.returnMessage;
                 extraDataTracking = createMessageLogResult.extraDataTracking;
+                if (createMessageLogResult.logId) {
+                    const createdMessageLog =
+                        await MessageLogModel.create({
+                            id: incomingData.logInfo.conversationLogId,
+                            platform,
+                            conversationId: incomingData.logInfo.conversationId,
+                            thirdPartyLogId: createMessageLogResult.logId,
+                            userId,
+                            conversationLogId: incomingData.logInfo.conversationLogId
+                        });
+                    logIds.push(createdMessageLog.id);
+                }
             }
-            if (crmLogId) {
-                const createdMessageLog =
-                    await MessageLogModel.create({
-                        id: message.id.toString(),
-                        platform,
-                        conversationId: incomingData.logInfo.conversationId,
-                        thirdPartyLogId: crmLogId,
-                        userId,
+        }
+        // Case: normal SMS
+        else {
+            if (isGroupSMS) {
+                // eslint-disable-next-line no-param-reassign
+                incomingData.logInfo.conversationLogId = incomingData.logInfo.conversationLogId + `-${incomingData.contactId}`;
+                // eslint-disable-next-line no-param-reassign
+                incomingData.logInfo.conversationId = incomingData.logInfo.conversationId + `-${incomingData.contactId}`;
+            }
+            // reverse the order of messages to log the oldest message first
+            const reversedMessages = incomingData.logInfo.messages.reverse();
+            for (const message of reversedMessages) {
+                if (isGroupSMS) {
+                    message.id = message.id.toString() + `-${incomingData.contactId}`;
+                }
+                if (existingIds.includes(message.id.toString())) {
+                    continue;
+                }
+                let recordingLink = null;
+                if (message.attachments && message.attachments.some(a => a.type === 'AudioRecording')) {
+                    recordingLink = message.attachments.find(a => a.type === 'AudioRecording').link;
+                }
+                let faxDocLink = null;
+                let faxDownloadLink = null;
+                if (message.attachments && message.attachments.some(a => a.type === 'RenderedDocument') && incomingData.logInfo.rcAccessToken) {
+                    faxDocLink = message.attachments.find(a => a.type === 'RenderedDocument').link;
+                    faxDownloadLink = message.attachments.find(a => a.type === 'RenderedDocument').uri + `?access_token=${incomingData.logInfo.rcAccessToken}`
+                }
+                let imageLink = null;
+                let imageDownloadLink = null;
+                let imageContentType = null;
+                if (message.attachments && message.attachments.some(a => a.type === 'MmsAttachment' && a.contentType.startsWith('image/')) && incomingData.logInfo.rcAccessToken) {
+                    const imageAttachment = message.attachments.find(a => a.type === 'MmsAttachment' && a.contentType.startsWith('image/'));
+                    if (imageAttachment) {
+                        imageLink = getMediaReaderLinkByPlatformMediaLink(imageAttachment?.uri);
+                        imageDownloadLink = imageAttachment?.uri + `?access_token=${incomingData.logInfo.rcAccessToken}`;
+                        imageContentType = imageAttachment?.contentType;
+                    }
+                }
+                let videoLink = null;
+                if (message.attachments && message.attachments.some(a => a.type === 'MmsAttachment')) {
+                    const imageAttachment = message.attachments.find(a => a.type === 'MmsAttachment' && a.contentType.startsWith('image/'));
+                    if (imageAttachment) {
+                        imageLink = getMediaReaderLinkByPlatformMediaLink(imageAttachment?.uri);
+                    }
+                    const videoAttachment = message.attachments.find(a => a.type === 'MmsAttachment' && a.contentType.startsWith('video/'));
+                    if (videoAttachment) {
+                        videoLink = getMediaReaderLinkByPlatformMediaLink(videoAttachment?.uri);
+                    }
+                }
+                const existingSameDateMessageLog = await MessageLogModel.findOne({
+                    where: {
                         conversationLogId: incomingData.logInfo.conversationLogId
-                    });
-                logIds.push(createdMessageLog.id);
+                    }
+                });
+                let crmLogId = ''
+                if (existingSameDateMessageLog) {
+                    const updateMessageResult = await platformModule.updateMessageLog({ user, contactInfo, assigneeName, ownerName, existingMessageLog: existingSameDateMessageLog, message, authHeader, additionalSubmission, imageLink, imageDownloadLink, imageContentType, videoLink, proxyConfig });
+                    crmLogId = existingSameDateMessageLog.thirdPartyLogId;
+                    returnMessage = updateMessageResult?.returnMessage;
+                    extraDataTracking = updateMessageResult.extraDataTracking;
+                }
+                else {
+                    const createMessageLogResult = await platformModule.createMessageLog({ user, contactInfo, correspondents, assigneeName, ownerName, authHeader, message, additionalSubmission, recordingLink, faxDocLink, faxDownloadLink, imageLink, imageDownloadLink, imageContentType, videoLink, proxyConfig });
+                    crmLogId = createMessageLogResult.logId;
+                    returnMessage = createMessageLogResult?.returnMessage;
+                    extraDataTracking = createMessageLogResult.extraDataTracking;
+                }
+                if (crmLogId) {
+                    try {
+                        const createdMessageLog =
+                            await MessageLogModel.create({
+                                id: message.id.toString(),
+                                platform,
+                                conversationId: incomingData.logInfo.conversationId,
+                                thirdPartyLogId: crmLogId,
+                                userId,
+                                conversationLogId: incomingData.logInfo.conversationLogId
+                            });
+                        logIds.push(createdMessageLog.id);
+                    } catch (error) {
+                        return handleDatabaseError(error, 'Error creating message log');
+                    }
+                }
             }
-        }
-        return { successful: true, logIds, returnMessage, extraDataTracking };
-    }
-    catch (e) {
-        console.log(`platform: ${platform} \n${e.stack}`);
-        if (e.response?.status === 429) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.rateLimitErrorMessage({ platform }),
-                extraDataTracking: {
-                    statusCode: e.response?.status,
-                }
-            };
-        }
-        else if (e.response?.status >= 400 && e.response?.status < 410) {
-            return {
-                successful: false,
-                returnMessage: errorMessage.authorizationErrorMessage({ platform }),
-                extraDataTracking: {
-                    statusCode: e.response?.status,
-                }
-            };
         }
         return {
-            successful: false,
-            returnMessage:
-            {
-                message: `Error creating message log`,
-                messageType: 'warning',
-                details: [
-                    {
-                        title: 'Details',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: `Please check if your account has permission to CREATE logs.`
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            },
-            extraDataTracking: {
-                statusCode: e.response?.status,
-            }
+            successful: true,
+            logIds,
+            returnMessage: mergePluginWarnings({ returnMessage, warningMessages: pluginWarnings }),
+            extraDataTracking
         };
+    }
+    catch (e) {
+        return handleApiError(e, platform, 'createMessageLog', { userId });
     }
 }
 
-async function saveNoteCache({ sessionId, note }) {
+async function saveNoteCache({ platform, userId, sessionId, note }) {
     try {
         const now = moment();
-        const noteCache = await NoteCache.create({ sessionId, note, ttl: now.unix() + 3600 });
+        await NoteCache.create({ sessionId, note, ttl: now.unix() + 3600 });
         return { successful: true, returnMessage: 'Note cache saved' };
     } catch (e) {
-        console.error(`Error saving note cache: ${e.stack}`);
-        return { successful: false, returnMessage: 'Error saving note cache' };
+        return handleApiError(e, platform, 'saveNoteCache', { userId, sessionId, note });
     }
 }
 

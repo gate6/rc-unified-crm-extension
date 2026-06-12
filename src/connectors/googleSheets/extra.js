@@ -2,6 +2,7 @@ const axios = require('axios');
 const oauth = require('@app-connect/core/lib/oauth');
 const platformModule = require('./index');
 const path = require('path');
+const { handleDatabaseError } = require('@app-connect/core/lib/errorHandler');
 const adminCore = require('@app-connect/core/handlers/admin');
 const util = require('@app-connect/core/lib/util');
 async function renderPickerFile({ user }) {
@@ -69,7 +70,12 @@ async function createNewSheet({ user, data }) {
     user.userSettings = {};
     // eslint-disable-next-line no-param-reassign
     user.userSettings = updatedUserSettings;
-    await user.save();
+    try {
+        await user.save();
+    }
+    catch (error) {
+        return handleDatabaseError(error, 'Error saving user');
+    }
     return {
         successful: true,
         sheetName,
@@ -124,7 +130,7 @@ async function createSpreadsheetWithHeaders({ accessToken, newSheetName }) {
 
 
         let range = `Call Logs!A1:append`;
-        const requestCallLogHeaderData = ["ID", "Sheet Id", "Subject", "Contact name", "Notes", "Phone", "Start time", "End time", "Duration", "Session Id", "Direction", "Call Result", "Call Recording","Incoming Phone Number","Outgoing Phone Number","Transcript","Smart summary","RingSense Summary","RingSense Transcript","RingSense AI Score","RingSense Bulleted Summary","RingSense Link"];
+        const requestCallLogHeaderData = ["ID", "Sheet Id", "Subject", "Contact name", "Notes", "Phone", "Start time", "End time", "Duration", "Session Id", "Direction", "Call Result", "Call Recording", "Incoming Phone Number", "Outgoing Phone Number", "Transcript", "Smart summary", "ACE Summary", "ACE Transcript", "ACE AI Score", "ACE Bulleted Summary", "ACE Link"];
 
         const requestContactHeaderData = ["ID", "Sheet Id", "Contact name", "Phone"];
         const requestMessageHeaderData = ["ID", "Sheet Id", "Subject", "Contact name", "Message", "Phone", "Message Type", "Message Time", "Direction"];
@@ -162,7 +168,12 @@ async function updateSelectedSheet({ user, data }) {
     user.userSettings = {};
     // eslint-disable-next-line no-param-reassign
     user.userSettings = updatedUserSettings;
-    await user.save();
+    try {
+        await user.save();
+    }
+    catch (error) {
+        return handleDatabaseError(error, 'Error saving user');
+    }
     return {
         successful: true,
         sheetName: sheetData?.name,
@@ -173,10 +184,10 @@ async function updateSelectedSheet({ user, data }) {
 
 async function setAdminGoogleSheetsConfig({ rcAccountId, sheetName, sheetUrl, customizable }) {
     const hashedRcAccountId = util.getHashValue(rcAccountId, process.env.HASH_KEY);
-    
+
     // Get existing admin settings
     const existingAdminSettings = await adminCore.getAdminSettings({ hashedRcAccountId });
-    
+
     // Update Google Sheets configuration in admin settings
     const userSettings = existingAdminSettings?.userSettings || {};
     userSettings.googleSheetsUrl = {
@@ -189,8 +200,8 @@ async function setAdminGoogleSheetsConfig({ rcAccountId, sheetName, sheetUrl, cu
     };
 
     // Save updated admin settings
-    await adminCore.upsertAdminSettings({ 
-        hashedRcAccountId, 
+    await adminCore.upsertAdminSettings({
+        hashedRcAccountId,
         adminSettings: {
             ...existingAdminSettings,
             userSettings
@@ -207,7 +218,7 @@ async function setAdminGoogleSheetsConfig({ rcAccountId, sheetName, sheetUrl, cu
 async function getAdminGoogleSheetsConfig({ rcAccountId }) {
     const hashedRcAccountId = util.getHashValue(rcAccountId, process.env.HASH_KEY);
     const adminSettings = await adminCore.getAdminSettings({ hashedRcAccountId });
-    
+
     return {
         googleSheetsUrl: adminSettings?.userSettings?.googleSheetsUrl || null,
         googleSheetsName: adminSettings?.userSettings?.googleSheetsName || null
