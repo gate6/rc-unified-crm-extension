@@ -9,7 +9,7 @@ const { AccountDataModel } = require('@app-connect/core/models/accountDataModel'
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
-const models = initModels(sequelize);
+const models = sequelize ? initModels(sequelize) : null;
 
 const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
 
@@ -41,6 +41,9 @@ agencyZoomApiClient.interceptors.response.use(
 
 async function getLicenseStatus({ userId }) {
   try {
+    if (!models) {
+      return { isLicenseValid: false, licenseStatus: 'DB not configured', licenseStatusDescription: '' };
+    }
     const user = await UserModel.findByPk(userId);
     if (!user) {
       return {
@@ -184,101 +187,20 @@ async function getRefreshedAuthToken(user) {
 
 /* ---------------- USER INFO ---------------- */
 
-async function getUserInfo(authHeader) {
+async function getUserInfo({ hostname, additionalInfo }) {
+  const { username, password } = additionalInfo ?? {};
 
-  const { hostname, additionalInfo } = authHeader;
-  const { username, password } = additionalInfo;
+  if (!hostname || !username || !password) {
+    return {
+      successful: false,
+      platformUserInfo: { id: "", name: "", platformAdditionalInfo: {} },
+      returnMessage: { messageType: "error", message: "Missing AgencyZoom login details.", ttl: 3000 }
+    };
+  }
 
   try {
-    if (!hostname || !username || !password) {
-      return {
-        successful: false,
-        platformUserInfo: {
-          id: "",
-          name: "",
-          platformAdditionalInfo: {}
-        },
-        returnMessage: {
-          messageType: "error",
-          message: "Missing AgencyZoom login details.",
-          ttl: 3000
-        }
-      };
-    }
-
     const token = await authenticate(username, password);
 
-    // Find company
-    const company = await models.companies.findOne({
-      where: { hostname },
-      include: [{ model: models.customer, as: 'customers', required: false }],
-      raw: false,
-      logging: false
-    });
-
-    if (!company) {
-      return {
-        successful: false,
-        platformUserInfo: {
-          id: "",
-          name: "",
-          platformAdditionalInfo: {}
-        },
-        returnMessage: {
-          messageType: "danger",
-          message: "Could not find the company details.",
-          ttl: 3000
-        }
-      };
-    }
-
-    const {
-      maxAllowedUsers,
-      customers = []
-    } = company;
-
-    // Check existing user
-    let customer = customers.find(c => c.email === username);
-
-    // Check user limit
-    if (!customer) {
-      if (customers.length >= maxAllowedUsers) {
-        return {
-          successful: false,
-          platformUserInfo: {
-            id: "",
-            name: "",
-            timezoneName: "",
-            timezoneOffset: "",
-            platformAdditionalInfo: {}
-          },
-          returnMessage: {
-            messageType: 'danger',
-            message: `You are not having an active license. Please contact us.`,
-            ttl: 3000
-          }
-        };
-      }
-
-      await models.customer.create({
-        sysId: `az-user-${username}`,
-        email: username,
-        companyId: company.id,
-        hostname: hostname,
-        accessToken: token,
-        tokenExpiry: Date.now() + (365 * 24 * 60 * 60 * 1000),
-        platformAdditionalInfo: {
-          username,
-          password: encode(password),
-          expiresAt: Date.now() + (365 * 24 * 60 * 60 * 1000)
-        },
-        status: true,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
-    }
-
-    // Success response
     return {
       successful: true,
       platformUserInfo: {
@@ -291,24 +213,13 @@ async function getUserInfo(authHeader) {
           password: encode(password)
         }
       },
-      returnMessage: {
-        messageType: "success",
-        message: "Successfully connected to AgencyZoom.",
-        ttl: 3000
-      }
+      returnMessage: { messageType: "success", message: "Successfully connected to AgencyZoom.", ttl: 3000 }
     };
-
   } catch (err) {
-
     console.error("AgencyZoom login error:", err?.response?.data || err.message);
-
     return {
       successful: false,
-      returnMessage: {
-        messageType: "error",
-        message: "AgencyZoom authentication failed.",
-        ttl: 3000
-      }
+      returnMessage: { messageType: "error", message: "AgencyZoom authentication failed.", ttl: 3000 }
     };
   }
 }

@@ -5,16 +5,12 @@ const { initModels } = require('../servicenow-models/init-models');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
-const models = initModels(sequelize);
+const models = sequelize ? initModels(sequelize) : null;
 const FormData = require('form-data')
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 
 const MONDAY_API_URL = process.env.MONDAY_API_URL;
-const MONDAY_AUTHORIZE_URL = process.env.MONDAY_AUTHORIZE_URL;
-var MONDAY_CLIENT_SECRET = '';
-var MONDAY_CLIENT_ID = '';
-var MONDAY_REDIRECT_URI = '';
 const columnIdCache = new Map();
 
 const mondayApiClient = axios.create();
@@ -311,110 +307,27 @@ function getAuthType() {
   return 'oauth'
 }
 
-async function getOauthInfo({ hostname, rcAccountId }) {
-  const where = { hostname }
-  const company = await models.companies.findOne({
-    where
-  })
-
-  if (!company) {
-    throw new Error('Company not found or inactive')
-  }
-  MONDAY_CLIENT_SECRET = company.clientSecret
-  MONDAY_CLIENT_ID = company.clientId
-  MONDAY_REDIRECT_URI = company.crmRedirectUrl
+async function getOauthInfo() {
+  // Credentials are managed via AppConnect admin-managed OAuth.
+  // This fallback is only reached if managed OAuth is not yet configured.
   return {
-    clientId: company.clientId,
-    clientSecret: company.clientSecret,
-    authorizationUri: MONDAY_AUTHORIZE_URL,
-    accessTokenUri: company.tokenUrl,
-    redirectUri: company.crmRedirectUrl,
-    scopes: ['me:read', 'users:read', 'boards:read', 'boards:write', 'updates:write'],
-  }
+    failMessage: 'Monday OAuth credentials have not been configured. Please ask your admin to set up the connector via the AppConnect admin panel.'
+  };
 }
 
-function getOverridingOAuthOption({ code }) {
-  return {
-    query: {
-      grant_type: 'authorization_code',
-      client_id: MONDAY_CLIENT_ID,
-      client_secret: MONDAY_CLIENT_SECRET,
-      redirect_uri: MONDAY_REDIRECT_URI,
-      code: code,
-    },
-    headers: {
-      Authorization: ''
-    }
-  }
-}
-
-async function getUserInfo({ authHeader, hostname, query }) {
+async function getUserInfo({ authHeader, hostname }) {
   try {
-    const callbackUri = query.callbackUri;
-    const code = new URL(callbackUri).searchParams.get('code');
-    const where = { hostname }
-    const company = await models.companies.findOne({
-      where,
-      include: [{ model: models.customer, as: 'customers', required: false }],
-      raw: false,
-      logging: false
-    });
-
-    // Company not found
-    if (!company) {
-      return {
-        successful: false,
-        platformUserInfo: {
-          id: "",
-          name: "",
-          timezoneName: "",
-          timezoneOffset: "",
-          platformAdditionalInfo: {}
-        },
-        returnMessage: {
-          messageType: 'warning',
-          message: 'Could not find the company details.',
-          ttl: 3000
-        }
-      };
-    }
-
-    const {
-      clientId,
-      clientSecret,
-      maxAllowedUsers,
-      customers = []
-    } = company;
-
-    // Config validation
-    if (!clientId || !clientSecret) {
-      return {
-        successful: false,
-        returnMessage: {
-          messageType: 'error',
-          message: 'Monday configuration incomplete.',
-          ttl: 3000
-        }
-      };
-    }
-
     const accessToken = authHeader.replace('Bearer ', '');
     if (!accessToken) {
       return {
         successful: false,
-        returnMessage: {
-          messageType: 'error',
-          message: 'Failed to get access token.',
-          ttl: 3000
-        }
+        returnMessage: { messageType: 'error', message: 'Failed to get access token.', ttl: 3000 }
       };
     }
 
     const userDataResponse = await mondayApiClient.post(
       MONDAY_API_URL,
-      {
-        query: "query { me { id name email } }"
-      },
+      { query: "query { me { id name email } }" },
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -424,64 +337,18 @@ async function getUserInfo({ authHeader, hostname, query }) {
     );
 
     const result = userDataResponse.data;
-
-    // Check if user data is available
     if (!result?.data?.me) {
       return {
         successful: false,
-        returnMessage: {
-          messageType: 'error',
-          message: 'Failed to get user data.',
-          ttl: 3000
-        }
+        returnMessage: { messageType: 'error', message: 'Failed to get user data.', ttl: 3000 }
       };
     }
 
-    // Extract user data
     const userData = {
       id: result.data.me.id,
       name: result.data.me.name,
       email: result.data.me.email
     };
-
-    let customer = customers.find(c => c.email === userData.email);
-    // Create user if not exists
-    if (!customer) {
-      if (customers.length >= maxAllowedUsers) {
-        return {
-          successful: false,
-          platformUserInfo: {
-            id: "",
-            name: "",
-            timezoneName: "",
-            timezoneOffset: "",
-            platformAdditionalInfo: {}
-          },
-          returnMessage: {
-            messageType: 'warning',
-            message: `You are not having an active license. Please contact us.`,
-            ttl: 3000
-          }
-        };
-      }
-
-      await models.customer.create({
-        sysId: userData.id,
-        email: userData.email,
-        companyId: company.id,
-        hostname: hostname,
-        accessToken: accessToken,
-        tokenExpiry: Date.now() + (365 * 24 * 60 * 60 * 1000),
-        platformAdditionalInfo: {
-          client_id: clientId,
-          client_secret: clientSecret,
-          expiresAt: Date.now() + (365 * 24 * 60 * 60 * 1000)
-        },
-        status: true,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
-    }
 
     return {
       successful: true,
@@ -490,30 +357,16 @@ async function getUserInfo({ authHeader, hostname, query }) {
         name: userData.name,
         email: userData.email,
         overridingApiKey: accessToken,
-
-        platformAdditionalInfo: {
-          client_id: clientId,
-          client_secret: clientSecret,
-          expiresAt: Date.now() + ((900 - 60) * 1000) // 15 min - 1 min buffer
-        }
+        platformAdditionalInfo: {}
       },
-      returnMessage: {
-        messageType: 'success',
-        message: 'Successfully connected to Monday.',
-        ttl: 3000
-      }
+      returnMessage: { messageType: 'success', message: 'Successfully connected to Monday.', ttl: 3000 }
     };
 
   } catch (err) {
-    console.error('AUTO MONDAY LOGIN ERROR:', err?.response?.data || err.message);
-
+    console.error('Monday getUserInfo error:', err?.response?.data || err.message);
     return {
       successful: false,
-      returnMessage: {
-        messageType: 'error',
-        message: 'Automatic Monday authentication failed.',
-        ttl: 3000
-      }
+      returnMessage: { messageType: 'error', message: 'Monday authentication failed.', ttl: 3000 }
     };
   }
 }
@@ -529,6 +382,7 @@ async function unAuthorize() {
 }
 
 async function getCompanyByHostname({ hostname, rcAccountId }) {
+  if (!models) return null;
   const where = { hostname };
   if (rcAccountId) where.rcAccountId = rcAccountId;
 
@@ -1417,5 +1271,4 @@ exports.upsertCallDisposition = upsertCallDisposition;
 exports.createMessageLog = createMessageLog;
 exports.updateMessageLog = updateMessageLog;
 exports.getUserList = getUserList;
-exports.getOverridingOAuthOption = getOverridingOAuthOption;
 exports.getLicenseStatus = getLicenseStatus;

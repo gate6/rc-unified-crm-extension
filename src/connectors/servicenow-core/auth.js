@@ -2,7 +2,7 @@
 const Sequelize = require('sequelize');
 const { sequelize } = require('../servicenow-models/sequelize');
 const initModels = require('../servicenow-models/init-models');
-const models = initModels(sequelize);
+const models = sequelize ? initModels(sequelize) : null;
 const Op = require('sequelize').Op;
 
 
