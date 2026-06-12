@@ -37,9 +37,13 @@ connectorRegistry.registerConnector('netsuite', netsuite);
 connectorRegistry.registerConnector('pipedrive', pipedrive);
 connectorRegistry.registerConnector('redtail', redtail);
 connectorRegistry.registerConnector('servicetitan', serviceTitan, require('./connectors/servicetitan/manifest.json'));
+connectorRegistry.registerConnector('gate6.servicetitan', serviceTitan, require('./connectors/servicetitan/manifest.json'));
 connectorRegistry.registerConnector('servicenow', servicenow, require('./connectors/servicenow/manifest.json'));
+connectorRegistry.registerConnector('gate6.servicenow', servicenow, require('./connectors/servicenow/manifest.json'));
 connectorRegistry.registerConnector('monday', monday, require('./connectors/monday/manifest.json'));
+connectorRegistry.registerConnector('gate6.monday', monday, require('./connectors/monday/manifest.json'));
 connectorRegistry.registerConnector('agencyzoom', agencyzoom, require('./connectors/agencyzoom/manifest.json'));
+connectorRegistry.registerConnector('gate6.agencyzoom', agencyzoom, require('./connectors/agencyzoom/manifest.json'));
 connectorRegistry.registerConnector('proxy', proxyConnector);
 
 // Create Express app with core functionality
