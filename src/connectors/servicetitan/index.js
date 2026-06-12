@@ -1117,9 +1117,14 @@ async function getRefreshedAuthToken(user) {
     return newAccessToken;
 }
 
+function getLogFormatType() {
+    return 'text/html';
+}
+
 exports.getAuthType = getAuthType;
 exports.getBasicAuth = getBasicAuth;
 exports.getUserInfo = getUserInfo;
+exports.getLogFormatType = getLogFormatType;
 exports.getUserList = getUserList;
 exports.createCallLog = createCallLog;
 exports.updateCallLog = updateCallLog;
