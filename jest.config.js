@@ -8,9 +8,12 @@ module.exports = {
   "setupFilesAfterEnv": [
     '<rootDir>/tests/setup.js',
   ],
-  reporters: ['default'],
+  reporters: [
+    'default',
+    '<rootDir>/tests/failedTestsReporter.js'
+  ],
   testEnvironment: 'node',
-  coveragePathIgnorePatterns: ['/node_modules/'],
+  coveragePathIgnorePatterns: ['/node_modules/', '/packages/'],
   modulePathIgnorePatterns: [
     '<rootDir>/build/',
     '<rootDir>/serverless-deploy/',

@@ -1,11 +1,8 @@
 /* eslint-disable no-param-reassign */
 const axios = require('axios');
 const moment = require('moment');
-const fs = require('fs');
-const path = require('path');
 const oauth = require('@app-connect/core/lib/oauth');
 const { parsePhoneNumber } = require('awesome-phonenumber');
-const dynamoose = require('dynamoose');
 const jwt = require('@app-connect/core/lib/jwt');
 const { getMostRecentDate } = require('@app-connect/core/lib/util');
 const { encode, decoded } = require('@app-connect/core/lib/encode');
@@ -26,6 +23,8 @@ const {
     upsertRingSenseLink
 } = require('@app-connect/core/lib/callLogComposer');
 const { LOG_DETAILS_FORMAT_TYPE } = require('@app-connect/core/lib/constants');
+const logger = require('@app-connect/core/lib/logger');
+const { handleDatabaseError } = require('@app-connect/core/lib/errorHandler');
 
 function getAuthType() {
     return 'oauth';
@@ -104,7 +103,7 @@ async function getOauthInfo({ tokenUrl }) {
 async function bullhornPasswordAuthorize(user, oauthApp, serverLoggingSettings) {
     try {
         // use password to get code
-        console.log('authorize bullhorn by password')
+        logger.info('authorize bullhorn by password')
         const authUrl = user.platformAdditionalInfo.tokenUrl.replace('/token', '/authorize');
         const codeResponse = await axios.get(authUrl, {
             params: {
@@ -140,7 +139,7 @@ async function bullhornPasswordAuthorize(user, oauthApp, serverLoggingSettings) 
             }
         };
         const { accessToken, refreshToken, expires } = await oauthApp.code.getToken(redirectLocation, overridingOAuthOption);
-        console.log('authorize bullhorn user by password successfully.')
+        logger.info('authorize bullhorn user by password successfully.')
         return {
             access_token: accessToken,
             refresh_token: refreshToken,
@@ -148,7 +147,7 @@ async function bullhornPasswordAuthorize(user, oauthApp, serverLoggingSettings) 
         };
     }
     catch (e) {
-        console.error('Bullhorn password authorize failed');
+        logger.error('Bullhorn password authorize failed', { stack: e.stack });
         return null;
     }
 }
@@ -175,7 +174,7 @@ async function bullhornTokenRefresh(user, dateNow, tokenLockTimeout, oauthApp, s
                     if (!!lock?.ttl && moment(lock.ttl).unix() < dateNow.unix()) {
                         // Try to delete expired lock and create a new one atomically
                         try {
-                            console.log('Bullhorn lock expired.')
+                            logger.info('Bullhorn lock expired.')
                             await lock.delete();
                             newLock = await Lock.create(
                                 {
@@ -211,7 +210,7 @@ async function bullhornTokenRefresh(user, dateNow, tokenLockTimeout, oauthApp, s
                             throw new Error('Bullhorn Token lock timeout');
                         }
                         user = await UserModel.findByPk(user.id);
-                        console.log('Bullhron locked. bypass')
+                        logger.info('Bullhron locked. bypass')
                         return user;
                     }
                 } else {
@@ -220,7 +219,7 @@ async function bullhornTokenRefresh(user, dateNow, tokenLockTimeout, oauthApp, s
             }
         }
         const startRefreshTime = moment();
-        console.log('Bullhorn token refreshing...')
+        logger.info('Bullhorn token refreshing...')
         let authData;
         try {
             const refreshTokenResponse = await axios.post(`${user.platformAdditionalInfo.tokenUrl}?grant_type=refresh_token&refresh_token=${user.refreshToken}&client_id=${process.env.BULLHORN_CLIENT_ID}&client_secret=${process.env.BULLHORN_CLIENT_SECRET}`);
@@ -246,22 +245,22 @@ async function bullhornTokenRefresh(user, dateNow, tokenLockTimeout, oauthApp, s
         user.platformAdditionalInfo = updatedPlatformAdditionalInfo;
         const date = new Date();
         user.tokenExpiry = date.setSeconds(date.getSeconds() + expires);
-        console.log('Bullhorn token refreshing finished')
+        logger.info('Bullhorn token refreshing finished')
         if (newLock) {
             const deletionStartTime = moment();
             await newLock.delete();
             const deletionEndTime = moment();
-            console.log(`Bullhorn lock deleted in ${deletionEndTime.diff(deletionStartTime)}ms`)
+            logger.info(`Bullhorn lock deleted in ${deletionEndTime.diff(deletionStartTime)}ms`)
         }
         const endRefreshTime = moment();
-        console.log(`Bullhorn token refreshing finished in ${endRefreshTime.diff(startRefreshTime)}ms`)
+        logger.info(`Bullhorn token refreshing finished in ${endRefreshTime.diff(startRefreshTime)}ms`)
     }
     catch (e) {
         if (newLock) {
             await newLock.delete();
         }
         // do not log error message, it will expose password
-        console.error('Bullhorn token refreshing failed');
+        logger.error('Bullhorn token refreshing failed', { stack: e.stack });
     }
     return user;
 }
@@ -288,10 +287,17 @@ async function checkAndRefreshAccessToken(oauthApp, user, tokenLockTimeout = 20,
         }
     }
     catch (e) {
+        logger.warn('Error checking and refreshing access token', { stack: e.stack });
         // Session expired
         user = await bullhornTokenRefresh(user, dateNow, tokenLockTimeout, oauthApp, skipLock);
     }
-    await user.save();
+    try {
+        await user.save();
+    }
+    catch (error) {
+        handleDatabaseError(error, 'Error saving user');
+        return null;
+    }
     return user;
 }
 
@@ -331,6 +337,7 @@ async function getUserInfo({ authHeader, tokenUrl, apiUrl, username }) {
 
     }
     catch (e) {
+        logger.error('Error getting user info', { stack: e.stack });
         return {
             successful: false,
             returnMessage: {
@@ -373,7 +380,12 @@ async function unAuthorize({ user }) {
     // remove user credentials
     user.accessToken = '';
     user.refreshToken = '';
-    await user.save();
+    try {
+        await user.save();
+    }
+    catch (error) {
+        return handleDatabaseError(error, 'Error saving user');
+    }
     return {
         returnMessage: {
             messageType: 'success',
@@ -394,13 +406,18 @@ async function getServerLoggingSettings({ user }) {
 
 async function updateServerLoggingSettings({ user, additionalFieldValues, oauthApp }) {
     if (!additionalFieldValues.apiUsername || !additionalFieldValues.apiPassword) {
-        await user.update({
-            platformAdditionalInfo: {
-                ...user.platformAdditionalInfo,
-                encodedApiUsername: '',
-                encodedApiPassword: ''
-            }
-        });
+        try {
+            await user.update({
+                platformAdditionalInfo: {
+                    ...user.platformAdditionalInfo,
+                    encodedApiUsername: '',
+                    encodedApiPassword: ''
+                }
+            });
+        }
+        catch (error) {
+            return handleDatabaseError(error, 'Error updating server logging settings');
+        }
         return {
             successful: true,
             returnMessage: {
@@ -428,7 +445,17 @@ async function updateServerLoggingSettings({ user, additionalFieldValues, oauthA
             },
         };
     }
-    await overrideSessionWithAuthInfo({ user, authData });
+    const updatedUser = await overrideSessionWithAuthInfo({ user, authData });
+    if (!updatedUser) {
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: 'Server logging settings update failed. Please check your username and password.',
+                ttl: 10000
+            },
+        };
+    }
     return {
         successful: true,
         returnMessage: {
@@ -451,7 +478,7 @@ async function postSaveUserInfo({ userInfo, oauthApp }) {
             await overrideSessionWithAuthInfo({ user, authData });
         }
         catch (e) {
-            console.error('Bullhorn password authorize failed');
+            logger.error('Bullhorn password authorize failed', { stack: e.stack });
         }
     }
     return userInfo;
@@ -470,8 +497,14 @@ async function overrideSessionWithAuthInfo({ user, authData }) {
     user.platformAdditionalInfo = {};
     user.platformAdditionalInfo = updatedPlatformAdditionalInfo;
     user.tokenExpiry = expires;
-    console.log('Bullhorn session overridden with auth info')
-    await user.save();
+    logger.info('Bullhorn session overridden with auth info')
+    try {
+        await user.save();
+    }
+    catch (error) {
+        handleDatabaseError(error, 'Error saving user');
+        return null;
+    }
     return user;
 }
 
@@ -479,6 +512,18 @@ async function findContact({ user, phoneNumber, isExtension, isForceRefreshAccou
     if (isExtension === 'true') {
         return {
             successful: false,
+            matchedContactInfo: []
+        }
+    }
+    const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
+    if (!phoneNumberObj.valid) {
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: 'Invalid phone number format',
+                ttl: 3000
+            },
             matchedContactInfo: []
         }
     }
@@ -495,7 +540,6 @@ async function findContact({ user, phoneNumber, isExtension, isForceRefreshAccou
             return res?.data?.commentActionList?.map(a => ({ const: a, title: a })) || [];
         }
     });
-    const phoneNumberObj = parsePhoneNumber(phoneNumber.replace(' ', '+'));
     const phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
     const matchedContactInfo = [];
     // check for Contact
@@ -511,7 +555,7 @@ async function findContact({ user, phoneNumber, isExtension, isForceRefreshAccou
         });
     for (const result of contactPersonInfo.data.data) {
         // compare dateAdded, dateLastModified, dateLastVisit
-        var mostRecentDateForContact = getMostRecentDate({
+        const mostRecentDateForContact = getMostRecentDate({
             allDateValues: [result.dateAdded, result.dateLastModified, result.dateLastVisit]
         });
         matchedContactInfo.push({
@@ -535,7 +579,7 @@ async function findContact({ user, phoneNumber, isExtension, isForceRefreshAccou
             }
         });
     for (const result of candidatePersonInfo.data.data) {
-        var mostRecentDateForCandidate = getMostRecentDate({
+        const mostRecentDateForCandidate = getMostRecentDate({
             allDateValues: [result.dateAdded, result.dateLastComment, result.dateLastModified]
         });
         matchedContactInfo.push({
@@ -559,7 +603,7 @@ async function findContact({ user, phoneNumber, isExtension, isForceRefreshAccou
             }
         });
     for (const result of leadPersonInfo.data.data) {
-        var mostRecentDateForLead = getMostRecentDate({
+        const mostRecentDateForLead = getMostRecentDate({
             allDateValues: [result.dateAdded, result.dateLastComment, result.dateLastModified]
         });
         matchedContactInfo.push({
@@ -662,7 +706,10 @@ async function findContact({ user, phoneNumber, isExtension, isForceRefreshAccou
     };
 }
 
-async function createContact({ user, authHeader, phoneNumber, newContactName, newContactType, additionalSubmission }) {
+async function createContact({ user, phoneNumber, newContactName, newContactType, additionalSubmission }) {
+    if (newContactType === '') {
+        return null;
+    }
     let commentActionListResponse;
     let extraDataTracking = {};
     try {
@@ -836,7 +883,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 }
 
-async function findContactWithName({ user, authHeader, name }) {
+async function findContactWithName({ user, name }) {
     let commentActionListResponse;
     let extraDataTracking = {};
     try {
@@ -1031,11 +1078,16 @@ async function getUserList({ user }) {
     return userList;
 }
 
-async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails, hashedAccountId }) {
+async function createCallLog({ user, contactInfo, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails, hashedAccountId }) {
     const noteActions = (additionalSubmission?.noteActions ?? '') || 'pending note';
     let assigneeId = null;
     if (additionalSubmission?.isAssignedToUser) {
-        if (additionalSubmission.adminAssignedUserToken) {
+        if (!assigneeId) {
+            const adminConfig = await AdminConfigModel.findByPk(hashedAccountId);
+            assigneeId = adminConfig?.userMappings?.find(mapping => typeof (mapping.rcExtensionId) === 'string' ? mapping.rcExtensionId == additionalSubmission.adminAssignedUserRcId : mapping.rcExtensionId.includes(additionalSubmission.adminAssignedUserRcId))?.crmUserId;
+        }
+
+        if (!assigneeId && additionalSubmission.adminAssignedUserToken) {
             try {
                 const unAuthData = jwt.decodeJwt(additionalSubmission.adminAssignedUserToken);
                 const assigneeUser = await UserModel.findByPk(unAuthData.id);
@@ -1044,20 +1096,15 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
                 }
             }
             catch (e) {
-                console.log('Error decoding admin assigned user token', e);
+                logger.error('Error decoding admin assigned user token', { stack: e.stack });
             }
         }
-
-        if (!assigneeId) {
-            const adminConfig = await AdminConfigModel.findByPk(hashedAccountId);
-            assigneeId = adminConfig.userMappings?.find(mapping => typeof (mapping.rcExtensionId) === 'string' ? mapping.rcExtensionId == additionalSubmission.adminAssignedUserRcId : mapping.rcExtensionId.includes(additionalSubmission.adminAssignedUserRcId))?.crmUserId;
-        }
     }
-    const subject = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? `to ${contactInfo.name}` : `from ${contactInfo.name}`}`;
     const putBody = {
         comments: composedLogDetails,
         personReference: {
-            id: contactInfo.id
+            id: contactInfo.id,
+            personSubtype: contactInfo.type
         },
         action: noteActions,
         dateAdded: callLog.startTime,
@@ -1066,14 +1113,12 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     }
     if (assigneeId) {
         putBody.commentingPerson = {
-            id: assigneeId
+            id: assigneeId,
+            personSubtype: 'CorporateUser'
         }
     }
     let addLogRes;
-    let extraDataTracking = {
-        withSmartNoteLog: !!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true),
-        withTranscript: !!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)
-    };
+    const extraDataTracking = {};
     try {
         addLogRes = await axios.put(
             `${user.platformAdditionalInfo.restUrl}entity/Note`,
@@ -1087,6 +1132,20 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         extraDataTracking.ratelimitRemaining = addLogRes.headers['ratelimit-remaining'];
         extraDataTracking.ratelimitAmount = addLogRes.headers['ratelimit-limit'];
         extraDataTracking.ratelimitReset = addLogRes.headers['ratelimit-reset'];
+        if (additionalSubmission?.copyToContactComments) {
+            const contactCommentResponse = await axios.post(`${user.platformAdditionalInfo.restUrl}entity/${contactInfo.type == 'Contact' ? 'ClientContact' : contactInfo.type}/${contactInfo.id}`,
+                {
+                    comments: note
+                },
+                {
+                    headers: {
+                        BhRestToken: user.platformAdditionalInfo.bhRestToken
+                    }
+                });
+            extraDataTracking.ratelimitRemaining = contactCommentResponse.headers['ratelimit-remaining'];
+            extraDataTracking.ratelimitAmount = contactCommentResponse.headers['ratelimit-limit'];
+            extraDataTracking.ratelimitReset = contactCommentResponse.headers['ratelimit-reset'];
+        }
     }
     catch (e) {
         if (isAuthError(e.response.status)) {
@@ -1175,7 +1234,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
     if (assigneeId) {
         postBody.commentingPerson = {
-            id: assigneeId
+            id: assigneeId,
+            personSubtype: 'CorporateUser'
         }
     }
     // If user has input agent notes, SSCL won't update it
@@ -1212,6 +1272,38 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             ratelimitAmount: patchLogRes.headers['ratelimit-limit'],
             ratelimitReset: patchLogRes.headers['ratelimit-reset']
         }
+        if (additionalSubmission?.copyToContactComments) {
+            const possbileContactTypes = ['clientContacts', 'candidates', 'leads'];
+            let contactType = null;
+            for (const ct of possbileContactTypes) {
+                if (getLogRes.data.data[ct]?.data?.length > 0) {
+                    switch (ct) {
+                        case 'clientContacts':
+                            contactType = 'Contact';
+                            break;
+                        case 'candidates':
+                            contactType = 'Candidate';
+                            break;
+                    }
+                }
+            }
+            if (!contactType) {
+                contactType = 'Lead';
+            }
+            const contactId = existingCallLog.contactId;
+            const contactCommentResponse = await axios.post(`${user.platformAdditionalInfo.restUrl}entity/${contactType == 'Contact' ? 'ClientContact' : contactType}/${contactId}`,
+                {
+                    comments: note
+                },
+                {
+                    headers: {
+                        BhRestToken: user.platformAdditionalInfo.bhRestToken
+                    }
+                });
+            extraDataTracking.ratelimitRemaining = contactCommentResponse.headers['ratelimit-remaining'];
+            extraDataTracking.ratelimitAmount = contactCommentResponse.headers['ratelimit-limit'];
+            extraDataTracking.ratelimitReset = contactCommentResponse.headers['ratelimit-reset'];
+        }
     }
     catch (e) {
         if (isAuthError(e.response.status)) {
@@ -1241,7 +1333,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     };
 }
 
-async function upsertCallDisposition({ user, existingCallLog, authHeader, dispositions }) {
+async function upsertCallDisposition({ user, existingCallLog, dispositions }) {
     let extraDataTracking = {};
     const noteActions = (dispositions.noteActions ?? '') || 'pending note';
 
@@ -1297,10 +1389,12 @@ async function upsertCallDisposition({ user, existingCallLog, authHeader, dispos
     }
 }
 
-async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
+async function createMessageLog({ user, contactInfo, correspondents, sharedSMSLogContent, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
     const noteActions = additionalSubmission?.noteActions ?? '';
     let userInfoResponse;
     let extraDataTracking = {};;
+    let subject = '';
+    let comments = '';
     try {
         userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=masterUserID=${user.id.replace('-bullhorn', '')}`,
             {
@@ -1322,50 +1416,55 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         else {
             throw e;
         }
+    }// Case: shared SMS
+    if (sharedSMSLogContent?.body) {
+        comments = sharedSMSLogContent.body;
     }
-    const userData = userInfoResponse.data.data[0];
-    const userName = userData.name;
-    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
-    let subject = '';
-    let comments = '';
-    switch (messageType) {
-        case 'SMS':
-            subject = `SMS conversation with ${contactInfo.name} - ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('YY/MM/DD')}`;
-            comments =
-                `<br><b>${subject}</b><br>` +
-                '<b>Conversation summary</b><br>' +
-                `${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('dddd, MMMM DD, YYYY')}<br>` +
-                'Participants<br>' +
-                `<ul><li><b>${userName}</b><br></li>` +
-                `<li><b>${contactInfo.name}</b></li></ul><br>` +
-                'Conversation(1 messages)<br>' +
-                'BEGIN<br>' +
-                '------------<br>' +
-                '<ul>' +
-                `<li>${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo.phoneNumber})` : userName} ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('hh:mm A')}<br>` +
-                `<b>${message.subject}</b></li>` +
-                '</ul>' +
-                '------------<br>' +
-                'END<br><br>' +
-                '--- Created via RingCentral App Connect';
-            break;
-        case 'Voicemail':
-            subject = `Voicemail left by ${contactInfo.name} - ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('YY/MM/DD')}`;
-            comments = `<br><b>${subject}</b><br>Voicemail recording link: ${recordingLink} <br><br>--- Created via RingCentral App Connect`;
-            break;
-        case 'Fax':
-            subject = `Fax document sent from ${contactInfo.name} - ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('YY/MM/DD')}`;
-            comments = `<br><b>${subject}</b><br>Fax document link: ${faxDocLink} <br><br>--- Created via RingCentral App Connect`;
-            break;
+    // Case: normal SMS
+    else {
+        const userData = userInfoResponse.data.data[0];
+        const userName = userData.name;
+        const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+        switch (messageType) {
+            case 'SMS':
+                subject = `SMS conversation with ${contactInfo.name} - ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('YY/MM/DD')}`;
+                comments =
+                    `<br><b>${subject}</b><br>` +
+                    '<b>Conversation summary</b><br>' +
+                    `${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('dddd, MMMM DD, YYYY')}<br>` +
+                    'Participants<br>' +
+                    `<ul><li><b>${userName}</b><br></li>` +
+                    `<li><b>${contactInfo.name}</b></li>` +
+                    `${(correspondents ?? []).map(c => `<li><b>${c[0]?.name ?? 'Unknown'}</b></li>`).join('')}</ul><br>` +
+                    'Conversation(1 messages)<br>' +
+                    'BEGIN<br>' +
+                    '------------<br>' +
+                    '<ul>' +
+                    `<li>${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo.phoneNumber})` : userName} ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('hh:mm A')}<br>` +
+                    `<b>${message.subject}</b></li>` +
+                    '</ul>' +
+                    '------------<br>' +
+                    'END<br><br>' +
+                    '--- Created via RingCentral App Connect';
+                break;
+            case 'Voicemail':
+                subject = `Voicemail left by ${contactInfo.name} - ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('YY/MM/DD')}`;
+                comments = `<br><b>${subject}</b><br>Voicemail recording link: ${recordingLink} <br><br>--- Created via RingCentral App Connect`;
+                break;
+            case 'Fax':
+                subject = `Fax document sent from ${contactInfo.name} - ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('YY/MM/DD')}`;
+                comments = `<br><b>${subject}</b><br>Fax document link: ${faxDocLink} <br><br>--- Created via RingCentral App Connect`;
+                break;
+        }
     }
-
     const putBody = {
         comments: comments,
         action: noteActions,
         personReference: {
-            id: contactInfo.id
+            id: contactInfo.id,
+            personSubtype: contactInfo.type
         },
-        dateAdded: message.creationTime
+        dateAdded: sharedSMSLogContent ? sharedSMSLogContent.conversationCreatedDate : message.creationTime
     }
     const addLogRes = await axios.put(
         `${user.platformAdditionalInfo.restUrl}entity/Note`,
@@ -1392,9 +1491,11 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     }
 }
 
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader }) {
+async function updateMessageLog({ user, contactInfo, sharedSMSLogContent, existingMessageLog, message, authHeader }) {
     const existingLogId = existingMessageLog.thirdPartyLogId;
     let userInfoResponse;
+    let logBody = '';
+    let patchBody = {};
     let extraDataTracking = {};;
     try {
         userInfoResponse = await axios.get(`${user.platformAdditionalInfo.restUrl}query/CorporateUser?fields=id,name&where=masterUserID=${user.id.replace('-bullhorn', '')}`,
@@ -1418,31 +1519,36 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
             throw e;
         }
     }
-    const userData = userInfoResponse.data.data[0];
-    const userName = userData.name;
-    const getLogRes = await axios.get(
-        `${user.platformAdditionalInfo.restUrl}entity/Note/${existingLogId}?fields=id,comments`,
-        {
-            headers: {
-                BhRestToken: user.platformAdditionalInfo.bhRestToken
+    // Case: shared SMS
+    if (sharedSMSLogContent?.body) {
+        logBody = sharedSMSLogContent.body;
+    }
+    // Case: normal SMS
+    else {
+        const userData = userInfoResponse.data.data[0];
+        const userName = userData.name;
+        const getLogRes = await axios.get(
+            `${user.platformAdditionalInfo.restUrl}entity/Note/${existingLogId}?fields=id,comments`,
+            {
+                headers: {
+                    BhRestToken: user.platformAdditionalInfo.bhRestToken
+                }
             }
-        }
-    );
-    let logBody = getLogRes.data.data.comments;
-    let patchBody = {};
-    const newMessageLog =
-        `<li>${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo.phoneNumber})` : userName} ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('hh:mm A')}<br>` +
-        `<b>${message.subject}</b></li>`;
-    // Add new message at the end (before the closing </ul> tag inside BEGIN/END block)
-    logBody = logBody.replace('</ul>------------<br>', `${newMessageLog}</ul>------------<br>`);
+        );
+        logBody = getLogRes.data.data.comments;
+        const newMessageLog =
+            `<li>${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo.phoneNumber})` : userName} ${moment(message.creationTime).utcOffset(Number(user.timezoneOffset)).format('hh:mm A')}<br>` +
+            `<b>${message.subject}</b></li>`;
+        // Add new message at the end (before the closing </ul> tag inside BEGIN/END block)
+        logBody = logBody.replace('</ul>------------<br>', `${newMessageLog}</ul>------------<br>`);
 
-    const regex = RegExp('<br>Conversation.(.*) messages.');
-    const matchResult = regex.exec(logBody);
-    logBody = logBody.replace(matchResult[0], `<br>Conversation(${parseInt(matchResult[1]) + 1} messages)`);
-
+        const regex = RegExp('<br>Conversation.(.*) messages.');
+        const matchResult = regex.exec(logBody);
+        logBody = logBody.replace(matchResult[0], `<br>Conversation(${parseInt(matchResult[1]) + 1} messages)`);
+    }
     patchBody = {
         comments: logBody,
-        dateAdded: message.creationTime
+        dateAdded: sharedSMSLogContent ? sharedSMSLogContent.conversationCreatedDate : message.creationTime
     }
     try {
         // I dunno, Bullhorn uses POST as PATCH
@@ -1489,7 +1595,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     }
 }
 
-async function getCallLog({ user, callLogId, authHeader }) {
+async function getCallLog({ user, callLogId }) {
     let getLogRes;
     let extraDataTracking = {};;
     try {
@@ -1557,12 +1663,510 @@ async function refreshSessionToken(user) {
     // Not sure why, assigning platformAdditionalInfo first then give it another value so that it can be saved to db
     user.platformAdditionalInfo = {};
     user.platformAdditionalInfo = updatedPlatformAdditionalInfo;
-    await user.save();
+    try {
+        await user.save();
+    }
+    catch (error) {
+        handleDatabaseError(error, 'Error saving user');
+        return null;
+    }
     return user;
 }
 
 function isAuthError(statusCode) {
     return statusCode >= 400 && statusCode < 500;
+}
+
+
+function normalizeBullhornAppointmentToAppointment(bhAppointment) {
+    const id = bhAppointment?.id != null ? `${bhAppointment.id}` : null;
+    const dateBegin = bhAppointment?.dateBegin;
+    const dateEnd = bhAppointment?.dateEnd;
+    const startTimeUtc = Number.isFinite(dateBegin) ? moment.utc(dateBegin).toISOString() : null;
+    const durationMinutes = (Number.isFinite(dateBegin) && Number.isFinite(dateEnd))
+        ? Math.max(0, Math.round(moment.utc(dateEnd).diff(moment.utc(dateBegin), 'minutes', true)))
+        : null;
+
+    const contactFromAssoc = (() => {
+        const candId = bhAppointment?.candidateReference?.id;
+        if (candId != null) return { id: `${candId}`, type: 'Candidate' };
+        const ccId = bhAppointment?.clientContactReference?.id;
+        if (ccId != null) return { id: `${ccId}`, type: 'ClientContact' };
+        const leadId = bhAppointment?.lead?.id;
+        if (leadId != null) return { id: `${leadId}`, type: 'Lead' };
+        return { id: null, type: null };
+    })();
+
+    // The attendees field may be either an array of ids, or an association object with `data: [{id}]`
+    const attendeeIds = (() => {
+        const raw = bhAppointment?.attendees;
+        if (Array.isArray(raw)) return raw.map(a => (a?.id ?? a)).filter(v => v != null).map(v => `${v}`);
+        const assoc = raw?.data;
+        if (Array.isArray(assoc)) return assoc.map(a => a?.id).filter(v => v != null).map(v => `${v}`);
+        return [];
+    })();
+
+    return {
+        thirdPartyAppointmentId: id,
+        id,
+        title: bhAppointment?.subject ?? '',
+        description: bhAppointment?.description ?? '',
+        participantName: '',
+        startTimeUtc,
+        durationMinutes,
+        status: bhAppointment?.isDeleted ? 'cancelled' : 'scheduled',
+        contactId: contactFromAssoc.id ?? '',
+        contactType: contactFromAssoc.type ?? '',
+        attendeeIds
+    };
+}
+
+async function bullhornGetWithRefresh({ user, url, config }) {
+    try {
+        return await axios.get(url, config);
+    }
+    catch (e) {
+        const status = e?.response?.status;
+        if (status && isAuthError(status)) {
+            user = await refreshSessionToken(user);
+            return await axios.get(url, {
+                ...(config ?? {}),
+                headers: {
+                    ...((config ?? {}).headers ?? {}),
+                    BhRestToken: user.platformAdditionalInfo.bhRestToken
+                }
+            });
+        }
+        throw e;
+    }
+}
+
+async function bullhornPutWithRefresh({ user, url, body, config }) {
+    try {
+        return await axios.put(url, body, config);
+    }
+    catch (e) {
+        const status = e?.response?.status;
+        if (status && isAuthError(status)) {
+            user = await refreshSessionToken(user);
+            return await axios.put(url, body, {
+                ...(config ?? {}),
+                headers: {
+                    ...((config ?? {}).headers ?? {}),
+                    BhRestToken: user.platformAdditionalInfo.bhRestToken
+                }
+            });
+        }
+        throw e;
+    }
+}
+
+async function bullhornPostWithRefresh({ user, url, body, config }) {
+    try {
+        return await axios.post(url, body, config);
+    }
+    catch (e) {
+        const status = e?.response?.status;
+        if (status && isAuthError(status)) {
+            user = await refreshSessionToken(user);
+            return await axios.post(url, body, {
+                ...(config ?? {}),
+                headers: {
+                    ...((config ?? {}).headers ?? {}),
+                    BhRestToken: user.platformAdditionalInfo.bhRestToken
+                }
+            });
+        }
+        throw e;
+    }
+}
+
+async function bullhornDeleteWithRefresh({ user, url, config }) {
+    try {
+        return await axios.delete(url, config);
+    }
+    catch (e) {
+        const status = e?.response?.status;
+        if (status && isAuthError(status)) {
+            user = await refreshSessionToken(user);
+            return await axios.delete(url, {
+                ...(config ?? {}),
+                headers: {
+                    ...((config ?? {}).headers ?? {}),
+                    BhRestToken: user.platformAdditionalInfo.bhRestToken
+                }
+            });
+        }
+        throw e;
+    }
+}
+
+async function listAppointments({ user, range }) {
+try{
+    const startDate = moment.utc().subtract(1, 'month').format('YYYY-MM-DD');
+    const endDate = moment.utc().add(3, 'month').format('YYYY-MM-DD');
+    const startMs = moment.utc(startDate, 'YYYY-MM-DD', true).startOf('day').valueOf();
+    const endMs = moment.utc(endDate, 'YYYY-MM-DD', true).endOf('day').valueOf();
+
+    const where = `isDeleted=false AND owner.id=${user.platformAdditionalInfo.id} AND dateBegin>=${startMs} AND dateBegin<=${endMs}`;
+    const fields = 'id,subject,description,dateBegin,dateEnd,isDeleted,candidateReference,clientContactReference,lead';
+
+    const pageSize = 20;
+    const resp = await bullhornGetWithRefresh({
+        user,
+        url: `${user.platformAdditionalInfo.restUrl}query/Appointment`,
+        config: {
+            headers: { BhRestToken: user.platformAdditionalInfo.bhRestToken },
+            params: { fields, where, start: 0, count: pageSize, orderBy: 'dateBegin' }
+        }
+    });
+
+    const rows = Array.isArray(resp?.data?.data) ? resp.data.data : [];
+    const apptIds = rows
+        .map(a => a?.id)
+        .filter(v => v != null)
+        .map(v => Number(v))
+        .filter(v => Number.isFinite(v));
+    const {attendeesByApptId } = await (async () => {
+        const attendeeIdsByApptId = new Map();
+        const attendeesByApptId = new Map();
+        const uniqIds = Array.from(new Set(apptIds));
+        if (!uniqIds.length) return { attendeeIdsByApptId, attendeesByApptId };
+
+        const attendeeWhere = `appointment.id IN (${uniqIds.join(',')})`;
+        // Bullhorn query fields are picky; keep this close to their documented examples.
+        const attendeeFields = 'id,appointment(id),attendee(id),acceptanceStatus';
+
+        const attResp = await bullhornGetWithRefresh({
+            user,
+            url: `${user.platformAdditionalInfo.restUrl}query/AppointmentAttendee`,
+            config: {
+                headers: { BhRestToken: user.platformAdditionalInfo.bhRestToken },
+                params: { fields: attendeeFields, where: attendeeWhere, start: 0, count: 2000 }
+            }
+        });
+        const attData = Array.isArray(attResp?.data?.data) ? attResp.data.data : [];
+        for (const row of attData) {
+            const apptId = row?.appointment?.id;
+            const att = row?.attendee ?? null;
+            const attendeeId = att?.id;
+            if (apptId == null || attendeeId == null) continue;
+            const key = `${apptId}`;
+
+            const idStr = `${attendeeId}`;
+
+            const ids = attendeeIdsByApptId.get(key) ?? [];
+            ids.push(idStr);
+            attendeeIdsByApptId.set(key, ids);
+
+            const firstName = att?.firstName ?? '';
+            const lastName = att?.lastName ?? '';
+            const name = `${firstName} ${lastName}`.trim();
+            const type = att?._subtype ?? att?.type ?? '';
+            const attendeeObj = {
+                id: idStr,
+                ...(name ? { name } : {}),
+                ...(type ? { type } : {}),
+                ...(row?.acceptanceStatus != null ? { status: row.acceptanceStatus } : {})
+            };
+            const attendees = attendeesByApptId.get(key) ?? [];
+            attendees.push(attendeeObj);
+            attendeesByApptId.set(key, attendees);
+        }
+
+        for (const [k, v] of attendeeIdsByApptId.entries()) {
+            attendeeIdsByApptId.set(k, Array.from(new Set(v)));
+        }
+
+        for (const [k, v] of attendeesByApptId.entries()) {
+            const seen = new Set();
+            const deduped = [];
+            for (const a of v) {
+                const key = a?.id;
+                if (!key || seen.has(key)) continue;
+                seen.add(key);
+                deduped.push(a);
+            }
+            attendeesByApptId.set(k, deduped);
+        }
+
+        return { attendeeIdsByApptId, attendeesByApptId };
+    })();
+    const appointments = rows
+        .map((row) => {
+            const appt = normalizeBullhornAppointmentToAppointment(row);
+            if (appt?.id) {
+                appt.attendees = attendeesByApptId.get(appt.id) ?? [];
+            }
+            return appt;
+        })
+        .filter(a => a?.id != null);
+    return { appointments };
+} catch (error) {
+    return {
+        successful: false,
+        returnMessage: {
+            messageType: 'warning',
+            message: 'Error listing appointments',
+            ttl: 5000
+        }
+    }
+}
+}
+
+function extractPrimaryBullhornAppointmentContact(payload) {
+    if (!payload) return { id: null, type: null };
+    if (Array.isArray(payload.contacts) && payload.contacts.length) {
+        const c0 = payload.contacts[0];
+        if (c0 && typeof c0 === 'object') return { id: c0.id != null ? `${c0.id}` : null, type: c0.type ?? c0.contactType ?? null };
+        return { id: `${c0}`, type: null };
+    }
+    return { id: null, type: null };
+}
+
+async function createAppointment({ user, payload }) {
+    const startAt = payload?.startTimeUtc??null;
+    const durationMinutes = Number(payload?.durationMinutes ?? 0);
+    const startMs = startAt ? moment.utc(startAt).valueOf() : null;
+    const endMs = startMs != null ? moment.utc(startAt).add(durationMinutes, 'minutes').valueOf() : null;
+    const primaryContact = extractPrimaryBullhornAppointmentContact(payload);
+
+    const putBody = {
+        dateBegin: startMs ?? Date.now(),
+        dateEnd: endMs ?? (Date.now() + 15 * 60 * 1000),
+        description: payload?.description ?? payload?.summary ?? '',
+        isPrivate: false,
+        subject: payload?.title ?? 'Appointment',
+        isDeleted: false,
+    };
+    if (primaryContact?.id) {
+        const type = (primaryContact.type ?? '').toLowerCase();
+        if (type === 'candidate') {
+            putBody.candidateReference = { id: Number(primaryContact.id) };
+        }
+        else if (type === 'contact' || type === 'clientcontact') {
+            putBody.clientContactReference = { id: Number(primaryContact.id) };
+        }
+        else if (type === 'lead') {
+            putBody.lead = { id: Number(primaryContact.id) };
+        }
+    }
+
+    const createRes = await bullhornPutWithRefresh({
+        user,
+        url: `${user.platformAdditionalInfo.restUrl}entity/Appointment`,
+        body: putBody,
+        config: { headers: { BhRestToken: user.platformAdditionalInfo.bhRestToken } }
+    });
+
+    const appointmentId = createRes?.data?.changedEntityId != null ? `${createRes.data.changedEntityId}` : null;
+    if (!appointmentId) {
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: 'Could not create appointment in Bullhorn.',
+                ttl: 5000
+            }
+        };
+    }
+
+    // Add all contacts as attendee for the created appointment in Bullhorn
+    if (Array.isArray(payload?.contacts) && payload.contacts.length > 0) {
+        const attendeesToAdd = payload.contacts.filter(id => !!id);
+        const axios = require('axios');
+        const restUrl = user.platformAdditionalInfo.restUrl;
+        const bhRestToken = user.platformAdditionalInfo.bhRestToken;
+        for (const attendee of attendeesToAdd) {
+            try {
+                await axios.put(
+                    `${restUrl}entity/AppointmentAttendee`,
+                    {
+                        appointment: { id: Number(appointmentId) },
+                        attendee: { id: Number(attendee?.id) }
+                    },
+                    {
+                        headers: { BhRestToken: bhRestToken }
+                    }
+                );
+            } catch (err) {
+                console.log({message:'error adding attendee to appointment'});
+            }
+        }
+    }
+    return { appointmentId };
+}
+
+async function updateAppointment({ user, appointmentId, patchBody }) {
+    try{
+    const startAt = patchBody?.startTimeUtc ?? patchBody?.startTime ?? null;
+    const durationMinutes = Number(patchBody?.durationMinutes ?? 0);
+    const startMs = startAt ? moment.utc(startAt).valueOf() : null;
+    const endMs = startMs != null ? moment.utc(startAt).add(durationMinutes, 'minutes').valueOf() : null;
+
+    const postBody = {};
+    if (patchBody?.title != null) postBody.subject = patchBody.title;
+    postBody.description = patchBody?.summary ?? '';
+    if (startMs != null) postBody.dateBegin = startMs;
+    if (endMs != null) postBody.dateEnd = endMs;
+    if (patchBody?.location != null) postBody.location = patchBody.location;
+    if (patchBody?.communicationMethod != null) postBody.communicationMethod = patchBody.communicationMethod;
+    if (patchBody?.type != null) postBody.type = patchBody.type;
+    await bullhornPostWithRefresh({
+        user,
+        url: `${user.platformAdditionalInfo.restUrl}entity/Appointment/${appointmentId}`,
+        body: postBody,
+        config: { headers: { BhRestToken: user.platformAdditionalInfo.bhRestToken } }
+    });
+    const hasAttendeeUpdate = Array.isArray(patchBody?.contacts);
+
+    const appointmentIdNum = Number(appointmentId);
+    if (hasAttendeeUpdate && Number.isFinite(appointmentIdNum)) {
+        const toId = (v) => {
+            const raw = (v && typeof v === 'object') ? (v.id) : v;
+            const n = typeof raw === 'number' ? raw : Number(raw);
+            return Number.isFinite(n) ? n : null;
+        };
+
+        const desiredAttendeeSource = Array.isArray(patchBody?.contacts)
+            ? patchBody.contacts
+            :[];
+
+        const desiredAttendeeIds = Array.from(new Set(
+            (Array.isArray(desiredAttendeeSource) && desiredAttendeeSource.length
+                ? desiredAttendeeSource
+                : []
+            )
+                .map(v => {
+                    if (v && typeof v === 'object') return toId(v.id);
+                    return toId(v);
+                })
+                .filter(v => v != null)
+        ));
+
+        const desiredIdSet = new Set(desiredAttendeeIds);
+
+        const existingLinks = [];
+        try {
+            const existingAttendeesRes = await bullhornGetWithRefresh({
+                user,
+                url: `${user.platformAdditionalInfo.restUrl}query/AppointmentAttendee`,
+                config: {
+                    headers: { BhRestToken: user.platformAdditionalInfo.bhRestToken },
+                    params: {
+                        fields: 'id,attendee(id),appointment(id)',
+                        where: `appointment.id=${appointmentIdNum}`,
+                        start: 0,
+                        count: 2000
+                    }
+                }
+            });
+            const rows = Array.isArray(existingAttendeesRes?.data?.data) ? existingAttendeesRes.data.data : [];
+            for (const row of rows) {
+                const attendeeId = toId(row?.attendee?.id);
+                const linkId = toId(row?.id);
+                if (attendeeId == null || linkId == null) continue;
+                existingLinks.push({ attendeeId, linkId });
+            }
+        } catch (e) {
+            console.log({ message: 'Error fetching existing Bullhorn appointment attendees'});
+        }
+
+        // Remove attendees that are no longer desired
+        for (const { attendeeId, linkId } of existingLinks) {
+            if (desiredIdSet.has(attendeeId)) continue;
+            try {
+                await bullhornDeleteWithRefresh({
+                    user,
+                    url: `${user.platformAdditionalInfo.restUrl}entity/AppointmentAttendee/${linkId}`,
+                    config: { headers: { BhRestToken: user.platformAdditionalInfo.bhRestToken } }
+                });
+            } catch (e) {
+                console.log({ message: 'Error removing attendee from Bullhorn appointment' });
+            }
+        }
+
+        // Add new attendees that don't exist yet
+        const existingAttendeeIdSet = new Set(existingLinks.map(l => l.attendeeId));
+        for (const attendeeId of desiredAttendeeIds) {
+            if (existingAttendeeIdSet.has(attendeeId)) continue;
+            try {
+                await bullhornPutWithRefresh({
+                    user,
+                    url: `${user.platformAdditionalInfo.restUrl}entity/AppointmentAttendee`,
+                    body: {
+                        appointment: { id: appointmentIdNum },
+                        attendee: { id: attendeeId }
+                    },
+                    config: { headers: { BhRestToken: user.platformAdditionalInfo.bhRestToken } }
+                });
+            } catch (e) {
+                console.log({ message: 'Error adding attendee to Bullhorn appointment' });
+            }
+        }
+    }
+
+    const refreshRes = await bullhornGetWithRefresh({
+        user,
+        url: `${user.platformAdditionalInfo.restUrl}entity/Appointment/${appointmentId}`,
+        config: {
+            headers: { BhRestToken: user.platformAdditionalInfo.bhRestToken },
+            params: { fields: 'id,subject,description,dateBegin,dateEnd,isDeleted,candidateReference,clientContactReference' }
+        }
+    });
+    const appointment = normalizeBullhornAppointmentToAppointment(refreshRes?.data?.data);
+    return { appointment };
+} catch (error) {
+    console.log({message:"Bullhorn Update Error is"});
+    return {
+        successful: false,
+        returnMessage: {
+            messageType: 'warning',
+            message: 'Error updating appointment',
+            ttl: 5000
+        }
+    }
+}
+}
+
+async function refreshAppointment({ user, appointmentId }) {
+    const resp = await bullhornGetWithRefresh({
+        user,
+        url: `${user.platformAdditionalInfo.restUrl}entity/Appointment/${appointmentId}`,
+        config: {
+            headers: { BhRestToken: user.platformAdditionalInfo.bhRestToken },
+            params: { fields: 'id,subject,description,dateBegin,dateEnd,isDeleted,candidateReference,clientContactReference,lead,attendees' }
+        }
+    });
+    const appointment = normalizeBullhornAppointmentToAppointment(resp?.data?.data);
+    if (!appointment?.id) {
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: 'Appointment not found in Bullhorn.',
+                ttl: 5000
+            }
+        };
+    }
+    return { appointment };
+}
+
+async function cancelAppointment({ user, appointmentId }) {
+    await bullhornPostWithRefresh({
+        user,
+        url: `${user.platformAdditionalInfo.restUrl}entity/Appointment/${appointmentId}`,
+        body: { isDeleted: true },
+        config: { headers: { BhRestToken: user.platformAdditionalInfo.bhRestToken } }
+    });
+    return {
+        successful: true,
+        returnMessage: {
+            messageType: 'success',
+            message: 'Appointment cancelled successfully.',
+            ttl: 5000
+        }
+    };
 }
 
 // ===================== Monthly CSV Report Helpers =====================
@@ -1581,19 +2185,7 @@ async function fetchBullhornUserProfile({ user }) {
         const data = resp?.data?.data?.[0] ?? {};
         return { email: data.email || '', name: data.name || '' };
     } catch (error) {
-        // const safeLog = {
-        //     message: 'Error fetching Bullhorn user profile:',
-        //     code: (e && e.code) || undefined,
-        //     status: (e && e.response && e.response.status) || undefined,
-        //     statusText: (e && e.response && e.response.statusText) || undefined,
-        //     method: (e && e.config && e.config.method) || undefined,
-        //     url: (e && e.config && e.config.url && e.config.url.split('?')[0]) || undefined
-        // };
-        const safeLog = {
-            message: 'Error fetching Bullhorn user profile:',
-            Error: error
-        };
-        console.log(safeLog);
+        logger.error('Error fetching Bullhorn user profile', { stack: error.stack });
         return { email: '', name: '' };
     }
 }
@@ -1637,7 +2229,7 @@ async function generateMonthlyCsvReport() {
     const batchConcurrency = Number(process.env.BULLHORN_REPORT_CONCURRENCY) || 8;
     const batchDelayMs = Number(process.env.BULLHORN_REPORT_BATCH_DELAY_MS) || 200;
     const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-    console.log({
+    logger.info({
         message: 'Generating Bullhorn monthly CSV report for', Length: boundedUsers.length
     }
     );
@@ -1648,7 +2240,7 @@ async function generateMonthlyCsvReport() {
                 try {
                     const profile = await fetchBullhornUserProfile({ user: currentUser });
                     if (!profile?.email && !profile?.name) {
-                        console.log({
+                        logger.info({
                             message: 'Skipping user because email and name are not found',
                             userId: currentUser.id
                         });
@@ -1661,17 +2253,7 @@ async function generateMonthlyCsvReport() {
                     const corpToken = (currentUser.platformAdditionalInfo?.restUrl || '').match(/rest-services\/([^/]+)/)?.[1] || '';
                     return [masterId, userEmail, bullhornId, userName, corpToken];
                 } catch (error) {
-                    // const safeLog = {
-                    //     message: 'GenerateMonthlyCsvReport Error fetching Bullhorn user profile:',
-                    //     code: (error && error.code) || undefined,
-                    //     status: (error && error.response && error.response.status) || undefined,
-                    //     statusText: (error && error.response && error.response.statusText) || undefined
-                    // };
-                    const safeLog = {
-                        message: 'GenerateMonthlyCsvReport Error fetching Bullhorn user profile:',
-                        Error: error
-                    };
-                    console.error(safeLog);
+                    logger.error('Error fetching Bullhorn user profile', { stack: error.stack });
                     return null;
                 }
             })
@@ -1692,7 +2274,7 @@ async function generateMonthlyCsvReport() {
     const baseDir = isLambda ? os.tmpdir() : process.cwd();
     const outDir = path.join(baseDir, 'reports');
     if (!fs.existsSync(outDir)) {
-        try { fs.mkdirSync(outDir, { recursive: true }); } catch (e) { /* ignore */ }
+        try { fs.mkdirSync(outDir, { recursive: true }); } catch (e) { logger.error('Error creating report directory', { stack: e.stack }); }
     }
     const filePath = path.join(outDir, `bullhorn_report_${moment.utc().format('YYYY-MM-20')}.csv`);
     fs.writeFileSync(filePath, csv, 'utf8');
@@ -1702,10 +2284,10 @@ async function sendMonthlyCsvReportByEmail() {
     try {
         const report = await generateMonthlyCsvReport();
         if (!report) {
-            console.error('Report generation failed. Skipping email.');
+            logger.error('Report generation failed. Skipping email.');
             return;
         }
-        const { csv, filePath } = report;
+        const { filePath } = report;
         const axios = require('axios');
         const fs = require('fs');
         // Read the CSV file and encode it as base64
@@ -1748,7 +2330,7 @@ async function sendMonthlyCsvReportByEmail() {
 
         // Send the email via Customer.io API
         try {
-            const response = await axios.post(
+            await axios.post(
                 'https://api.customer.io/v1/send/email',
                 requestBody,
                 {
@@ -1759,17 +2341,17 @@ async function sendMonthlyCsvReportByEmail() {
                 }
             );
         } catch (error) {
-            console.error('Failed to send email:', error.response ? error.response.data : error.message);
+            logger.error('Failed to send email:', { stack: error.stack });
             await sendErrorReportEmail(error, 'sendMonthlyCsvReportByEmail');
         }
         try {
             fs.unlinkSync(filePath);
-            console.log(`File ${filePath} deleted successfully after sending email.`);
+            logger.info(`File ${filePath} deleted successfully after sending email.`);
         } catch (err) {
-            console.error(`Failed to delete file ${filePath}:`);
+            logger.error(`Failed to delete file ${filePath}:`, { stack: err.stack });
         }
     } catch (error) {
-        console.error('Failed to Generate Report and send email:');
+        logger.error('Failed to Generate Report and send email:', { stack: error.stack });
         await sendErrorReportEmail(error, 'sendMonthlyCsvReportByEmail');
     }
 }
@@ -1804,7 +2386,7 @@ async function sendErrorReportEmail(error, contextInfo = '') {
             }
         );
     } catch (err) {
-        console.error('Failed to send error report email:');
+        logger.error('Failed to send error report email:', { stack: err.stack });
     }
 }
 
@@ -1828,6 +2410,10 @@ exports.getUserList = getUserList;
 exports.getServerLoggingSettings = getServerLoggingSettings;
 exports.updateServerLoggingSettings = updateServerLoggingSettings;
 exports.postSaveUserInfo = postSaveUserInfo;
-exports.sendMonthlyCsvReportByEmail = sendMonthlyCsvReportByEmail;
-exports.generateMonthlyCsvReport = generateMonthlyCsvReport;
 exports.getLogFormatType = getLogFormatType;
+exports.listAppointments = listAppointments;
+exports.createAppointment = createAppointment;
+exports.updateAppointment = updateAppointment;
+exports.refreshAppointment = refreshAppointment;
+//exports.confirmAppointment = confirmAppointment;
+exports.cancelAppointment = cancelAppointment;

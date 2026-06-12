@@ -5,6 +5,8 @@ const moment = require('moment');
 const url = require('url');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const { LOG_DETAILS_FORMAT_TYPE } = require('@app-connect/core/lib/constants');
+const logger = require('@app-connect/core/lib/logger');
+const { handleDatabaseError } = require('@app-connect/core/lib/errorHandler');
 function getAuthType() {
     return 'oauth';
 }
@@ -23,7 +25,22 @@ async function getOauthInfo({ hostname }) {
     }
 }
 
-async function getUserInfo({ authHeader, additionalInfo, query }) {
+async function getUserInfo({ authHeader, query }) {
+    // Parse entity and company from callbackUri since they're not directly in query
+    if (query.callbackUri) {
+        const parsedUrl = url.parse(query.callbackUri, true);
+        if (parsedUrl.query.entity) {
+            query.entity = parsedUrl.query.entity;
+        }
+        if (parsedUrl.query.company) {
+            query.company = parsedUrl.query.company;
+        }
+        if (parsedUrl.query.role) {
+            query.role = parsedUrl.query.role;
+        }
+        console.log('Parsed NetSuite parameters:', { entity: query.entity, company: query.company, role: query.role });
+    }
+
     try {
         let getCurrentLoggedInUserResponse;
 
@@ -38,8 +55,8 @@ async function getUserInfo({ authHeader, additionalInfo, query }) {
                 headers: { 'Authorization': authHeader }
             });
             oneWorldEnabled = oneWorldLicenseResponse?.data?.oneWorldEnabled;
-        } catch (e) {
-            console.log({ message: "Error in getting OneWorldLicense" });
+        } catch (error) {
+            logger.error({ message: "Error in getting OneWorldLicense", stack: error.stack });
             const subsidiaryId = getCurrentLoggedInUserResponse?.data?.subsidiary;
             if (subsidiaryId !== undefined && subsidiaryId !== '') {
                 oneWorldEnabled = true;
@@ -94,8 +111,20 @@ async function getUserInfo({ authHeader, additionalInfo, query }) {
             }
 
         } catch (error) {
-            console.log({ message: "Error in getting permission set" });
+            logger.error({ message: "Error in getting permission set", stack: error.stack });
         }
+        // Validate that we have the required NetSuite parameters
+        if (!query.entity || !query.company) {
+            return {
+                successful: false,
+                returnMessage: {
+                    messageType: 'warning',
+                    message: 'Missing required NetSuite parameters (entity or company). Please try reconnecting to NetSuite.',
+                    ttl: 10000
+                }
+            };
+        }
+
         return {
             successful: true,
             platformUserInfo: {
@@ -117,7 +146,7 @@ async function getUserInfo({ authHeader, additionalInfo, query }) {
         };
     } catch (error) {
         const errorDetails = netSuiteErrorDetails(error, "Could not load user information");
-        console.log({ message: "Error in getting employee information", Path: error?.request?.path, Host: error?.request?.host, errorDetails, responseHeader: error?.response?.headers });
+        logger.error({ message: "Error in getting employee information", Path: error?.request?.path, Host: error?.request?.host, errorDetails, responseHeader: error?.response?.headers });
         return {
             successful: false,
             returnMessage: {
@@ -142,31 +171,31 @@ async function getUserInfo({ authHeader, additionalInfo, query }) {
 }
 
 async function getUserList({ user, authHeader }) {
-    try{
-    const query = {
-        q: "SELECT id, firstname,middlename, lastname, email, giveaccess, isinactive FROM employee"
-      };
+    try {
+        const query = {
+            q: "SELECT id, firstname,middlename, lastname, email, giveaccess, isinactive FROM employee"
+        };
 
-    const userListResponse = await axios.post(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, query, {
-        headers: { 'Authorization': authHeader,'Content-Type': 'application/json', 'Prefer': 'transient' }
-    });
+        const userListResponse = await axios.post(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, query, {
+            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
+        });
 
-    const userList = [];
-    if (userListResponse?.data?.items?.length > 0) {
-        for (const user of userListResponse?.data?.items) {
-            if(user.email===undefined || user.email===null || user.email==='') continue;
-            userList.push({
-                id: user.id,
-                name: [user.firstname, user.middlename, user.lastname].filter(Boolean).join(' '),
-                email: user.email
-            });
+        const userList = [];
+        if (userListResponse?.data?.items?.length > 0) {
+            for (const user of userListResponse?.data?.items) {
+                if (user.email === undefined || user.email === null || user.email === '') continue;
+                userList.push({
+                    id: user.id,
+                    name: [user.firstname, user.middlename, user.lastname].filter(Boolean).join(' '),
+                    email: user.email
+                });
+            }
         }
+        return userList;
+    } catch (error) {
+        logger.error({ message: "Error in getting user list", errorDetails: netSuiteErrorDetails(error, "Error in getting user list") });
+        return [];
     }
-    return userList;
-} catch (error) {
-    console.log({message: "Error in getting user list", errorDetails: netSuiteErrorDetails(error, "Error in getting user list")});
-    return [];
-}
 }
 
 async function unAuthorize({ user }) {
@@ -175,7 +204,7 @@ async function unAuthorize({ user }) {
     const refreshTokenParams = new url.URLSearchParams({
         token: user.refreshToken
     });
-    const accessTokenRevokeRes = await axios.post(
+    await axios.post(
         revokeUrl,
         refreshTokenParams,
         {
@@ -184,7 +213,12 @@ async function unAuthorize({ user }) {
     // remove user credentials
     user.accessToken = '';
     user.refreshToken = '';
-    await user.save();
+    try {
+        await user.save();
+    }
+    catch (error) {
+        return handleDatabaseError(error, 'Error saving user');
+    }
     return {
         returnMessage: {
             messageType: 'success',
@@ -239,7 +273,7 @@ async function upsertCallDisposition({ user, existingCallLog, authHeader, dispos
 
         return { logId: existingCallLogId };
     } catch (error) {
-        console.error('Error in upsertCallDisposition:', error);
+        logger.error({ message: "Error in upsertCallDisposition", stack: error.stack });
     }
 }
 
@@ -309,7 +343,7 @@ async function handleDispositionNote({
             return sanitizedNote;
         }
     } catch (error) {
-        console.error(`Error in logging calls against ${dispositionType}:`, error);
+        logger.error({ message: `Error in logging calls against ${dispositionType}`, stack: error.stack });
         throw error;
     }
 }
@@ -375,7 +409,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
             if (contactSearch.includes('contact')) {
                 parallelTasks.push((async () => {
-                    const requestContactStartTime = new Date().getTime();
                     const personInfo = await axios.post(
                         `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
                         {
@@ -413,8 +446,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
                                             });
                                         }
                                     }
-                                } catch (e) {
-                                    console.log({ message: "Error in SalesOrder/Opportunity in contact" });
+                                } catch (error) {
+                                    logger.error({ message: "Error in SalesOrder/Opportunity in contact", stack: error.stack });
                                 }
                             }
                             matchedContactInfo.push({
@@ -433,8 +466,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
                             })
                         }
                     }
-                })().catch(e => {
-                    console.log({ message: 'Error in contact search', e });
+                })().catch(error => {
+                    logger.error({ message: 'Error in contact search', stack: error.stack });
                 }));
             }
 
@@ -472,8 +505,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
                                         });
                                     }
                                 }
-                            } catch (e) {
-                                console.log({ message: "Error in SalesOrder/Opportunity search", e });
+                            } catch (error) {
+                                logger.error({ message: "Error in SalesOrder/Opportunity search", stack: error.stack });
                             }
                             let firstName = result.firstname ?? '';
                             let middleName = result.middlename ?? '';
@@ -495,8 +528,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
                             })
                         }
                     }
-                })().catch(e => {
-                    console.log({ message: 'Error in customer search', e });
+                })().catch(error => {
+                    logger.error({ message: 'Error in customer search', stack: error.stack });
                 }));
             }
 
@@ -528,8 +561,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
                             })
                         }
                     }
-                })().catch(e => {
-                    console.log({ message: 'Error in vendor search', e });
+                })().catch(error => {
+                    logger.error({ message: 'Error in vendor search', stack: error.stack });
                 }));
             }
 
@@ -557,7 +590,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
             matchedContactInfo,
         };
     } catch (error) {
-        console.log({ message: "Error in finding contact", error });
+        logger.error({ message: "Error in finding contact", stack: error.stack });
         let errorMessage = netSuiteErrorDetails(error, "Contact not found");
         errorMessage += ' OR Permission violation: You need the "Lists -> Contact -> FULL, Lists -> Customers -> FULL" permission to access this page.';
         return {
@@ -632,8 +665,8 @@ async function findContactWithName({ user, authHeader, name }) {
                                 });
                             }
                         }
-                    } catch (e) {
-                        console.log({ message: "Error in SalesOrder/Opportunity in contact" });
+                    } catch (error) {
+                        logger.error({ message: "Error in SalesOrder/Opportunity in contact", stack: error.stack });
                     }
                 }
                 matchedContactInfo.push({
@@ -712,8 +745,8 @@ async function findContactWithName({ user, authHeader, name }) {
                             });
                         }
                     }
-                } catch (e) {
-                    console.log({ message: "Error in SalesOrder/Opportunity search" });
+                } catch (error) {
+                    logger.error({ message: "Error in SalesOrder/Opportunity search", stack: error.stack });
                 }
                 let firstName = result.firstname ?? '';
                 let middleName = result.middlename ?? '';
@@ -741,7 +774,7 @@ async function findContactWithName({ user, authHeader, name }) {
     }
 }
 
-async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails }) {
+async function createCallLog({ user, contactInfo, authHeader, callLog, additionalSubmission, aiNote, transcript, composedLogDetails }) {
 
     try {
         const title = callLog.customSubject ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
@@ -760,7 +793,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             startTimeSLot = callStartTime.format('HH:mm');
 
         } catch (error) {
-            console.log({ message: "Error in getting timezone" });
+            logger.error({ message: "Error in getting timezone", stack: error.stack });
         }
         const callEndTime = (callLog.duration === 'pending') ? moment(callStartTime) : moment(callStartTime).add(callLog.duration, 'seconds');
         let endTimeSlot = callEndTime.format('HH:mm');
@@ -776,10 +809,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         if (user.userSettings?.addCallLogDateTime?.value ?? true) {
             composedLogDetails = await overrideDateTimeInComposedLogDetails({ composedLogDetails, startTime: callStartTime });
         }
-        let extraDataTracking = {
-            withSmartNoteLog: !!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true),
-            withTranscript: !!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)
-        };
         let postBody = {
             title: title,
             phone: contactInfo?.phoneNumber || '',
@@ -860,7 +889,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             try {
                 await attachFileWithPhoneCall({ callLogId, transcript, authHeader, user, fileName: title });
             } catch (error) {
-                console.log({ message: "Error in attaching file with phone call" });
+                logger.error({ message: "Error in attaching file with phone call", stack: error.stack });
             }
         }
         return {
@@ -869,8 +898,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
                 message: 'Call logged',
                 messageType: 'success',
                 ttl: 2000
-            },
-            extraDataTracking
+            }
         };
     } catch (error) {
         let errorMessage = netSuiteErrorDetails(error, "Error logging call");
@@ -966,18 +994,9 @@ async function getCallLog({ user, callLogId, authHeader }) {
 
 }
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript, composedLogDetails, existingCallLogDetails }) {
+async function updateCallLog({ user, existingCallLog, authHeader, subject, note, startTime, duration, transcript, composedLogDetails }) {
     try {
         const existingLogId = existingCallLog.thirdPartyLogId;
-        // Use passed existingCallLogDetails to avoid duplicate API call
-        let comments = '';
-        if (existingCallLogDetails?.message) {
-            comments = existingCallLogDetails.message;
-        } else {
-            // Fallback to API call if details not provided
-            const callLogResponse = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phonecall/${existingLogId}`, { headers: { 'Authorization': authHeader } });
-            comments = callLogResponse.data.message;
-        }
 
         let patchBody = { title: subject };
         let callStartTime = moment(moment(startTime).toISOString());
@@ -993,7 +1012,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
                 startTimeSLot = callStartTime.format('HH:mm');
 
             } catch (error) {
-                console.log({ message: "Error in getting timezone in updateCallLog" });
+                logger.error({ message: "Error in getting timezone in updateCallLog", stack: error.stack });
             }
             const callEndTime = moment(callStartTime).add(duration, 'seconds');
             let endTimeSlot = callEndTime.format('HH:mm');
@@ -1015,7 +1034,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             composedLogDetails = await overrideDateTimeInComposedLogDetails({ composedLogDetails, startTime: callStartTime });
         }
         patchBody.message = composedLogDetails;
-        const patchLogRes = await axios.patch(
+        await axios.patch(
             `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phoneCall/${existingLogId}`,
             patchBody,
             {
@@ -1025,7 +1044,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             try {
                 await attachFileWithPhoneCall({ callLogId: existingLogId, transcript, authHeader, user, fileName: subject });
             } catch (error) {
-                console.log({ message: "Error in attaching file with phone call", error });
+                logger.error({ message: "Error in attaching file with phone call", stack: error.stack });
             }
         }
         return {
@@ -1036,8 +1055,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
                 ttl: 2000
             }
         };
-    } catch (e) {
-        console.log(e);
+    } catch (error) {
+        logger.error({ message: "Error in updating call log", stack: error.stack });
         return {
             successful: false,
             returnMessage: {
@@ -1049,49 +1068,48 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 }
 
-async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
+async function createMessageLog({ user, contactInfo, correspondents, sharedSMSLogContent, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
     try {
-        const sender =
-        {
-            id: contactInfo?.id,
-            type: 'Contact'
-        }
-        const receiver =
-        {
-            id: user?.id,
-            type: 'User'
-        }
-        const userName = user?.dataValues?.platformAdditionalInfo?.name ?? 'NetSuiteCRM';
-        const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
         let logBody = '';
         let title = '';
-        switch (messageType) {
-            case 'SMS':
-                title = `SMS conversation with ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
-                logBody =
-                    '\nConversation summary\n' +
-                    `${moment(message.creationTime).format('dddd, MMMM DD, YYYY')}\n` +
-                    'Participants\n' +
-                    `    ${userName}\n` +
-                    `    ${contactInfo.name}\n` +
-                    '\nConversation(1 messages)\n' +
-                    'BEGIN\n' +
-                    '------------\n' +
-                    `${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo?.phoneNumber})` : userName} ${moment(message.creationTime).format('hh:mm A')}\n` +
-                    `${message.subject}\n\n` +
-                    '------------\n' +
-                    'END\n\n' +
-                    '--- Created via RingCentral App Connect';
-                break;
-            case 'Voicemail':
-                const decodedRecordingLink = decodeURIComponent(recordingLink);
-                title = `Voicemail left by ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
-                logBody = `Voicemail recording link: ${decodedRecordingLink} \n\n--- Created via RingCentral App Connect`;
-                break;
-            case 'Fax':
-                title = `Fax document sent from ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
-                logBody = `Fax document link: ${faxDocLink} \n\n--- Created via RingCentral App Connect`;
-                break;
+        // Case: shared SMS
+        if (sharedSMSLogContent?.body && sharedSMSLogContent?.subject) {
+            logBody = sharedSMSLogContent.body;
+            title = sharedSMSLogContent.subject;
+        }
+        // Case: normal SMS
+        else {
+            const userName = user?.dataValues?.platformAdditionalInfo?.name ?? 'NetSuiteCRM';
+            const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+            switch (messageType) {
+                case 'SMS':
+                    title = `SMS conversation with ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
+                    logBody =
+                        '\nConversation summary\n' +
+                        `${moment(message.creationTime).format('dddd, MMMM DD, YYYY')}\n` +
+                        'Participants\n' +
+                        `    ${userName}\n` +
+                        `    ${contactInfo.name}\n` +
+                        `${(correspondents ?? []).map(c => `    ${c[0]?.name ?? 'Unknown'}`).join('\n')}` +
+                        '\nConversation(1 messages)\n' +
+                        'BEGIN\n' +
+                        '------------\n' +
+                        `${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo?.phoneNumber})` : userName} ${moment(message.creationTime).format('hh:mm A')}\n` +
+                        `${message.subject}\n\n` +
+                        '------------\n' +
+                        'END\n\n' +
+                        '--- Created via RingCentral App Connect';
+                    break;
+                case 'Voicemail':
+                    const decodedRecordingLink = decodeURIComponent(recordingLink);
+                    title = `Voicemail left by ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
+                    logBody = `Voicemail recording link: ${decodedRecordingLink} \n\n--- Created via RingCentral App Connect`;
+                    break;
+                case 'Fax':
+                    title = `Fax document sent from ${contactInfo.name} - ${moment(message.creationTime).format('YY/MM/DD')}`;
+                    logBody = `Fax document link: ${faxDocLink} \n\n--- Created via RingCentral App Connect`;
+                    break;
+            }
         }
         const postBody = {
             data: {
@@ -1126,11 +1144,11 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
                     noteTitle: title,
                     noteText: logBody
                 };
-                const createUserNotesResponse = await axios.post(createUserNotesUrl, postBody, {
+                await axios.post(createUserNotesUrl, postBody, {
                     headers: { 'Authorization': authHeader }
                 });
             } catch (error) {
-                console.log({ message: "Error in logging calls against salesOrder" });
+                logger.error({ message: "Error in logging calls against salesOrder", stack: error.stack });
             }
         }
         return {
@@ -1165,26 +1183,34 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     }
 }
 
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, contactNumber }) {
+async function updateMessageLog({ user, contactInfo, sharedSMSLogContent, existingMessageLog, message, authHeader, contactNumber }) {
     try {
         const existingLogId = existingMessageLog.thirdPartyLogId.split('.')[0];
-        const getLogRes = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phonecall/${existingLogId}`,
-            {
-                headers: { 'Authorization': authHeader }
-            });
-        const userName = user?.dataValues?.platformAdditionalInfo?.name ?? 'NetSuiteCRM';
-        let logBody = getLogRes.data.message;
+        let logBody = '';
         let patchBody = {};
-        const originalNote = logBody.split('BEGIN\n------------\n')[1];
-        const endMarker = '------------\nEND';
-        const newMessageLog =
-            `${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo?.phoneNumber})` : userName} ${moment(message.creationTime).format('hh:mm A')}\n` +
-            `${message.subject}\n\n`;
-        logBody = logBody.replace(endMarker, `${newMessageLog}${endMarker}`);
+        // Case: shared SMS
+        if (sharedSMSLogContent?.body) {
+            logBody = sharedSMSLogContent.body;
+        }
+        // Case: normal SMS
+        else {
+            const getLogRes = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phonecall/${existingLogId}`,
+                {
+                    headers: { 'Authorization': authHeader }
+                });
+            const userName = user?.dataValues?.platformAdditionalInfo?.name ?? 'NetSuiteCRM';
+            logBody = getLogRes.data.message;
+            const originalNote = logBody.split('BEGIN\n------------\n')[1];
+            const endMarker = '------------\nEND';
+            const newMessageLog =
+                `${message.direction === 'Inbound' ? `${contactInfo.name} (${contactInfo?.phoneNumber})` : userName} ${moment(message.creationTime).format('hh:mm A')}\n` +
+                `${message.subject}\n\n`;
+            logBody = logBody.replace(endMarker, `${newMessageLog}${endMarker}`);
 
-        const regex = RegExp('Conversation.(.*) messages.');
-        const matchResult = regex.exec(logBody);
-        logBody = logBody.replace(matchResult[0], `Conversation(${parseInt(matchResult[1]) + 1} messages)`);
+            const regex = RegExp('Conversation.(.*) messages.');
+            const matchResult = regex.exec(logBody);
+            logBody = logBody.replace(matchResult[0], `Conversation(${parseInt(matchResult[1]) + 1} messages)`);
+        }
         const patchLogRes = await axios.patch(
             `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/phoneCall/${existingLogId}`,
             {
@@ -1231,6 +1257,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
         let contactId = 0;
         const subsidiaryId = user.platformAdditionalInfo?.subsidiaryId;
         const oneWorldEnabled = user?.platformAdditionalInfo?.oneWorldEnabled;
+        let displayMessage = "New Contact";
         switch (newContactType) {
             case 'contact':
                 let companyId = 0;
@@ -1282,6 +1309,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                             headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' }
                         });
                     contactId = extractIdFromUrl(createContactRes.headers.location);
+                    displayMessage = 'The new contact is created under a placeholder company, please click "View contact details" to check out';
                     break;
                 } catch (error) {
                     return {
@@ -1331,6 +1359,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                             headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' }
                         });
                     contactId = extractIdFromUrl(createCustomerRes.headers.location);
+                    displayMessage = 'Customer created';
                     break;
                 } catch (error) {
                     return {
@@ -1379,6 +1408,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                         }
                     );
                     contactId = extractIdFromUrl(createVendorRes.headers.location);
+                    displayMessage = 'Vendor created';
                     break;
                 } catch (error) {
                     return {
@@ -1405,11 +1435,202 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
                         }
                     }
                 }
+            case 'lead':
+                try {
+                    // First, fetch lead customer status
+                    const leadStatusQuery = `SELECT id, name FROM CustomerStatus WHERE stage = 'LEAD' AND isinactive = 'F' ORDER BY id ASC`;
+                    const leadStatusResponse = await axios.post(
+                        `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                        {
+                            q: leadStatusQuery
+                        },
+                        {
+                            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
+                        }
+                    );
+
+                    if (!leadStatusResponse.data.items || leadStatusResponse.data.items.length === 0) {
+                        return {
+                            contactInfo: {
+                                id: 0,
+                                name: newContactName
+                            },
+                            returnMessage: {
+                                message: 'No lead customer status found',
+                                messageType: 'warning',
+                                details: [
+                                    {
+                                        title: 'Details',
+                                        items: [
+                                            {
+                                                id: '1',
+                                                type: 'text',
+                                                text: `No active lead customer status found in NetSuite. Please create a lead customer status first.`
+                                            }
+                                        ]
+                                    }
+                                ],
+                                ttl: 5000
+                            }
+                        };
+                    }
+
+                    // Use the first record ID as entity status
+                    const leadStatusId = leadStatusResponse.data.items[0].id;
+
+                    // Create the lead using customer endpoint with lead status
+                    const lLastName = nameParts.lastName.length > 0 ? nameParts.lastName : nameParts.firstName;
+                    const leadPayload = {
+                        isPerson: true,
+                        firstName: nameParts.firstName,
+                        middleName: nameParts.middleName,
+                        lastName: lLastName,
+                        entityId: nameParts.firstName + " " + lLastName,
+                        phone: phoneNumber || '',
+                        entityStatus: { id: leadStatusId }
+                    };
+
+                    if (oneWorldEnabled !== undefined && oneWorldEnabled === true) {
+                        leadPayload.subsidiary = { id: subsidiaryId.toString() };
+                    }
+                    const createLeadRes = await axios.post(
+                        `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/customer`,
+                        leadPayload,
+                        {
+                            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' }
+                        }
+                    );
+
+                    contactId = extractIdFromUrl(createLeadRes.headers.location);
+                    displayMessage = 'Lead created';
+                    break;
+
+                } catch (error) {
+                    return {
+                        contactInfo: {
+                            id: 0,
+                            name: newContactName
+                        },
+                        returnMessage: {
+                            message: netSuiteErrorDetails(error, "Error creating lead"),
+                            messageType: 'warning',
+                            details: [
+                                {
+                                    title: 'Details',
+                                    items: [
+                                        {
+                                            id: '1',
+                                            type: 'text',
+                                            text: `NetSuite was unable to create a lead named ${newContactName}. Please check your permissions and lead customer status configuration.`
+                                        }
+                                    ]
+                                }
+                            ],
+                            ttl: 5000
+                        }
+                    };
+                }
+            case 'prospect':
+                try {
+                    // First, fetch prospect customer status
+                    const prospectStatusQuery = `SELECT id, name FROM CustomerStatus WHERE stage = 'PROSPECT' AND isinactive = 'F' ORDER BY id ASC`;
+                    const prospectStatusResponse = await axios.post(
+                        `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                        {
+                            q: prospectStatusQuery
+                        },
+                        {
+                            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'transient' }
+                        }
+                    );
+
+                    if (!prospectStatusResponse?.data?.items || prospectStatusResponse?.data?.items?.length === 0) {
+                        return {
+                            contactInfo: {
+                                id: 0,
+                                name: newContactName
+                            },
+                            returnMessage: {
+                                message: 'No prospect customer status found',
+                                messageType: 'warning',
+                                details: [
+                                    {
+                                        title: 'Details',
+                                        items: [
+                                            {
+                                                id: '1',
+                                                type: 'text',
+                                                text: `No active prospect customer status found in NetSuite. Please create a prospect customer status first.`
+                                            }
+                                        ]
+                                    }
+                                ],
+                                ttl: 5000
+                            }
+                        };
+                    }
+
+                    // Use the first record ID as entity status
+                    const prospectStatusId = prospectStatusResponse.data.items[0].id;
+
+                    // Create the prospect using customer endpoint with prospect status
+                    const pLastName = nameParts.lastName.length > 0 ? nameParts.lastName : nameParts.firstName;
+                    const prospectPayload = {
+                        isPerson: true,
+                        firstName: nameParts.firstName,
+                        middleName: nameParts.middleName,
+                        lastName: pLastName,
+                        entityId: nameParts.firstName + " " + pLastName,
+                        phone: phoneNumber || '',
+                        entityStatus: { id: prospectStatusId }
+                    };
+
+                    if (oneWorldEnabled !== undefined && oneWorldEnabled === true) {
+                        prospectPayload.subsidiary = { id: subsidiaryId };
+                    }
+
+                    const createProspectRes = await axios.post(
+                        `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/customer`,
+                        prospectPayload,
+                        {
+                            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' }
+                        }
+                    );
+
+                    contactId = extractIdFromUrl(createProspectRes.headers.location);
+                    displayMessage = 'Prospect created';
+                    break;
+
+                } catch (error) {
+                    return {
+                        contactInfo: {
+                            id: 0,
+                            name: newContactName
+                        },
+                        returnMessage: {
+                            message: netSuiteErrorDetails(error, "Error creating prospect"),
+                            messageType: 'warning',
+                            details: [
+                                {
+                                    title: 'Details',
+                                    items: [
+                                        {
+                                            id: '1',
+                                            type: 'text',
+                                            text: `NetSuite was unable to create a prospect named ${newContactName}. Please check your permissions and prospect customer status configuration.`
+                                        }
+                                    ]
+                                }
+                            ],
+                            ttl: 5000
+                        }
+                    };
+                }
 
         }
-        const displayMessage = newContactType === 'contact'
-            ? 'The new contact is created under a placeholder company, please click "View contact details" to check out'
-            : (newContactType === 'customer' ? 'Customer created' : 'Vendor created');
+        // const displayMessage = newContactType === 'contact'
+        //     ? 'The new contact is created under a placeholder company, please click "View contact details" to check out'
+        //     : (newContactType === 'customer' ? 'Customer created' : 'Vendor created');
         return {
             contactInfo: {
                 id: contactId,
@@ -1454,18 +1675,6 @@ function splitName(fullName) {
     return { firstName, middleName, lastName };
 }
 
-function generateRandomString(length) {
-    let result = '';
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    const charactersLength = characters.length;
-    let counter = 0;
-    while (counter < length) {
-        result += characters.charAt(Math.floor(Math.random() * charactersLength));
-        counter += 1;
-    }
-    return result;
-}
-
 function extractIdFromUrl(url) {
     const segments = url.split('/').filter(segment => segment !== ''); // Remove empty segments
     return segments.length > 0 ? segments[segments.length - 1] : 0; // Extract the ID from the URL
@@ -1485,18 +1694,10 @@ function netSuiteErrorDetails(error, message) {
         }
         return concatenatedErrorDetails.length > 0 ? concatenatedErrorDetails : message;
     } catch (error) {
+        logger.error({ message: "Error in netSuiteErrorDetails", stack: error.stack });
         return message;
     }
 }
-
-function netSuiteRestLetError(error, message) {
-    const errorMessage = error?.response?.data?.split('\n')
-        .find(line => line.startsWith('error message:'))
-        ?.replace('error message: ', '')
-        .trim();
-    return errorMessage || message;
-}
-
 
 function upsertNetSuiteUserNoteUrl({ body, userNoteUrl, salesOrderId }) {
     const salesOrderText = "Sales Order Call Logs (Do Not Edit)";
@@ -1559,13 +1760,6 @@ function getThreeYearsBeforeDate() {
     return date.toISOString().slice(0, 10) + " 00:00:00"; //Date formate 2022-04-03 00:00:00
 };
 
-function getThreeMonthsBeforeDate() {
-    const date = new Date();
-    date.setMonth(date.getMonth() - 30);
-    date.setHours(0, 0, 0, 0);
-    return date.toISOString().slice(0, 10) + " 00:00:00"; //Date formate 2022-04-03 00:00:00
-};
-
 function extractNoteIdFromNote({ note, targetSalesOrderId }) {
     // Extract the userNoteUrl from the string
     try {
@@ -1583,7 +1777,8 @@ function extractNoteIdFromNote({ note, targetSalesOrderId }) {
             }
         }
         return undefined; // if not found
-    } catch (e) {
+    } catch (error) {
+        logger.error({ message: "Error in extractNoteIdFromNote", stack: error.stack });
         return undefined;
     }
 
@@ -1606,7 +1801,8 @@ function extractNoteIdFromOpportunityNote({ note, targetOpportunityId }) {
             }
         }
         return undefined; // if not found
-    } catch (e) {
+    } catch (error) {
+        logger.error({ message: "Error in extractNoteIdFromOpportunityNote", stack: error.stack });
         return undefined;
     }
 
@@ -1672,7 +1868,7 @@ async function attachFileWithPhoneCall({ callLogId, transcript, authHeader, user
                 headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' }
             }
         );
-        const attachFileRes = await axios.post(
+        await axios.post(
             `https://${user.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_attachfilewithphonecalls&deploy=customdeploy_attachfilewithphonecalls`,
             {
                 phoneCallId: callLogId,
@@ -1703,7 +1899,7 @@ function truncateAiTranscript({ composedLogDetails, transcript }) {
         }
 
     } catch (error) {
-        console.log({ m: "Error in upsertTranscript" });
+        logger.error({ message: "Error in upsertTranscript", stack: error.stack });
     }
     return composedLogDetails;
 }
@@ -1716,9 +1912,489 @@ async function overrideDateTimeInComposedLogDetails({ composedLogDetails, startT
             composedLogDetails = composedLogDetails.replace(dateTimeRegex, `- Date/Time: ${formattedDateTime}`);
         }
     } catch (error) {
-        console.log({ message: "Error in overrideDateTimeInComposedLogDetails" });
+        logger.error({ message: "Error in overrideDateTimeInComposedLogDetails", stack: error.stack });
     }
     return composedLogDetails;
+}
+
+function getNetSuiteRestletsBaseUrl({ user }) {
+    const account = user?.hostname?.split(".")?.[0];
+    return account ? `https://${account}.restlets.api.netsuite.com` : null;
+}
+
+
+function parseNetSuiteDateTimeToUtcIso({ dateStr, timeStr, timezoneOffset }) {
+    if (!dateStr || !timeStr) return null;
+    // NetSuite can return either:
+    // - Restlet list formats: "3/17/2026" + "3:00 am"
+    // - SuiteTalk record formats: "2026-05-20" + "09:00:00"
+    const base = moment(
+        `${dateStr} ${timeStr}`,
+        [
+            'M/D/YYYY h:mm a',
+            'MM/DD/YYYY h:mm a',
+            'YYYY-MM-DD HH:mm:ss',
+            'YYYY-MM-DD H:mm:ss',
+            'YYYY-MM-DD HH:mm',
+            'YYYY-MM-DD H:mm'
+        ],
+        true
+    );
+    if (!base.isValid()) return null;
+    const offset = (typeof timezoneOffset === 'string' && timezoneOffset.trim()) ? timezoneOffset.trim() : null;
+    const withOffset = offset ? base.utcOffset(offset, true) : base;
+    return withOffset.utc().toISOString();
+}
+
+function computeDurationMinutes({ startDate, startTime, endTime, timezoneOffset }) {
+    if (!startDate || !startTime || !endTime) return 0;
+    const formats = [
+        'M/D/YYYY h:mm a',
+        'MM/DD/YYYY h:mm a',
+        'YYYY-MM-DD HH:mm:ss',
+        'YYYY-MM-DD H:mm:ss',
+        'YYYY-MM-DD HH:mm',
+        'YYYY-MM-DD H:mm'
+    ];
+    const start = moment(`${startDate} ${startTime}`, formats, true);
+    const end = moment(`${startDate} ${endTime}`, formats, true);
+    if (!start.isValid() || !end.isValid()) return 0;
+    const offset = (typeof timezoneOffset === 'string' && timezoneOffset.trim()) ? timezoneOffset.trim() : null;
+    const startWithOffset = offset ? start.utcOffset(offset, true) : start;
+    let endWithOffset = offset ? end.utcOffset(offset, true) : end;
+    if (endWithOffset.isSameOrBefore(startWithOffset)) {
+        endWithOffset = endWithOffset.add(1, 'day');
+    }
+    return Math.max(0, Math.round(endWithOffset.diff(startWithOffset, 'minutes', true)));
+}
+
+function stripHtmlToPlainText(input) {
+    if (input == null) return '';
+    const raw = `${input}`;
+    // NetSuite sometimes sends HTML in description fields (e.g. <br />).
+    const withBreaks = raw.replace(/<\s*br\s*\/?\s*>/gi, '\n');
+    const withoutTags = withBreaks.replace(/<\/?[^>]+>/g, '');
+    const unescaped = withoutTags
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'");
+    return unescaped
+        .replace(/\r\n/g, '\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n[ \t]+/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function normalizeNetSuiteCalendarEventToAppointment({ calendarEvent, timezoneOffset }) {
+    const id = calendarEvent?.id != null ? `${calendarEvent.id}` : null;
+    const attendeeList = Array.isArray(calendarEvent?.attendees) ? calendarEvent.attendees : [];
+    const attendeeRecordItems = Array.isArray(calendarEvent?.attendee?.items) ? calendarEvent.attendee.items : [];
+    const attendeeFromRecord = attendeeRecordItems
+        .map(i => i?.attendee ?? i)
+        .filter(Boolean);
+
+    const attendees = [...attendeeList, ...attendeeFromRecord]
+        .map(a => (a?.id != null ? { id: `${a.id}`, name: a?.name ?? '', type: a?.type ?? '' } : null))
+        .filter(Boolean);
+
+    const startTimeUtc = parseNetSuiteDateTimeToUtcIso({
+        dateStr: calendarEvent?.startDate,
+        timeStr: calendarEvent?.startTime,
+        timezoneOffset
+    });
+    const durationMinutes = computeDurationMinutes({
+        startDate: calendarEvent?.startDate,
+        startTime: calendarEvent?.startTime,
+        endTime: calendarEvent?.endTime,
+        timezoneOffset
+    });
+
+    return {
+        thirdPartyAppointmentId: id,
+        id,
+        title: calendarEvent?.title ?? '',
+        description: stripHtmlToPlainText(calendarEvent?.description ?? calendarEvent?.message ?? ''),
+        startTimeUtc,
+        durationMinutes,
+        status: calendarEvent.status,
+        contactId: '',
+        attendees
+    };
+}
+
+function buildNetSuiteCalendarEventBodyFromAppointmentPayload({ payload, timezoneOffset }) {
+    const startAt = payload?.startTimeUtc ?? payload?.startTime ?? null;
+    const durationMinutes = Number(payload?.durationMinutes ?? 0);
+    const start = startAt ? moment(startAt) : null;
+    const end = (start && Number.isFinite(durationMinutes)) ? moment(startAt).add(durationMinutes, 'minutes') : null;
+
+    const applyOffset = (m) => {
+        const offset = (typeof timezoneOffset === 'string' && timezoneOffset.trim()) ? timezoneOffset.trim() : null;
+        return offset ? m.clone().utcOffset(offset, true) : m;
+    };
+
+    const localStart = start ? applyOffset(start) : null;
+    const localEnd = end ? applyOffset(end) : null;
+
+    const toAttendee = (a) => {
+        if (!a) return null;
+        if (typeof a === 'string' || typeof a === 'number') return { id: `${a}` };
+        if (typeof a === 'object') {
+            if (a.id == null) return null;
+            return {
+                id: `${a.id}`,
+                ...(a.type != null ? { type: a.type } : {}),
+                ...(a.name != null ? { name: a.name } : {}),
+                ...(a.email != null ? { email: a.email } : {}),
+                ...(a.status != null ? { status: a.status } : {})
+            };
+        }
+        return null;
+    };
+
+    const attendees = Array.isArray(payload?.attendees)
+        ? payload.attendees.map(toAttendee).filter(Boolean)
+        : (Array.isArray(payload?.contacts) ? payload.contacts.map(toAttendee).filter(Boolean) : []);
+
+    return {
+        title: payload?.title ?? payload?.summary ?? 'Appointment',
+        description: payload?.description ?? payload?.summary ?? '',
+        participantName: payload?.participantName ?? '',
+        ...(localStart ? { startDate: localStart.format('M/D/YYYY'), startTime: localStart.format('h:mm a') } : {}),
+        ...(localEnd ? { endTime: localEnd.format('h:mm a') } : {}),
+        ...(payload?.status != null ? { status: payload.status } : {}),
+        ...(attendees.length ? { attendees } : {})
+    };
+}
+
+async function listAppointments({ user, authHeader, range }) {
+    try {
+        const baseUrl = getNetSuiteRestletsBaseUrl({ user });
+        if (!baseUrl) {
+            return {
+                successful: false,
+                returnMessage: {
+                    messageType: 'warning',
+                    message: 'Missing NetSuite account information.',
+                    ttl: 5000
+                }
+            };
+        }
+        const startDate = range?.startDate ?? moment().subtract(1, 'month').format('YYYY-MM-DD');
+        const endDate = range?.endDate ?? moment().add(3, 'month').format('YYYY-MM-DD');
+
+        const url = `${baseUrl}/app/site/hosting/restlet.nl`;
+        const pageSize = 1000;
+        let page = 0;
+        const rows = [];
+        const res = await axios.get(url, {
+                headers: { 'Authorization': authHeader ,'Content-Type': 'application/json'},
+                params: {
+                    script: "customscript_rcfetchcalendarevents",
+                    deploy: "customdeploy_rcfetchcalendarevents", //TODO need to remove this for actual deployment and scriptId 646
+                    startDate,
+                    endDate,
+                    page,
+                    pageSize
+                }
+            });
+        const body = res?.data ?? {};
+        const data = Array.isArray(body?.data) ? body.data : [];
+        rows.push(...data);
+        const appointments = rows.map(e => normalizeNetSuiteCalendarEventToAppointment({
+            calendarEvent: e,
+            timezoneOffset: user?.timezoneOffset
+        })).filter(a => a?.id != null);
+        return { appointments };
+    } catch (error) {
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: netSuiteErrorDetails(error, "Error listing appointments"),
+                ttl: 60000
+            }
+        };
+    }
+}
+
+async function createAppointment({ user, authHeader, payload }) {
+    console.log({message:'createAppointment function called', payload});
+    try {
+        const attendeeItems = Array.isArray(payload?.attendee?.items)
+            ? payload.attendee.items
+            : (Array.isArray(payload?.contacts) && payload.contacts.length
+                ? payload.contacts.map(c => ({
+                    attendee: { id: typeof c === 'object' ? c.id : c }
+                }))
+                : []);
+
+        // Parse start and end time from payload.startTimeUtc and durationMinutes if provided
+        let startDate = '', startTime = '', endTime = '';
+        if (payload.startTimeUtc && payload.durationMinutes != null) {
+            let start, end;
+            const offset = typeof user?.timezoneOffset === 'string' ? user.timezoneOffset : null;
+            if (offset && /^[-+]\d{2}:\d{2}$/.test(offset)) {
+                start = moment(payload.startTimeUtc).utcOffset(offset, true);
+                end = moment(start).add(Number(payload.durationMinutes), 'minutes');
+            } else {
+                // Fetch the user's timezone name only when needed (DST-safe).
+                let userTimezone = null;
+                try {
+                    const getTimeZoneUrl = `https://${user.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_gettimezone&deploy=customdeploy_gettimezone`;
+                    const timeZoneResponse = await axios.get(getTimeZoneUrl, {
+                        headers: { 'Authorization': authHeader }
+                    });
+                    userTimezone = timeZoneResponse?.data?.userTimezone || null;
+                } catch (e) {
+                    console.log({ message: "Error fetching user timezone", error: e });
+                }
+                if (userTimezone) {
+                    start = moment.utc(payload.startTimeUtc).tz(userTimezone);
+                    end = moment.utc(payload.startTimeUtc).add(Number(payload.durationMinutes), 'minutes').tz(userTimezone);
+                } else {
+                    // fallback: treat as utc if timezone could not be fetched
+                    start = moment.utc(payload.startTimeUtc);
+                    end = moment.utc(payload.startTimeUtc).add(Number(payload.durationMinutes), 'minutes');
+                }
+            }
+            startDate = start.format('YYYY-MM-DD');
+            startTime = start.format('HH:mm:ss');
+            endTime = end.format('HH:mm:ss');
+        } else {
+            // fallback to direct values if provided
+            startDate = payload.startDate ?? '';
+            startTime = payload.startTime ?? '';
+            endTime = payload.endTime ?? '';
+        }
+
+        const statusIdRaw = payload?.status?.id ?? payload?.status ?? null;
+        const statusId = typeof statusIdRaw === 'string' ? statusIdRaw.toUpperCase() : null;
+
+        const body = {
+            title: payload.title,
+            startDate,
+            startTime,
+            endTime,
+            timedEvent: true,
+            message: payload.summary || payload.message || '',
+            ...(statusId ? { status: { id: statusId } } : {}),
+            ...(attendeeItems.length ? { attendee: { items: attendeeItems } } : {})
+        };
+
+        const recordApiBase = `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/calendarEvent`;
+        const res = await axios.post(recordApiBase, body, {
+            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' }
+        });
+
+        const location = res?.headers?.location ?? res?.headers?.Location ?? null;
+        const createdIdFromLocation = typeof location === 'string' ? location.split('/').filter(Boolean).pop() : null;
+        const createdIdFromBody = res?.data?.id != null ? `${res.data.id}` : null;
+        const createdId = createdIdFromLocation ?? createdIdFromBody ?? null;
+
+        let event = res?.data?.data ?? res?.data ?? null;
+        if (createdId) {
+            const getRes = await axios.get(`${recordApiBase}/${createdId}`, {
+                headers: { 'Authorization': authHeader }
+            });
+            event = getRes?.data?.data ?? getRes?.data ?? null;
+        }
+        const appointment = normalizeNetSuiteCalendarEventToAppointment({
+            calendarEvent: event,
+            timezoneOffset: user?.timezoneOffset
+        });
+        return { appointmentId: appointment?.id ?? null, appointment };
+    } catch (error) {
+        console.log({message:'error', error, errorBody: error.response?.data,o:error.response?.data?.['o:errorDetails']});
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: netSuiteErrorDetails(error, "Error creating appointment"),
+                ttl: 60000
+            }
+        };
+    }
+}
+
+async function updateAppointment({ user, authHeader, appointmentId, patchBody }) {
+    console.log({message:'updateAppointment function called', patchBody, appointmentId});
+    const body = {};
+    try {
+        // Fetch user's timezone via NetSuite API call if not present
+        let timezone = user?.timezoneOffset;
+        if (!timezone) {
+            try {
+                const getTimeZoneUrl = `https://${user.hostname.split(".")[0]}.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_gettimezone&deploy=customdeploy_gettimezone`;
+                const timeZoneResponse = await axios.get(getTimeZoneUrl, {
+                    headers: { 'Authorization': authHeader }
+                });
+                timezone = timeZoneResponse?.data?.userTimezone || 'UTC';
+            } catch (err) {
+                timezone = 'UTC'; // fallback
+            }
+        }
+
+        // Support input (patchBody) in ISO8601 for startTime and durationMinutes
+        let startUtc = patchBody.startTime || patchBody.startTimeUtc || patchBody.start_at || patchBody.startDate || null;
+        let durationMinutes = Number(patchBody.durationMinutes ?? 0);
+
+        // Calculate start/end in local time
+        let start = startUtc ? moment.utc(startUtc).tz(timezone) : null;
+        let end = (start && Number.isFinite(durationMinutes))
+            ? moment(start).add(durationMinutes, 'minutes')
+            : null;
+
+        // Format for NetSuite
+        body.startDate = start ? start.format('YYYY-MM-DD') : '';
+        body.startTime = start ? start.format('HH:mm:ss') : '';
+        body.endTime = end ? end.format('HH:mm:ss') : '';
+
+        // Status format for NetSuite
+        if (patchBody.status ) {
+            body.status = { id: patchBody.status.toUpperCase() };
+        }
+
+        // Set message
+        body.message = patchBody.summary || '';
+        body.title = patchBody.title;
+        let attendeeItems = [];
+           
+        const rawAttendees = Array.isArray(patchBody?.contacts)
+                    ? patchBody.contacts
+                     : [];
+        attendeeItems = rawAttendees
+                    .map((c) => {
+                        const id= c.id;
+                        console.log({message:'id', id});
+                        if (id == null || `${id}`.trim() === '') return null;
+                        return { attendee: { id: `${id}` } };
+                    })
+                    .filter(Boolean);
+            // Include empty items to support clearing attendees.
+            body.attendee = { items: attendeeItems };
+        console.log({message:'body', body});
+        const recordUrl = `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/calendarEvent/${appointmentId}`;
+        const patchUrl =  `${recordUrl}?replace=attendee`
+        const res = await axios.patch(patchUrl, body, {
+            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' }
+        });
+        const event = res?.data?.data ?? res?.data ?? null;
+        const appointment = normalizeNetSuiteCalendarEventToAppointment({
+            calendarEvent: event,
+            timezoneOffset: user?.timezoneOffset
+        });
+        return { appointment };
+    } catch (error) {
+        console.log({message:'error', error, errorBody: error.response?.data});
+        // Print errorDetails from the NetSuite error body for easier debugging
+        if (error?.response?.data?.['o:errorDetails']) {
+            console.log('NetSuite errorDetails:', error.response.data['o:errorDetails']);
+        }
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: netSuiteErrorDetails(error, "Error updating appointment"),
+                ttl: 60000
+            }
+        };
+    }
+}
+
+async function refreshAppointment({ user, authHeader, appointmentId }) {
+    console.log({message:'refreshAppointment function called', appointmentId});
+    try {
+        const res = await axios.get(`https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/calendarEvent/${appointmentId}`, {
+            headers: { 'Authorization': authHeader }
+        });
+        const event = res?.data?.data ?? res?.data ?? null;
+
+        console.log({message:'event', event});
+        if (!event) {
+            return {
+                successful: false,
+                returnMessage: {
+                    messageType: 'warning',
+                    message: 'Appointment not found in NetSuite.',
+                    ttl: 5000
+                }
+            };
+        }
+        return {
+            appointment: normalizeNetSuiteCalendarEventToAppointment({
+                calendarEvent: event,
+                timezoneOffset: user?.timezoneOffset
+            })
+        };
+    } catch (error) {
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: netSuiteErrorDetails(error, "Error refreshing appointment"),
+                ttl: 60000
+            }
+        };
+    }
+}
+
+async function confirmAppointment({ user, authHeader, appointmentId }) {
+    console.log({message:'confirmAppointment function called', appointmentId});
+    try {
+        const recordApiBase = `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/calendarEvent/${appointmentId}`;
+        const patchRes = await axios.patch(recordApiBase, { status: { id: 'CONFIRMED' } }, {
+            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' }
+        });
+
+        return {
+            successful: true,
+            returnMessage: {
+                messageType: 'success',
+                message: "Appointment confirmed successfully",
+                ttl: 60000
+            }
+        };
+    } catch (error) {
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: netSuiteErrorDetails(error, "Error confirming appointment"),
+                ttl: 60000
+            }
+        };
+    }
+}
+
+async function cancelAppointment({ user, authHeader, appointmentId }) {
+    try {
+        const recordApiBase = `https://${user.hostname.split(".")[0]}.suitetalk.api.netsuite.com/services/rest/record/v1/calendarEvent/${appointmentId}`;
+        const patchRes = await axios.patch(recordApiBase, { status: { id: 'CANCELLED' } }, {
+            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' }
+        });
+        return {
+            successful: true,
+            returnMessage: {
+                messageType: 'success',
+                message: "Appointment cancelled successfully",
+                ttl: 60000
+            }
+        }; 
+    } catch (error) {
+        return {
+            successful: false,
+            returnMessage: {
+                messageType: 'warning',
+                message: netSuiteErrorDetails(error, "Error cancelling appointment"),
+                ttl: 60000
+            }
+        };
+    }
 }
 exports.getAuthType = getAuthType;
 exports.getOauthInfo = getOauthInfo;
@@ -1735,3 +2411,9 @@ exports.upsertCallDisposition = upsertCallDisposition;
 exports.findContactWithName = findContactWithName;
 exports.getLogFormatType = getLogFormatType;
 exports.getUserList = getUserList;
+exports.listAppointments = listAppointments;
+exports.createAppointment = createAppointment;
+exports.updateAppointment = updateAppointment;
+exports.refreshAppointment = refreshAppointment;
+exports.confirmAppointment = confirmAppointment;
+exports.cancelAppointment = cancelAppointment;

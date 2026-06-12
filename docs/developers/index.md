@@ -1,49 +1,63 @@
 ---
 title: "App Connect Developer Framework"
+hide:
 ---
-# Integrating with CRMs using the App Connect framework
 
-{! docs/developers/beta_notice.inc !}
+# App Connect Developer Guide
 
-Welcome to RingCentral's App Connect integration framework. Using this framework, developers can integrate RingCentral into their web-based CRM more easily. The framework comes with many features, but is principly designed around the following use cases:
+App Connect developers build CRM integrations and logging extensions for RingCentral communications.
 
-* **Embedded phone**. Injecting a phone into the CRM for a fully-integrated communications experience.
-* **Call pop**. Automatically opening up a contact record when a call is received.
-* **Logging calls**. Capturing and storing call notes in an activity record linked to an associated contact in the CRM.
+There are two extension types:
 
-## Getting started
+| Type | Use it for | Primary docs |
+| --- | --- | --- |
+| Connector | Connect App Connect to a CRM or system of record. Connectors authenticate users, find contacts, create contacts, and log calls/messages. | [Connector quick start](getting-started.md) |
+| Plugin | Process logging payloads before or alongside connector logging. Plugins can enrich data, transform payloads, or perform side effects. | [Plugin guide](plugins/index.md) |
 
-Follow our simple getting started guide and **in less than 10 minutes** you will have created a dummy server that receives events from App Connect. From there you can begin customizing your adapter to connect to your desired CRM.
+## Connector Architecture
 
-[Build your first connector](getting-started.md){ .md-button .md-button--primary }
+A connector has two parts:
 
-## Architectural overview
+| Part | Purpose |
+| --- | --- |
+| Manifest | Describes the connector profile, auth page, CRM URLs, log form fields, custom settings, server-side logging support, and optional features. |
+| Server implementation | Exports connector interface functions such as `getUserInfo`, `findContact`, `createCallLog`, and `updateCallLog`. |
 
-Each CRM supported by this framework is required to implement what is referred to as a "connector." Connectors help broker communications between the client application (the dialer and primary user interface) and the CRM being integrated with. 
+The shared runtime in `@app-connect/core` handles HTTP routes, user persistence, token refresh, managed auth, server-side logging orchestration, contact caching, plugins, logging composition, and optional MCP/appointment surfaces. Your connector code supplies CRM-specific behavior.
 
-![Connector architecture diagram](../img/architecture.png)
+![Connector architecture diagram](../img/architecture.png){ .mw-350 }
 
-Each connector implements the following components:
+## Connector Modes
 
-* A configuration file, or manifest that defines basic metadata and provides a no-code interface for defining common user interactions. 
-* A server that implements a prescribed interface that is invoked by the front-end client to perform more complex interactions with the CRM. 
+| Mode | Description |
+| --- | --- |
+| Code connector | A Node.js connector registered with `connectorRegistry.registerConnector()`. Best for custom CRM logic. |
+| Proxy connector | A low-code JSON proxy configuration managed in the Developer Console. Best for simple REST APIs. |
+| Interface-only connector | Individual functions registered with `connectorRegistry.registerConnectorInterface()`. Useful for composing methods without changing the original connector object. |
 
-In this guide, you will learn how to build, package and distribute an connector for a CRM.
+Start with the [quick start](getting-started.md), then use the [interface contract](interfaces/index.md) as the source of truth for server methods.
 
-<div id="powered-by-embeddable" markdown>
+## What App Connect Provides
 
-!!! info "Powered by RingCentral Embeddable"
-    ![RingCentral Embeddable](../img/embeddable.png){ align=right }
-	
-	App Connect's integration framework is build on top of [RingCentral Embeddable](https://ringcentral.github.io/ringcentral-embeddable/), which itself provides the following capabilities via its unified communications client:
+App Connect builds on RingCentral Embeddable and supplies:
 
-    * Make and receive phone calls.
-    * Send and receive SMS.
-    * Read and send team chat messages. 
-    * Search your RingCentral address book.
-    * View a history of past calls.
-    * Listen to call recordings.
-    * Access and listen to voicemail. 
+- inbound and outbound calling workflows
+- SMS, fax, voicemail, and shared SMS logging
+- CRM contact lookup and call pop
+- manual and automatic call logging
+- optional server-side call logging
+- custom CRM settings and admin-managed settings
+- managed OAuth and managed API-key fields
+- plugin execution before or alongside CRM logging
+- optional appointment support for connectors that implement it
 
-</div>
+## Main References
+
+- [Manifest](manifest.md)
+- [Authorization](auth.md)
+- [Connector interfaces](interfaces/index.md)
+- [Proxy connector](proxy-connector.md)
+- [Logging calls](logging-calls.md)
+- [Logging SMS](logging-sms.md)
+- [Contact matching](contact-matching.md)
 

@@ -3,10 +3,11 @@ const cors = require('cors')
 const bodyParser = require('body-parser');
 require('body-parser-xml')(bodyParser);
 const dynamoose = require('dynamoose');
+const { DynamoDB } = require('@aws-sdk/client-dynamodb');
 const axios = require('axios');
 const { UserModel } = require('./models/userModel');
+const { LlmSessionModel } = require('./models/llmSessionModel');
 const { CallDownListModel } = require('./models/callDownListModel');
-const { Op } = require('sequelize');
 const { CallLogModel } = require('./models/callLogModel');
 const { MessageLogModel } = require('./models/messageLogModel');
 const { AdminConfigModel } = require('./models/adminConfigModel');
@@ -15,6 +16,7 @@ const { AccountDataModel } = require('./models/accountDataModel');
 const jwt = require('./lib/jwt');
 const logCore = require('./handlers/log');
 const contactCore = require('./handlers/contact');
+const appointmentCore = require('./handlers/appointment');
 const authCore = require('./handlers/auth');
 const adminCore = require('./handlers/admin');
 const userCore = require('./handlers/user');
@@ -26,20 +28,33 @@ const analytics = require('./lib/analytics');
 const util = require('./lib/util');
 const connectorRegistry = require('./connector/registry');
 const calldown = require('./handlers/calldown');
+const mcpHandler = require('./mcp/mcpHandler');
+const logger = require('./lib/logger');
 const { DebugTracer } = require('./lib/debugTracer');
 const s3ErrorLogReport = require('./lib/s3ErrorLogReport');
+const pluginCore = require('./handlers/plugin');
+const { handleDatabaseError } = require('./lib/errorHandler');
+const { updateAuthSession } = require('./lib/authSession');
+const managedAuthCore = require('./handlers/managedAuth');
+const managedOAuthCore = require('./handlers/managedOAuth');
 
 let packageJson = null;
 try {
     packageJson = require('./package.json');
 }
 catch (e) {
+    logger.error('Error loading package.json', { stack: e.stack });
     packageJson = require('../package.json');
 }
 
 // For using dynamodb in local env
+// AWS SDK v3 requires a region even for local; ddb.local() omits it, so set manually.
 if (process.env.DYNAMODB_LOCALHOST) {
-    dynamoose.aws.ddb.local(process.env.DYNAMODB_LOCALHOST);
+    dynamoose.aws.ddb.set(new DynamoDB({
+        endpoint: process.env.DYNAMODB_LOCALHOST,
+        region: 'local',
+        credentials: { accessKeyId: 'local', secretAccessKey: 'local' },
+    }));
 }
 // log axios requests
 if (process.env.IS_PROD === 'false') {
@@ -52,8 +67,9 @@ axios.defaults.headers.common['Unified-CRM-Extension-Version'] = packageJson.ver
 
 async function initDB() {
     if (!process.env.DISABLE_SYNC_DB_TABLE) {
-        console.log('creating db tables if not exist...');
+        logger.info('creating db tables if not exist...');
         await UserModel.sync();
+        await LlmSessionModel.sync();
         await CallLogModel.sync();
         await MessageLogModel.sync();
         await AdminConfigModel.sync();
@@ -80,9 +96,79 @@ function getAnalyticsVariablesInReqHeaders({ headers }) {
     }
 }
 
+const JWT_REFRESH_THRESHOLD_SECONDS = 7 * 24 * 60 * 60; // 1 week
+const JWT_LEGACY_LONG_LIVED_THRESHOLD_SECONDS = 365 * 24 * 60 * 60; // 1 year
+
+function getBearerTokenFromRequest(req) {
+    const authHeader = req.headers?.authorization || req.headers?.Authorization;
+    if (!authHeader || typeof authHeader !== 'string') {
+        return null;
+    }
+    const [scheme, token] = authHeader.split(' ');
+    if (!scheme || scheme.toLowerCase() !== 'bearer' || !token) {
+        return null;
+    }
+    return token;
+}
+
+function normalizeJwtFromRequest(req, res, next) {
+    if (req.path?.startsWith('/mcp')) {
+        return next();
+    }
+    const originalBearerToken = getBearerTokenFromRequest(req);
+    const queryToken = req.query?.jwtToken;
+    let bearerToken = originalBearerToken;
+
+    // Backward compatibility: promote query jwtToken to Authorization Bearer.
+    if (!bearerToken && queryToken) {
+        req.headers.authorization = `Bearer ${queryToken}`;
+        bearerToken = queryToken;
+        // Don't refresh JWT because old version cannot update its local token storage to support refreshed token.
+        return next();
+    }
+
+    const token = bearerToken;
+
+    if (!token) {
+        return next();
+    }
+
+    const decodedToken = jwt.decodeJwt(token);
+    if (!decodedToken?.id) {
+        req.invalidJwtToken = true;
+        if (req.query?.jwtToken) {
+            delete req.query.jwtToken;
+        }
+        return next();
+    }
+
+    req.jwtToken = token;
+    req.jwtAuth = decodedToken;
+
+    if (typeof decodedToken.exp === 'number') {
+        const now = Math.floor(Date.now() / 1000);
+        const timeLeft = decodedToken.exp - now;
+        const isBearerAuth = !!originalBearerToken;
+        const shouldRefreshNearExpiry = timeLeft <= JWT_REFRESH_THRESHOLD_SECONDS;
+        // Rotate legacy 120y tokens only for Bearer auth clients (they can persist refreshed headers).
+        const shouldRefreshLegacyLongLivedBearer = isBearerAuth && timeLeft > JWT_LEGACY_LONG_LIVED_THRESHOLD_SECONDS;
+        if (shouldRefreshNearExpiry || shouldRefreshLegacyLongLivedBearer) {
+            const refreshedToken = jwt.generateJwt({
+                id: decodedToken.id.toString(),
+                platform: decodedToken.platform
+            });
+            res.setHeader('x-refreshed-jwt-token', refreshedToken);
+            req.jwtToken = refreshedToken;
+            req.jwtAuth = jwt.decodeJwt(refreshedToken) || decodedToken;
+        }
+    }
+    return next();
+}
+
 // Create a router with all core routes
 function createCoreRouter() {
     const router = express.Router();
+    router.use(normalizeJwtFromRequest);
 
     // Move all app.get, app.post, etc. to router.get, router.post, etc.
     router.get('/releaseNotes', async function (req, res) {
@@ -129,6 +215,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
+            logger.error('Error getting crm manifest', { stack: e.stack });
             res.status(400).send('Platform not found');
         }
     });
@@ -161,6 +248,12 @@ function createCoreRouter() {
                 result.updateMessageLog = !!platformModule.updateMessageLog;
                 result.createContact = !!platformModule.createContact;
                 result.findContact = !!platformModule.findContact;
+                result.listAppointments = !!platformModule.listAppointments;
+                result.createAppointment = !!platformModule.createAppointment;
+                result.updateAppointment = !!platformModule.updateAppointment;
+                result.refreshAppointment = !!platformModule.refreshAppointment;
+                result.confirmAppointment = !!platformModule.confirmAppointment;
+                result.cancelAppointment = !!platformModule.cancelAppointment;
                 result.unAuthorize = !!platformModule.unAuthorize;
                 result.upsertCallDisposition = !!platformModule.upsertCallDisposition;
                 result.findContactWithName = !!platformModule.findContactWithName;
@@ -190,9 +283,16 @@ function createCoreRouter() {
         let extraData = {};
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
-                const { id: userId, platform } = jwt.decodeJwt(jwtToken);
+                const decodedToken = jwt.decodeJwt(jwtToken);
+                if (!decodedToken) {
+                    tracer?.trace('licenseStatus:invalidJwtToken', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('Invalid JWT token') : 'Invalid JWT token');
+                    success = false;
+                    return;
+                }
+                const { id: userId, platform } = decodedToken;
                 platformName = platform;
                 if (!userId) {
                     tracer?.trace('licenseStatus:noUserId', {});
@@ -257,7 +357,7 @@ function createCoreRouter() {
         let statusCode = 200;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const decodedToken = jwt.decodeJwt(jwtToken);
                 if (!decodedToken) {
@@ -281,7 +381,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Auth validation failed', { platform: platformName, stack: e.stack });
             tracer?.traceError('authValidation:error', e);
             statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
@@ -307,6 +407,65 @@ function createCoreRouter() {
             eventAddedVia
         });
     });
+    router.get('/apiKeyManagedAuthState', async function (req, res) {
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('apiKeyManagedAuthState:start', { query: req.query });
+        try {
+            const platform = req.query.platform;
+            const rcAccessToken = req.query.rcAccessToken;
+            if (!platform) {
+                res.status(400).send(tracer ? tracer.wrapResponse('Missing platform name') : 'Missing platform name');
+                return;
+            }
+            if (!rcAccessToken) {
+                res.status(400).send(tracer ? tracer.wrapResponse('Missing RingCentral access token') : 'Missing RingCentral access token');
+                return;
+            }
+            const { rcAccountId, rcExtensionId } = await adminCore.validateRcUserToken({ rcAccessToken });
+            const managedAuthState = await managedAuthCore.getManagedAuthState({
+                platform,
+                rcAccountId,
+                rcExtensionId,
+                connectorId: req.query.connectorId,
+                isPrivate: req.query.isPrivate === 'true'
+            });
+            res.status(200).send(tracer ? tracer.wrapResponse(managedAuthState) : managedAuthState);
+        }
+        catch (e) {
+            logger.error('Get API key managed auth state failed', { stack: e.stack });
+            tracer?.traceError('apiKeyManagedAuthState:error', e);
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+        }
+    });
+    router.get('/oauthManagedAuthState', async function (req, res) {
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('oauthManagedAuthState:start', { query: req.query });
+        try {
+            const platform = req.query.platform;
+            const rcAccessToken = req.query.rcAccessToken;
+            if (!platform) {
+                res.status(400).send(tracer ? tracer.wrapResponse('Missing platform name') : 'Missing platform name');
+                return;
+            }
+            if (!rcAccessToken) {
+                res.status(400).send(tracer ? tracer.wrapResponse('Missing RingCentral access token') : 'Missing RingCentral access token');
+                return;
+            }
+            const { rcAccountId } = await adminCore.validateRcUserToken({ rcAccessToken });
+            const adminValidation = await adminCore.validateAdminRole({ rcAccessToken });
+            const state = await managedOAuthCore.getManagedOAuthState({
+                platform,
+                rcAccountId,
+                isAdmin: !!adminValidation.isValidated
+            });
+            res.status(200).send(tracer ? tracer.wrapResponse(state) : state);
+        }
+        catch (e) {
+            logger.error('Get managed OAuth state failed', { stack: e.stack });
+            tracer?.traceError('oauthManagedAuthState:error', e);
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+        }
+    });
     // Obsolete
     router.get('/serverVersionInfo', (req, res) => {
         const defaultCrmManifest = connectorRegistry.getManifest('default');
@@ -328,12 +487,12 @@ function createCoreRouter() {
             }
             else {
                 tracer?.trace('setAdminSettings:adminValidationFailed', {});
-                res.status(401).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
+                res.status(403).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
                 success = false;
             }
         }
         catch (e) {
-            console.log(`${e.stack}`);
+            logger.error('Set admin settings failed', { stack: e.stack });
             tracer?.traceError('setAdminSettings:error', e);
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             success = false;
@@ -360,7 +519,7 @@ function createCoreRouter() {
         let success = false;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const unAuthData = jwt.decodeJwt(jwtToken);
                 platformName = unAuthData?.platform ?? 'Unknown';
@@ -390,7 +549,7 @@ function createCoreRouter() {
                 }
                 else {
                     tracer?.trace('getAdminSettings:adminValidationFailed', {});
-                    res.status(401).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
+                    res.status(403).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
                     success = true;
                 }
             }
@@ -420,6 +579,155 @@ function createCoreRouter() {
             eventAddedVia
         });
     });
+    router.get('/admin/managedAuth', async function (req, res) {
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('getAdminManagedAuth:start', { query: req.query });
+        try {
+            const jwtToken = req.jwtToken || req.query.jwtToken;
+            if (!jwtToken) {
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                return;
+            }
+            const unAuthData = jwt.decodeJwt(jwtToken);
+            const user = await UserModel.findByPk(unAuthData?.id);
+            if (!user) {
+                res.status(400).send(tracer ? tracer.wrapResponse('User not found') : 'User not found');
+                return;
+            }
+            const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+            if (!isValidated) {
+                res.status(403).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
+                return;
+            }
+            const managedAuthSettings = await managedAuthCore.getManagedAuthAdminSettings({
+                platform: user.platform,
+                rcAccountId,
+                connectorId: req.query.connectorId,
+                isPrivate: req.query.isPrivate === 'true'
+            });
+            res.status(200).send(tracer ? tracer.wrapResponse(managedAuthSettings) : managedAuthSettings);
+        }
+        catch (e) {
+            logger.error('Get managed auth settings failed', { stack: e.stack });
+            tracer?.traceError('getAdminManagedAuth:error', e);
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+        }
+    });
+    router.post('/admin/managedAuth', async function (req, res) {
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('setAdminManagedAuth:start', { body: { scope: req.body?.scope, rcExtensionId: req.body?.rcExtensionId } });
+        try {
+            const jwtToken = req.jwtToken || req.query.jwtToken;
+            if (!jwtToken) {
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                return;
+            }
+            const unAuthData = jwt.decodeJwt(jwtToken);
+            const user = await UserModel.findByPk(unAuthData?.id);
+            if (!user) {
+                res.status(400).send(tracer ? tracer.wrapResponse('User not found') : 'User not found');
+                return;
+            }
+            const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+            if (!isValidated) {
+                res.status(403).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
+                return;
+            }
+            if (req.body?.scope === 'user') {
+                await managedAuthCore.upsertUserManagedAuthValues({
+                    rcAccountId,
+                    platform: user.platform,
+                    rcExtensionId: req.body?.rcExtensionId,
+                    rcUserName: req.body?.rcUserName,
+                    values: req.body?.values ?? {},
+                    fieldsToRemove: req.body?.fieldsToRemove ?? []
+                });
+            }
+            else {
+                await managedAuthCore.upsertOrgManagedAuthValues({
+                    rcAccountId,
+                    platform: user.platform,
+                    values: req.body?.values ?? {},
+                    fieldsToRemove: req.body?.fieldsToRemove ?? []
+                });
+            }
+            res.status(200).send(tracer ? tracer.wrapResponse('Shared authentication updated') : 'Shared authentication updated');
+        }
+        catch (e) {
+            logger.error('Set managed auth settings failed', { stack: e.stack });
+            tracer?.traceError('setAdminManagedAuth:error', e);
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+        }
+    });
+    router.post('/admin/managedOAuth/cache', async function (req, res) {
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('setAdminManagedOAuthCache:start', {
+            body: {
+                hasValues: !!req.body?.values,
+                valueKeys: Object.keys(req.body?.values ?? {}).filter(key => key !== 'clientSecret')
+            }
+        });
+        try {
+            const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+            if (!isValidated) {
+                res.status(403).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
+                return;
+            }
+            await managedOAuthCore.upsertPendingManagedOAuth({
+                rcAccountId: rcAccountId?.toString(),
+                values: req.body?.values ?? {}
+            });
+            res.status(200).send(tracer ? tracer.wrapResponse({ successful: true }) : { successful: true });
+        }
+        catch (e) {
+            logger.error('Set managed OAuth pending cache failed', { stack: e.stack });
+            tracer?.traceError('setAdminManagedOAuthCache:error', e);
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+        }
+    });
+    router.delete('/admin/managedOAuth/cache', async function (req, res) {
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('deleteAdminManagedOAuthCache:start', {});
+        try {
+            const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+            if (!isValidated) {
+                res.status(403).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
+                return;
+            }
+            await managedOAuthCore.clearPendingManagedOAuth({ rcAccountId: rcAccountId?.toString() });
+            res.status(200).send(tracer ? tracer.wrapResponse({ successful: true }) : { successful: true });
+        }
+        catch (e) {
+            logger.error('Delete managed OAuth pending cache failed', { stack: e.stack });
+            tracer?.traceError('deleteAdminManagedOAuthCache:error', e);
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+        }
+    });
+    router.delete('/admin/managedOAuth/account', async function (req, res) {
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('deleteAdminManagedOAuthAccount:start', { query: req.query });
+        try {
+            const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+            if (!isValidated) {
+                res.status(403).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
+                return;
+            }
+            if (!req.query.platform) {
+                res.status(400).send(tracer ? tracer.wrapResponse('Missing platform name') : 'Missing platform name');
+                return;
+            }
+            await managedOAuthCore.resetManagedOAuth({
+                rcAccountId: rcAccountId?.toString(),
+                platform: req.query.platform
+            });
+            res.status(200).send(tracer ? tracer.wrapResponse({ successful: true }) : { successful: true });
+        }
+        catch (e) {
+            logger.error('Delete managed OAuth account failed', { stack: e.stack });
+            tracer?.traceError('deleteAdminManagedOAuthAccount:error', e);
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+        }
+    });
     router.post('/admin/userMapping', async function (req, res) {
         const requestStartTime = new Date().getTime();
         const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
@@ -428,7 +736,7 @@ function createCoreRouter() {
         let success = false;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const unAuthData = jwt.decodeJwt(jwtToken);
                 platformName = unAuthData?.platform ?? 'Unknown';
@@ -442,12 +750,18 @@ function createCoreRouter() {
                 const hashedRcAccountId = util.getHashValue(rcAccountId, process.env.HASH_KEY);
                 if (isValidated) {
                     const userMapping = await adminCore.getUserMapping({ user, hashedRcAccountId, rcExtensionList: req.body.rcExtensionList });
-                    res.status(200).send(tracer ? tracer.wrapResponse(userMapping) : userMapping);
-                    success = true;
+                    if (userMapping?.isRevokeUserSession) {
+                        res.status(401).send(tracer ? tracer.wrapResponse(userMapping) : userMapping);
+                        success = false;
+                    }
+                    else {
+                        res.status(200).send(tracer ? tracer.wrapResponse(userMapping) : userMapping);
+                        success = true;
+                    }
                 }
                 else {
                     tracer?.trace('getUserMapping:adminValidationFailed', {});
-                    res.status(401).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
+                    res.status(403).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
                     success = true;
                 }
             }
@@ -458,7 +772,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`${e.stack}`);
+            logger.error('Get user mapping failed', { stack: e.stack });
             tracer?.traceError('getUserMapping:error', e);
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
         }
@@ -477,13 +791,76 @@ function createCoreRouter() {
             eventAddedVia
         });
     });
+    router.post('/admin/reinitializeUserMapping', async function (req, res) {
+        const requestStartTime = new Date().getTime();
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('reinitializeUserMapping:start', { body: req.body });
+        let platformName = null;
+        let success = false;
+        const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+        try {
+            const jwtToken = req.jwtToken || req.query.jwtToken;
+            if (jwtToken) {
+                const unAuthData = jwt.decodeJwt(jwtToken);
+                platformName = unAuthData?.platform ?? 'Unknown';
+                const user = await UserModel.findByPk(unAuthData?.id);
+                if (!user) {
+                    tracer?.trace('reinitializeUserMapping:userNotFound', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('User not found') : 'User not found');
+                    return;
+                }
+                const { isValidated, rcAccountId } = await adminCore.validateAdminRole({ rcAccessToken: req.query.rcAccessToken });
+                const hashedRcAccountId = util.getHashValue(rcAccountId, process.env.HASH_KEY);
+                if (isValidated) {
+                    const userMapping = await adminCore.reinitializeUserMapping({ user, hashedRcAccountId, rcExtensionList: req.body.rcExtensionList });
+                    if (userMapping?.isRevokeUserSession) {
+                        res.status(401).send(tracer ? tracer.wrapResponse(userMapping) : userMapping);
+                        success = false;
+                    }
+                    else {
+                        res.status(200).send(tracer ? tracer.wrapResponse(userMapping) : userMapping);
+                        success = true;
+                    }
+                }
+                else {
+                    tracer?.trace('reinitializeUserMapping:adminValidationFailed', {});
+                    res.status(403).send(tracer ? tracer.wrapResponse('Admin validation failed') : 'Admin validation failed');
+                    success = true;
+                }
+            }
+            else {
+                tracer?.trace('reinitializeUserMapping:noToken', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                success = false;
+            }
+        }
+        catch (e) {
+            logger.error('Reinitialize user mapping failed', { stack: e.stack });
+            tracer?.traceError('reinitializeUserMapping:error', e);
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+        }
+        const requestEndTime = new Date().getTime();
+        analytics.track({
+            eventName: 'Reinitialize user mapping',
+            interfaceName: 'reinitializeUserMapping',
+            connectorName: platformName,
+            accountId: hashedAccountId,
+            extensionId: hashedExtensionId,
+            success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            eventAddedVia
+        });
+    });
     router.get('/admin/serverLoggingSettings', async function (req, res) {
         const requestStartTime = new Date().getTime();
         const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
         tracer?.trace('getServerLoggingSettings:start', { query: req.query });
         let platformName = null;
         let success = false;
-        const jwtToken = req.query.jwtToken;
+        const jwtToken = req.jwtToken || req.query.jwtToken;
         if (!jwtToken) {
             tracer?.trace('getServerLoggingSettings:noToken', {});
             res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
@@ -509,7 +886,7 @@ function createCoreRouter() {
             success = true;
         }
         catch (e) {
-            console.log(`${e.stack}`);
+            logger.error('Get server logging settings failed', { stack: e.stack });
             tracer?.traceError('getServerLoggingSettings:error', e);
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
         }
@@ -534,7 +911,7 @@ function createCoreRouter() {
         tracer?.trace('setServerLoggingSettings:start', { body: req.body });
         let platformName = null;
         let success = false;
-        const jwtToken = req.query.jwtToken;
+        const jwtToken = req.jwtToken || req.query.jwtToken;
         if (!jwtToken) {
             tracer?.trace('setServerLoggingSettings:noToken', {});
             res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
@@ -565,7 +942,7 @@ function createCoreRouter() {
             success = true;
         }
         catch (e) {
-            console.log(`${e.stack}`);
+            logger.error('Set server logging settings failed', { stack: e.stack });
             tracer?.traceError('setServerLoggingSettings:error', e);
             res.status(400).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: { messageType: 'warning', message: 'Server logging settings update failed', ttl: 5000 } }) : { successful: false, returnMessage: { messageType: 'warning', message: 'Server logging settings update failed', ttl: 5000 } });
             success = false;
@@ -601,7 +978,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`${e.stack}`);
+            logger.error('Get user preload settings failed', { stack: e.stack });
             tracer?.traceError('getUserSettingsByAdmin:error', e);
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
         }
@@ -615,7 +992,7 @@ function createCoreRouter() {
         let success = false;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const unAuthData = jwt.decodeJwt(jwtToken);
                 platformName = unAuthData?.platform ?? 'Unknown';
@@ -640,7 +1017,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Get user settings failed', { platform: platformName, stack: e.stack });
             tracer?.traceError('getUserSettings:error', e, { platform: platformName });
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
         }
@@ -667,7 +1044,7 @@ function createCoreRouter() {
         let success = false;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const unAuthData = jwt.decodeJwt(jwtToken);
                 platformName = unAuthData?.platform;
@@ -682,7 +1059,7 @@ function createCoreRouter() {
                     res.status(400).send(tracer ? tracer.wrapResponse('User not found') : 'User not found');
                     return;
                 }
-                const { userSettings } = await userCore.updateUserSettings({ user, userSettings: req.body.userSettings, platformName });
+                const { userSettings } = await userCore.updateUserSettings({ user, userSettings: req.body.userSettings, settingKeysToRemove: req.body.settingKeysToRemove || [], platformName });
                 res.status(200).send(tracer ? tracer.wrapResponse({ userSettings }) : { userSettings });
                 success = true;
             }
@@ -693,7 +1070,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Set user settings failed', { platform: platformName, stack: e.stack });
             tracer?.traceError('setUserSettings:error', e, { platform: platformName });
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
         }
@@ -716,7 +1093,7 @@ function createCoreRouter() {
         const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
         tracer?.trace('hostname:start', { query: req.query });
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const unAuthData = jwt.decodeJwt(jwtToken);
                 const user = await UserModel.findByPk(unAuthData?.id);
@@ -733,7 +1110,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`${e.stack}`);
+            logger.error('Get hostname failed', { stack: e.stack });
             tracer?.traceError('hostname:error', e);
             res.status(500).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
         }
@@ -744,17 +1121,32 @@ function createCoreRouter() {
         tracer?.trace('oauth-callback:start', { query: req.query });
         let platformName = null;
         let success = false;
+        let sessionId = null;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
             if (!req.query?.callbackUri || req.query.callbackUri === 'undefined') {
-                tracer?.trace('oauth-callback:missingCallbackUri', {});
-                res.status(400).send(tracer ? tracer.wrapResponse('Missing callbackUri') : 'Missing callbackUri');
-                return;
+                // case: from mcp
+                if (req.query.code) {
+                    // eslint-disable-next-line no-param-reassign
+                    req.query.callbackUri = `${process.env.APP_SERVER}/oauth-callback?code=${req.query.code}`;
+                }
+                else {
+                    tracer?.trace('oauth-callback:missingCallbackUri', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('Missing callbackUri') : 'Missing callbackUri');
+                    return;
+                }
             }
-            platformName = req.query.state ?
-                req.query.state.split('platform=')[1] :
-                decodeURIComponent(decodeURIComponent(req.originalUrl).split('state=')[1].split('&')[0]).split('platform=')[1];
-            const hostname = req.query.hostname;
+            const state = new URL(req.query.callbackUri).searchParams.get('state') ?? req.query.state;
+            const stateParams = new URLSearchParams(state ? decodeURIComponent(state) : '');
+            platformName = stateParams.get('platform');
+            // backward compatibility
+            if (!platformName) {
+                platformName = req.query.callbackUri?.split('platform=')[1] ?? state.split('platform=')[1];
+            }
+            // Extract mcp auth sessionId if present
+            sessionId = stateParams?.get('sessionId');
+            const isFromMCP = !!sessionId;
+            const hostname = req.query.hostname ?? stateParams.get('hostname');
             const tokenUrl = req.query.tokenUrl;
             if (!platformName) {
                 tracer?.trace('oauth-callback:missingPlatformName', {});
@@ -770,25 +1162,54 @@ function createCoreRouter() {
                 platform: platformName,
                 hostname,
                 tokenUrl,
-                query: req.query
+                query: req.query,
+                proxyId: req.query.proxyId,
+                hashedRcExtensionId: hashedExtensionId,
+                isFromMCP
             });
             if (userInfo) {
                 const jwtToken = jwt.generateJwt({
                     id: userInfo.id.toString(),
                     platform: platformName
                 });
-                res.status(200).send(tracer ? tracer.wrapResponse({ jwtToken, name: userInfo.name, returnMessage }) : { jwtToken, name: userInfo.name, returnMessage });
-                success = true;
+                // Store in session if sessionId exists (MCP flow)
+                if (isFromMCP) {
+                    await updateAuthSession(sessionId, {
+                        status: 'completed',
+                        jwtToken,
+                        userInfo: {
+                            id: userInfo.id,
+                            name: userInfo.name
+                        }
+                    });
+                    res.status(200).send("Authentication successful. Please go back to AI Agent and confirm it.");
+                    success = true;
+                }
+                else {
+                    res.status(200).send(tracer ? tracer.wrapResponse({ jwtToken, name: userInfo.name, returnMessage }) : { jwtToken, name: userInfo.name, returnMessage });
+                    success = true;
+                }
             }
             else {
                 res.status(200).send(tracer ? tracer.wrapResponse({ returnMessage }) : { returnMessage });
-                success = false;
+                await updateAuthSession(sessionId, {
+                    status: 'failed',
+                    errorMessage: returnMessage?.message || 'Authentication failed'
+                });
             }
+            success = false;
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('OAuth callback failed', { platform: platformName, stack: e.stack });
             tracer?.traceError('oauth-callback:error', e, { platform: platformName });
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+            if (sessionId) {
+                await updateAuthSession(sessionId, {
+                    status: 'failed',
+                    errorMessage: e.message || e.toString()
+                });
+            }
+
             success = false;
         }
         const requestEndTime = new Date().getTime();
@@ -805,11 +1226,18 @@ function createCoreRouter() {
             author,
             eventAddedVia
         });
-    })
+    });
     router.post('/apiKeyLogin', async function (req, res) {
         const requestStartTime = new Date().getTime();
         const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
-        tracer?.trace('apiKeyLogin:start', { body: req.body });
+        tracer?.trace('apiKeyLogin:start', {
+            body: {
+                platform: req.body?.platform,
+                hostname: req.body?.hostname,
+                proxyId: req.body?.proxyId,
+                hasAdditionalInfo: !!req.body?.additionalInfo
+            }
+        });
         let platformName = null;
         let success = false;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
@@ -820,17 +1248,33 @@ function createCoreRouter() {
             const hostname = req.body.hostname;
             const proxyId = req.body.proxyId;
             const additionalInfo = req.body.additionalInfo;
+            const rcAccessToken = req.body.rcAccessToken;
+            const connectorId = req.body.connectorId;
+            const isPrivate = !!req.body.isPrivate;
             if (!platform) {
                 tracer?.trace('apiKeyLogin:missingPlatform', {});
                 res.status(400).send(tracer ? tracer.wrapResponse('Missing platform name') : 'Missing platform name');
                 return;
             }
-            if (!apiKey) {
-                tracer?.trace('apiKeyLogin:missingApiKey', {});
-                res.status(400).send(tracer ? tracer.wrapResponse('Missing api key') : 'Missing api key');
-                return;
+            let rcAccountId = null;
+            let rcExtensionId = null;
+            if (rcAccessToken) {
+                const rcUserTokenResult = await adminCore.validateRcUserToken({ rcAccessToken });
+                rcAccountId = rcUserTokenResult.rcAccountId;
+                rcExtensionId = rcUserTokenResult.rcExtensionId;
             }
-            const { userInfo, returnMessage } = await authCore.onApiKeyLogin({ platform, hostname, apiKey, proxyId, additionalInfo });
+            const { userInfo, returnMessage } = await authCore.onApiKeyLogin({
+                platform,
+                hostname,
+                apiKey,
+                proxyId,
+                rcAccountId,
+                rcExtensionId,
+                connectorId,
+                isPrivate,
+                hashedRcExtensionId: hashedExtensionId,
+                additionalInfo
+            });
             if (userInfo) {
                 const jwtToken = jwt.generateJwt({
                     id: userInfo.id.toString(),
@@ -845,7 +1289,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('API key login failed', { platform: platformName, stack: e.stack });
             tracer?.traceError('apiKeyLogin:error', e, { platform: platformName });
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             success = false;
@@ -873,7 +1317,7 @@ function createCoreRouter() {
         let success = false;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const unAuthData = jwt.decodeJwt(jwtToken);
                 platformName = unAuthData?.platform ?? 'Unknown';
@@ -895,7 +1339,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Unauthorize failed', { platform: platformName, stack: e.stack });
             tracer?.traceError('unAuthorize:error', e, { platform: platformName });
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             success = false;
@@ -924,7 +1368,7 @@ function createCoreRouter() {
             res.status(200).send(tracer ? tracer.wrapResponse({ extensionId, accountId }) : { extensionId, accountId });
         }
         catch (e) {
-            console.log(`${e.stack}`);
+            logger.error('Get user info hash failed', { stack: e.stack });
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('userInfoHash:error', e);
         }
@@ -940,7 +1384,7 @@ function createCoreRouter() {
         let extraData = {};
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const decodedToken = jwt.decodeJwt(jwtToken);
                 tracer?.trace('findContact:jwtDecoded', { decodedToken });
@@ -951,7 +1395,7 @@ function createCoreRouter() {
                 }
                 const { id: userId, platform } = decodedToken;
                 platformName = platform;
-                const { successful, returnMessage, contact, extraDataTracking } = await contactCore.findContact({
+                const { successful, returnMessage, contact, extraDataTracking, isRevokeUserSession } = await contactCore.findContact({
                     platform,
                     userId,
                     phoneNumber: req.query.phoneNumber.replace(' ', '+'),
@@ -960,15 +1404,21 @@ function createCoreRouter() {
                     tracer,
                     isForceRefreshAccountData: req.query?.isForceRefreshAccountData === 'true'
                 });
-                tracer?.trace('findContact:result', { successful, returnMessage, contact });
-                res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage, contact }) : { successful, returnMessage, contact });
-                if (successful) {
-                    const nonNewContact = contact?.filter(c => !c.isNewContact) ?? [];
-                    resultCount = nonNewContact.length;
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
                 }
-                success = successful;
-                if (extraDataTracking) {
-                    extraData = extraDataTracking;
+                else {
+                    tracer?.trace('findContact:result', { successful, returnMessage, contact });
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage, contact }) : { successful, returnMessage, contact });
+                    if (successful) {
+                        const nonNewContact = contact?.filter(c => !c.isNewContact) ?? [];
+                        resultCount = nonNewContact.length;
+                    }
+                    success = successful;
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
                 }
             }
             else {
@@ -978,7 +1428,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Find contact failed', { platform: platformName, stack: e.stack });
             tracer?.traceError('findContact:error', e, { platform: platformName });
             extraData.statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
@@ -1012,7 +1462,7 @@ function createCoreRouter() {
         let extraData = {};
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const decodedToken = jwt.decodeJwt(jwtToken);
                 if (!decodedToken) {
@@ -1022,11 +1472,17 @@ function createCoreRouter() {
                 }
                 const { id: userId, platform } = decodedToken;
                 platformName = platform;
-                const { successful, returnMessage, contact, extraDataTracking } = await contactCore.createContact({ platform, userId, phoneNumber: req.body.phoneNumber, newContactName: req.body.newContactName, newContactType: req.body.newContactType, additionalSubmission: req.body.additionalSubmission });
-                res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage, contact }) : { successful, returnMessage, contact });
-                success = true;
-                if (extraDataTracking) {
-                    extraData = extraDataTracking;
+                const { successful, returnMessage, contact, extraDataTracking, isRevokeUserSession } = await contactCore.createContact({ platform, userId, phoneNumber: req.body.phoneNumber, newContactName: req.body.newContactName, newContactType: req.body.newContactType, additionalSubmission: req.body.additionalSubmission });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
+                }
+                else {
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage, contact }) : { successful, returnMessage, contact });
+                    success = true;
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
                 }
             }
             else {
@@ -1036,7 +1492,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Create contact failed', { platform: platformName, stack: e.stack });
             tracer?.traceError('createContact:error', e, { platform: platformName });
             extraData.statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
@@ -1060,10 +1516,11 @@ function createCoreRouter() {
             eventAddedVia
         });
     });
-    router.post('/callLog/cacheNote', async function (req, res) {
+
+    router.get('/appointments', async function (req, res) {
         const requestStartTime = new Date().getTime();
         const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
-        tracer?.trace('saveNoteCache:start', { query: req.query });
+        tracer?.trace('listAppointments:start', { query: req.query });
         let platformName = null;
         let success = false;
         let extraData = {};
@@ -1073,13 +1530,409 @@ function createCoreRouter() {
             if (jwtToken) {
                 const decodedToken = jwt.decodeJwt(jwtToken);
                 if (!decodedToken) {
+                    tracer?.trace('listAppointments:invalidToken', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                    return;
+                }
+                const { id: userId, platform } = decodedToken;
+                platformName = platform;
+                const range = req.query.range;
+                const mineOnly = req.query.mineOnly === 'true';
+                const forceSync = req.query.forceSync === 'true';
+                const { successful, appointments, returnMessage, extraDataTracking, isRevokeUserSession } = await appointmentCore.listAppointments({ platform, userId, range, mineOnly, forceSync });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
+                }
+                else {
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, appointments, returnMessage }) : { successful, appointments, returnMessage });
+                    success = true;
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
+                    extraData.range = range;
+                    extraData.mineOnly = mineOnly;
+                    extraData.forceSync = forceSync;
+                    extraData.resultCount = appointments?.length ?? 0;
+                }
+            }
+            else {
+                tracer?.trace('listAppointments:noToken', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                success = false;
+            }
+        }
+        catch (e) {
+            logger.error('List appointments failed', { platform: platformName, stack: e.stack });
+            tracer?.traceError('listAppointments:error', e, { platform: platformName });
+            extraData.statusCode = e.response?.status ?? 'unknown';
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+            success = false;
+        }
+        const requestEndTime = new Date().getTime();
+        analytics.track({
+            eventName: 'List appointments',
+            interfaceName: 'listAppointments',
+            connectorName: platformName,
+            accountId: hashedAccountId,
+            extensionId: hashedExtensionId,
+            success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            extras: {
+                ...extraData
+            },
+            eventAddedVia
+        });
+    });
+
+    router.post('/appointments', async function (req, res) {
+        const requestStartTime = new Date().getTime();
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('createAppointment:start', { query: req.query });
+        let platformName = null;
+        let success = false;
+        let extraData = {};
+        const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+        try {
+            const jwtToken = req.query.jwtToken;
+            if (jwtToken) {
+                const decodedToken = jwt.decodeJwt(jwtToken);
+                if (!decodedToken) {
+                    tracer?.trace('createAppointment:invalidToken', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                    return;
+                }
+                const { id: userId, platform } = decodedToken;
+                platformName = platform;
+                const payload = req.body?.payload ?? req.body;
+                const { successful, appointmentId, appointment, returnMessage, extraDataTracking, isRevokeUserSession } = await appointmentCore.createAppointment({ platform, userId, payload });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
+                }
+                else {
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, appointmentId, appointment, returnMessage }) : { successful, appointmentId, appointment, returnMessage });
+                    success = true;
+                }
+            }
+            else {
+                tracer?.trace('createAppointment:noToken', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                success = false;
+            }
+        }
+        catch (e) {
+            logger.error('Create appointment failed', { platform: platformName, stack: e.stack });
+            tracer?.traceError('createAppointment:error', e, { platform: platformName });
+            extraData.statusCode = e.response?.status ?? 'unknown';
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+            success = false;
+        }
+        const requestEndTime = new Date().getTime();
+        analytics.track({
+            eventName: 'Create appointment',
+            interfaceName: 'createAppointment',
+            connectorName: platformName,
+            accountId: hashedAccountId,
+            extensionId: hashedExtensionId,
+            success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            extras: {
+                ...extraData
+            },
+            eventAddedVia
+        });
+    });
+
+    router.patch('/appointments/:appointmentId', async function (req, res) {
+        const requestStartTime = new Date().getTime();
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('updateAppointment:start', { query: req.query, params: req.params });
+        let platformName = null;
+        let success = false;
+        let extraData = {};
+        const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+        try {
+            const jwtToken = req.query.jwtToken;
+            if (jwtToken) {
+                const decodedToken = jwt.decodeJwt(jwtToken);
+                if (!decodedToken) {
+                    tracer?.trace('updateAppointment:invalidToken', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                    return;
+                }
+                const { id: userId, platform } = decodedToken;
+                platformName = platform;
+                const appointmentId = req.params.appointmentId;
+                const patchBody = req.body?.patch ?? req.body;
+                const { successful, appointment, returnMessage, extraDataTracking, isRevokeUserSession } = await appointmentCore.updateAppointment({ platform, userId, appointmentId, patchBody });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
+                }
+                else {
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, appointmentId, appointment, returnMessage }) : { successful, appointmentId, appointment, returnMessage });
+                    success = true;
+                }
+            }
+            else {
+                tracer?.trace('updateAppointment:noToken', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                success = false;
+            }
+        }
+        catch (e) {
+            logger.error('Update appointment failed', { platform: platformName, stack: e.stack });
+            tracer?.traceError('updateAppointment:error', e, { platform: platformName });
+            extraData.statusCode = e.response?.status ?? 'unknown';
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+            success = false;
+        }
+        const requestEndTime = new Date().getTime();
+        analytics.track({
+            eventName: 'Update appointment',
+            interfaceName: 'updateAppointment',
+            connectorName: platformName,
+            accountId: hashedAccountId,
+            extensionId: hashedExtensionId,
+            success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            extras: {
+                ...extraData
+            },
+            eventAddedVia
+        });
+    });
+
+    router.get('/appointments/:appointmentId/refresh', async function (req, res) {
+        const requestStartTime = new Date().getTime();
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('refreshAppointment:start', { query: req.query, params: req.params });
+        let platformName = null;
+        let success = false;
+        let extraData = {};
+        const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+        try {
+            const jwtToken = req.query.jwtToken;
+            if (jwtToken) {
+                const decodedToken = jwt.decodeJwt(jwtToken);
+                if (!decodedToken) {
+                    tracer?.trace('refreshAppointment:invalidToken', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                    return;
+                }
+                const { id: userId, platform } = decodedToken;
+                platformName = platform;
+                const appointmentId = req.params.appointmentId;
+                const { successful, appointment, returnMessage, extraDataTracking, isRevokeUserSession } = await appointmentCore.refreshAppointment({ platform, userId, appointmentId });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
+                }
+                else {
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, appointmentId, appointment, returnMessage }) : { successful, appointmentId, appointment, returnMessage });
+                    success = true;
+                }
+            }
+            else {
+                tracer?.trace('refreshAppointment:noToken', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                success = false;
+            }
+        }
+        catch (e) {
+            logger.error('Refresh appointment failed', { platform: platformName, stack: e.stack });
+            tracer?.traceError('refreshAppointment:error', e, { platform: platformName });
+            extraData.statusCode = e.response?.status ?? 'unknown';
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+            success = false;
+        }
+        const requestEndTime = new Date().getTime();
+        analytics.track({
+            eventName: 'Refresh appointment',
+            interfaceName: 'refreshAppointment',
+            connectorName: platformName,
+            accountId: hashedAccountId,
+            extensionId: hashedExtensionId,
+            success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            extras: {
+                ...extraData
+            },
+            eventAddedVia
+        });
+    });
+
+    router.post('/appointments/:appointmentId/confirm', async function (req, res) {
+        const requestStartTime = new Date().getTime();
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('confirmAppointment:start', { query: req.query, params: req.params });
+        let platformName = null;
+        let success = false;
+        let extraData = {};
+        const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+        try {
+            const jwtToken = req.query.jwtToken;
+            if (jwtToken) {
+                const decodedToken = jwt.decodeJwt(jwtToken);
+                if (!decodedToken) {
+                    tracer?.trace('confirmAppointment:invalidToken', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                    return;
+                }
+                const { id: userId, platform } = decodedToken;
+                platformName = platform;
+                const appointmentId = req.params.appointmentId;
+                const { successful, appointment, returnMessage, extraDataTracking, isRevokeUserSession } = await appointmentCore.confirmAppointment({ platform, userId, appointmentId });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
+                }
+                else {
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, appointmentId, appointment, returnMessage }) : { successful, appointmentId, appointment, returnMessage });
+                    success = true;
+                }
+            }
+            else {
+                tracer?.trace('confirmAppointment:noToken', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                success = false;
+            }
+        }
+        catch (e) {
+            logger.error('Confirm appointment failed', { platform: platformName, stack: e.stack });
+            tracer?.traceError('confirmAppointment:error', e, { platform: platformName });
+            extraData.statusCode = e.response?.status ?? 'unknown';
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+            success = false;
+        }
+        const requestEndTime = new Date().getTime();
+        analytics.track({
+            eventName: 'Confirm appointment',
+            interfaceName: 'confirmAppointment',
+            connectorName: platformName,
+            accountId: hashedAccountId,
+            extensionId: hashedExtensionId,
+            success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            extras: {
+                ...extraData
+            },
+            eventAddedVia
+        });
+    });
+
+    router.post('/appointments/:appointmentId/cancel', async function (req, res) {
+        const requestStartTime = new Date().getTime();
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('cancelAppointment:start', { query: req.query, params: req.params });
+        let platformName = null;
+        let success = false;
+        let extraData = {};
+        const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+        try {
+            const jwtToken = req.query.jwtToken;
+            if (jwtToken) {
+                const decodedToken = jwt.decodeJwt(jwtToken);
+                if (!decodedToken) {
+                    tracer?.trace('cancelAppointment:invalidToken', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                    return;
+                }
+                const { id: userId, platform } = decodedToken;
+                platformName = platform;
+                const appointmentId = req.params.appointmentId;
+                const { successful, appointment, returnMessage, extraDataTracking, isRevokeUserSession } = await appointmentCore.cancelAppointment({ platform, userId, appointmentId });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
+                }
+                else {
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, appointmentId, appointment, returnMessage }) : { successful, appointmentId, appointment, returnMessage });
+                    success = true;
+                }
+            }
+            else {
+                tracer?.trace('cancelAppointment:noToken', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                success = false;
+            }
+        }
+        catch (e) {
+            logger.error('Cancel appointment failed', { platform: platformName, stack: e.stack });
+            tracer?.traceError('cancelAppointment:error', e, { platform: platformName });
+            extraData.statusCode = e.response?.status ?? 'unknown';
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+            success = false;
+        }
+        const requestEndTime = new Date().getTime();
+        analytics.track({
+            eventName: 'Cancel appointment',
+            interfaceName: 'cancelAppointment',
+            connectorName: platformName,
+            accountId: hashedAccountId,
+            extensionId: hashedExtensionId,
+            success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            extras: {
+                ...extraData
+            },
+            eventAddedVia
+        });
+    });
+    router.post('/callLog/cacheNote', async function (req, res) {
+        const requestStartTime = new Date().getTime();
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('saveNoteCache:start', { query: req.query });
+        let platformName = null;
+        let success = false;
+        let extraData = {};
+        const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+        try {
+            const jwtToken = req.jwtToken || req.query.jwtToken;
+            if (jwtToken) {
+                const decodedToken = jwt.decodeJwt(jwtToken);
+                if (!decodedToken) {
                     tracer?.trace('saveNoteCache:invalidToken', {});
                     res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
                     return;
                 }
                 const { id: userId, platform } = decodedToken;
                 platformName = platform;
-                const { successful, returnMessage, extraDataTracking } = await logCore.saveNoteCache({ sessionId: req.body.sessionId, note: req.body.note });
+                const { successful, returnMessage, extraDataTracking } = await logCore.saveNoteCache({ platform, userId, sessionId: req.body.sessionId, note: req.body.note });
                 res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
                 success = true;
                 if (extraDataTracking) {
@@ -1087,7 +1940,7 @@ function createCoreRouter() {
                 }
             }
         } catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Save note cache failed', { platform: platformName, stack: e.stack });
             tracer?.traceError('saveNoteCache:error', e, { platform: platformName });
             extraData.statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
@@ -1101,6 +1954,14 @@ function createCoreRouter() {
             accountId: hashedAccountId,
             extensionId: hashedExtensionId,
             success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            eventAddedVia,
+            extras: {
+                ...extraData
+            }
         });
     })
     router.get('/callLog', async function (req, res) {
@@ -1112,7 +1973,7 @@ function createCoreRouter() {
         let extraData = {};
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const decodedToken = jwt.decodeJwt(jwtToken);
                 if (!decodedToken) {
@@ -1122,13 +1983,25 @@ function createCoreRouter() {
                 }
                 const { id: userId, platform } = decodedToken;
                 platformName = platform;
-                const { successful, logs, returnMessage, extraDataTracking } = await logCore.getCallLog({ userId, sessionIds: req.query.sessionIds, platform, requireDetails: req.query.requireDetails === 'true' });
-                res.status(200).send(tracer ? tracer.wrapResponse({ successful, logs, returnMessage }) : { successful, logs, returnMessage });
-                success = true;
-                if (extraDataTracking) {
-                    extraData = extraDataTracking;
+                const { successful, logs, returnMessage, extraDataTracking, isRevokeUserSession } = await logCore.getCallLog({
+                    userId,
+                    sessionIds: req.query.sessionIds,
+                    extensionNumber: req.query.extensionNumber,
+                    platform,
+                    requireDetails: req.query.requireDetails === 'true'
+                });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
                 }
-                extraData.requireDetails = req.query.requireDetails === 'true';
+                else {
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, logs, returnMessage }) : { successful, logs, returnMessage });
+                    success = true;
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
+                    extraData.requireDetails = req.query.requireDetails === 'true';
+                }
             }
             else {
                 tracer?.trace('getCallLog:noToken', {});
@@ -1137,7 +2010,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Get call log failed', { platform: platformName, stack: e.stack });
             extraData.statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('getCallLog:error', e, { platform: platformName });
@@ -1170,7 +2043,7 @@ function createCoreRouter() {
         let extraData = {};
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const decodedToken = jwt.decodeJwt(jwtToken);
                 if (!decodedToken) {
@@ -1180,12 +2053,18 @@ function createCoreRouter() {
                 }
                 const { id: userId, platform } = decodedToken;
                 platformName = platform;
-                const { successful, logId, returnMessage, extraDataTracking } = await logCore.createCallLog({ platform, userId, incomingData: req.body, hashedAccountId: hashedAccountId ?? util.getHashValue(req.body.logInfo?.accountId, process.env.HASH_KEY), isFromSSCL: userAgent === 'SSCL' });
-                if (extraDataTracking) {
-                    extraData = extraDataTracking;
+                const { successful, logId, returnMessage, extraDataTracking, pluginAsyncTaskIds, isRevokeUserSession } = await logCore.createCallLog({ jwtToken, platform, userId, incomingData: req.body, hashedAccountId: hashedAccountId ?? util.getHashValue(req.body.logInfo?.accountId, process.env.HASH_KEY), isFromSSCL: userAgent === 'SSCL' });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
                 }
-                res.status(200).send(tracer ? tracer.wrapResponse({ successful, logId, returnMessage }) : { successful, logId, returnMessage });
-                success = true;
+                else {
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, logId, returnMessage, pluginAsyncTaskIds }) : { successful, logId, returnMessage, pluginAsyncTaskIds });
+                    success = true;
+                }
             }
             else {
                 tracer?.trace('createCallLog:noToken', {});
@@ -1194,7 +2073,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Create call log failed', { platform: platformName, stack: e.stack });
             extraData.statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('createCallLog:error', e, { platform: platformName });
@@ -1227,7 +2106,7 @@ function createCoreRouter() {
         let extraData = {};
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const decodedToken = jwt.decodeJwt(jwtToken);
                 if (!decodedToken) {
@@ -1237,11 +2116,11 @@ function createCoreRouter() {
                 }
                 const { id: userId, platform } = decodedToken;
                 platformName = platform;
-                const { successful, logId, updatedNote, returnMessage, extraDataTracking } = await logCore.updateCallLog({ platform, userId, incomingData: req.body, hashedAccountId: hashedAccountId ?? util.getHashValue(req.body.accountId, process.env.HASH_KEY), isFromSSCL: userAgent === 'SSCL' });
+                const { successful, logId, updatedNote, returnMessage, extraDataTracking, pluginAsyncTaskIds } = await logCore.updateCallLog({ jwtToken, platform, userId, incomingData: req.body, hashedAccountId: hashedAccountId ?? util.getHashValue(req.body.accountId, process.env.HASH_KEY), isFromSSCL: userAgent === 'SSCL' });
                 if (extraDataTracking) {
                     extraData = extraDataTracking;
                 }
-                res.status(200).send(tracer ? tracer.wrapResponse({ successful, logId, updatedNote, returnMessage }) : { successful, logId, updatedNote, returnMessage });
+                res.status(200).send(tracer ? tracer.wrapResponse({ successful, logId, updatedNote, returnMessage, pluginAsyncTaskIds }) : { successful, logId, updatedNote, returnMessage, pluginAsyncTaskIds });
                 success = true;
             }
             else {
@@ -1251,7 +2130,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Update call log failed', { platform: platformName, stack: e.stack });
             extraData.statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('updateCallLog:error', e, { platform: platformName });
@@ -1284,27 +2163,40 @@ function createCoreRouter() {
         let extraData = {};
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
-                const { id: userId, platform } = jwt.decodeJwt(jwtToken);
+                const decodedToken = jwt.decodeJwt(jwtToken);
+                if (!decodedToken) {
+                    tracer?.trace('upsertCallDisposition:invalidJwtToken', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('Invalid JWT token') : 'Invalid JWT token');
+                    return;
+                }
+                const { id: userId, platform } = decodedToken;
                 platformName = platform;
                 if (!userId) {
                     tracer?.trace('upsertCallDisposition:invalidToken', {});
                     res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
                     return;
                 }
-                const { successful, returnMessage, extraDataTracking } = await dispositionCore.upsertCallDisposition({
+                const { successful, returnMessage, extraDataTracking, isRevokeUserSession } = await dispositionCore.upsertCallDisposition({
                     platform,
                     userId,
                     sessionId: req.body.sessionId,
+                    extensionNumber: req.body.extensionNumber,
                     dispositions: req.body.dispositions,
                     additionalSubmission: req.body.additionalSubmission
                 });
-                if (extraDataTracking) {
-                    extraData = extraDataTracking;
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
                 }
-                res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
-                success = true;
+                else {
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = true;
+                }
             }
             else {
                 tracer?.trace('upsertCallDisposition:noToken', {});
@@ -1313,7 +2205,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Upsert call disposition failed', { platform: platformName, stack: e.stack });
             extraData.statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('upsertCallDisposition:error', e, { platform: platformName });
@@ -1321,8 +2213,8 @@ function createCoreRouter() {
         }
         const requestEndTime = new Date().getTime();
         analytics.track({
-            eventName: 'Create call log',
-            interfaceName: 'createCallLog',
+            eventName: 'Disposition call log',
+            interfaceName: 'dispositionCallLog',
             connectorName: platformName,
             accountId: hashedAccountId,
             extensionId: hashedExtensionId,
@@ -1347,7 +2239,7 @@ function createCoreRouter() {
         let extraData = {};
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
                 const decodedToken = jwt.decodeJwt(jwtToken);
                 if (!decodedToken) {
@@ -1357,12 +2249,18 @@ function createCoreRouter() {
                 }
                 const { id: userId, platform } = decodedToken;
                 platformName = platform;
-                const { successful, returnMessage, logIds, extraDataTracking } = await logCore.createMessageLog({ platform, userId, incomingData: req.body });
-                if (extraDataTracking) {
-                    extraData = extraDataTracking;
+                const { successful, returnMessage, logIds, extraDataTracking, isRevokeUserSession } = await logCore.createMessageLog({ platform, userId, incomingData: req.body });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
                 }
-                res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage, logIds }) : { successful, returnMessage, logIds });
-                success = true;
+                else {
+                    if (extraDataTracking) {
+                        extraData = extraDataTracking;
+                    }
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage, logIds }) : { successful, returnMessage, logIds });
+                    success = true;
+                }
             }
             else {
                 tracer?.trace('createMessageLog:noToken', {});
@@ -1371,7 +2269,7 @@ function createCoreRouter() {
             }
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Create message log failed', { platform: platformName, stack: e.stack });
             statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('createMessageLog:error', e, { platform: platformName });
@@ -1405,17 +2303,22 @@ function createCoreRouter() {
         let statusCode = 200;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (!jwtToken) {
                 tracer?.trace('scheduleCallDown:noToken', {});
                 res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
                 return;
             }
-            const { id } = await calldown.schedule({ jwtToken, rcAccessToken: req.query.rcAccessToken, body: req.body });
-            success = true;
-            res.status(200).send(tracer ? tracer.wrapResponse({ successful: true, id }) : { successful: true, id });
+            try {
+                const { id } = await calldown.schedule({ jwtToken, rcAccessToken: req.query.rcAccessToken, body: req.body });
+                success = true;
+                res.status(200).send(tracer ? tracer.wrapResponse({ successful: true, id }) : { successful: true, id });
+            }
+            catch (e) {
+                return handleDatabaseError(e, 'Error scheduling call down');
+            }
         } catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Schedule call down failed', { platform: platformName, stack: e.stack });
             statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('scheduleCallDown:error', e, { platform: platformName });
@@ -1448,7 +2351,7 @@ function createCoreRouter() {
         let statusCode = 200;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (!jwtToken) {
                 tracer?.trace('getCallDownList:noToken', {});
                 res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
@@ -1458,7 +2361,7 @@ function createCoreRouter() {
             success = true;
             res.status(200).send(tracer ? tracer.wrapResponse({ successful: true, items }) : { successful: true, items });
         } catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Get call down list failed', { platform: platformName, stack: e.stack });
             statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('getCallDownList:error', e, { platform: platformName });
@@ -1489,7 +2392,7 @@ function createCoreRouter() {
         let statusCode = 200;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             const id = req.query.id;
             if (!jwtToken) {
                 tracer?.trace('deleteCallDownItem:noToken', {});
@@ -1506,7 +2409,7 @@ function createCoreRouter() {
             success = true;
             res.status(200).send(tracer ? tracer.wrapResponse({ successful: true }) : { successful: true });
         } catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Delete call down item failed', { platform: platformName, stack: e.stack });
             statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('deleteCallDownItem:error', e, { platform: platformName });
@@ -1537,7 +2440,7 @@ function createCoreRouter() {
         let statusCode = 200;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (!jwtToken) {
                 tracer?.trace('markCallDownCalled:noToken', {});
                 res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
@@ -1553,7 +2456,7 @@ function createCoreRouter() {
             success = true;
             res.status(200).send(tracer ? tracer.wrapResponse({ successful: true }) : { successful: true });
         } catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Mark call down called failed', { platform: platformName, stack: e.stack });
             statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('markCallDownCalled:error', e, { platform: platformName });
@@ -1581,17 +2484,29 @@ function createCoreRouter() {
         tracer?.trace('contactSearchByName:start', { query: req.query });
         let platformName = null;
         let success = false;
-        let resultCount = 0;
         let statusCode = 200;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
         try {
-            const jwtToken = req.query.jwtToken;
+            const jwtToken = req.jwtToken || req.query.jwtToken;
             if (jwtToken) {
-                const { id: userId, platform } = jwt.decodeJwt(jwtToken);
+                const decodedToken = jwt.decodeJwt(jwtToken);
+                if (!decodedToken) {
+                    tracer?.trace('findContactWithName:invalidJwtToken', {});
+                    res.status(400).send(tracer ? tracer.wrapResponse('Invalid JWT token') : 'Invalid JWT token');
+                    success = false;
+                    return;
+                }
+                const { id: userId, platform } = decodedToken;
                 platformName = platform;
-                const { successful, returnMessage, contact } = await contactCore.findContactWithName({ platform, userId, name: req.query.name });
-                res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage, contact }) : { successful, returnMessage, contact });
-                success = successful;
+                const { successful, returnMessage, contact, isRevokeUserSession } = await contactCore.findContactWithName({ platform, userId, name: req.query.name });
+                if (isRevokeUserSession) {
+                    res.status(401).send(tracer ? tracer.wrapResponse({ successful, returnMessage }) : { successful, returnMessage });
+                    success = false;
+                }
+                else {
+                    res.status(200).send(tracer ? tracer.wrapResponse({ successful, returnMessage, contact }) : { successful, returnMessage, contact });
+                    success = successful;
+                }
             }
             else {
                 tracer?.trace('contactSearchByName:noToken', {});
@@ -1601,7 +2516,7 @@ function createCoreRouter() {
 
         }
         catch (e) {
-            console.log(`platform: ${platformName} \n${e.stack}`);
+            logger.error('Contact search by name failed', { platform: platformName, stack: e.stack });
             statusCode = e.response?.status ?? 'unknown';
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('contactSearchByName:error', e, { platform: platformName });
@@ -1631,7 +2546,7 @@ function createCoreRouter() {
         let platformName = null;
         let success = false;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
-        const jwtToken = req.query.jwtToken;
+        const jwtToken = req.jwtToken || req.query.jwtToken;
         try {
             if (jwtToken) {
                 const unAuthData = jwt.decodeJwt(jwtToken);
@@ -1651,7 +2566,7 @@ function createCoreRouter() {
             success = false;
         }
         catch (e) {
-            console.log(`${e.stack}`);
+            logger.error('Get admin report failed', { stack: e.stack });
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('getAdminReport:error', e, { platform: platformName });
         }
@@ -1677,7 +2592,7 @@ function createCoreRouter() {
         let platformName = null;
         let success = false;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
-        const jwtToken = req.query.jwtToken;
+        const jwtToken = req.jwtToken || req.query.jwtToken;
         try {
             if (jwtToken) {
                 const unAuthData = jwt.decodeJwt(jwtToken);
@@ -1696,7 +2611,7 @@ function createCoreRouter() {
             success = false;
         }
         catch (e) {
-            console.log(`${e.stack}`);
+            logger.error('Get user report failed', { stack: e.stack });
             res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
             tracer?.traceError('getUserReport:error', e, { platform: platformName });
         }
@@ -1718,7 +2633,7 @@ function createCoreRouter() {
     router.get('/ringcentral/oauth/callback', async function (req, res) {
         const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
         tracer?.trace('onRingcentralOAuthCallback:start', { query: req.query });
-        const jwtToken = req.query.jwtToken;
+        const jwtToken = req.jwtToken || req.query.jwtToken;
         if (jwtToken) {
             const unAuthData = jwt.decodeJwt(jwtToken);
             const { code } = req.query;
@@ -1742,7 +2657,7 @@ function createCoreRouter() {
         let platformName = null;
         let success = false;
         const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
-        const jwtToken = req.query.jwtToken;
+        const jwtToken = req.jwtToken || req.query.jwtToken;
         if (jwtToken) {
             const unAuthData = jwt.decodeJwt(jwtToken);
             const uploadUrl = await s3ErrorLogReport.getUploadUrl({ userId: unAuthData?.id, platform: unAuthData?.platform });
@@ -1770,6 +2685,200 @@ function createCoreRouter() {
         });
     });
 
+    router.post('/pluginAsyncTask', async function (req, res) {
+        const requestStartTime = new Date().getTime();
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('pluginAsyncTask:start', { query: req.query });
+        let platformName = null;
+        let success = false;
+        const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+        const jwtToken = req.jwtToken || req.query.jwtToken;
+        try {
+            if (!jwtToken) {
+                tracer?.trace('pluginAsyncTask:noToken', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                return;
+            }
+            const unAuthData = jwt.decodeJwt(jwtToken);
+            const user = await UserModel.findByPk(unAuthData?.id);
+            if (!user) {
+                tracer?.trace('pluginAsyncTask:userNotFound', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('User not found') : 'User not found');
+                return;
+            }
+            const { asyncTaskIds } = req.body;
+            const filteredTasksIds = asyncTaskIds.filter(taskId => taskId.startsWith(user.id));
+            const tasks = await pluginCore.getPluginAsyncTasks({ asyncTaskIds: filteredTasksIds });
+            res.status(200).send(tracer ? tracer.wrapResponse({ tasks }) : { tasks });
+            success = true;
+        }
+        catch (e) {
+            console.log(`platform: ${platformName} \n${e.stack}`);
+            res.status(400).send(tracer ? tracer.wrapResponse({ error: e.message || e }) : { error: e.message || e });
+            tracer?.traceError('pluginAsyncTask:error', e, { platform: platformName });
+            success = false;
+        }
+        const requestEndTime = new Date().getTime();
+        analytics.track({
+            eventName: 'Plugin Async Task',
+            interfaceName: 'pluginAsyncTask',
+            connectorName: platformName,
+            accountId: hashedAccountId,
+            extensionId: hashedExtensionId,
+            success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            eventAddedVia
+        });
+    });
+
+    router.post('/plugin/register', async function (req, res) {
+        const requestStartTime = new Date().getTime();
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('pluginRegister:start', { body: req.body });
+        let success = false;
+        const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+        try {
+            const { pluginId, rcAccountId, pluginAccess, pluginName } = req.body || {};
+            const rcAccessToken = req.query?.rcAccessToken;
+            if (!pluginId || !rcAccountId) {
+                res.status(400).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: 'pluginId and rcAccountId are required' }) : { successful: false, returnMessage: 'pluginId and rcAccountId are required' });
+                return;
+            }
+            if (!rcAccessToken) {
+                res.status(400).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: 'Missing RingCentral access token' }) : { successful: false, returnMessage: 'Missing RingCentral access token' });
+                return;
+            }
+            const { isValidated, rcAccountId: validatedRcAccountId } = await adminCore.validateAdminRole({ rcAccessToken });
+            if (!isValidated) {
+                res.status(403).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: 'Admin validation failed' }) : { successful: false, returnMessage: 'Admin validation failed' });
+                return;
+            }
+            if (validatedRcAccountId?.toString() !== rcAccountId?.toString()) {
+                res.status(403).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: 'rcAccountId mismatch' }) : { successful: false, returnMessage: 'rcAccountId mismatch' });
+                return;
+            }
+
+            await pluginCore.registerPluginAccount({
+                pluginId,
+                rcAccessToken,
+                rcAccountId: rcAccountId?.toString(),
+                pluginAccess,
+                pluginName,
+            });
+            res.status(200).send(tracer ? tracer.wrapResponse({ successful: true }) : { successful: true });
+            success = true;
+        } catch (e) {
+            logger.error('Plugin register failed', { stack: e.stack });
+            res.status(400).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: e.message || e }) : { successful: false, returnMessage: e.message || e });
+            tracer?.traceError('pluginRegister:error', e);
+            success = false;
+        }
+
+        const requestEndTime = new Date().getTime();
+        analytics.track({
+            eventName: 'Plugin Register',
+            interfaceName: 'pluginRegister',
+            accountId: hashedAccountId,
+            extensionId: hashedExtensionId,
+            success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            eventAddedVia
+        });
+    });
+
+    router.delete('/plugin/unregister', async function (req, res) {
+        const requestStartTime = new Date().getTime();
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('pluginUnregister:start', { query: req.query });
+        let success = false;
+        const { hashedExtensionId, hashedAccountId, userAgent, ip, author, eventAddedVia } = getAnalyticsVariablesInReqHeaders({ headers: req.headers })
+        try {
+            const { pluginId, rcAccountId, pluginName } = req.query || {};
+            const rcAccessToken = req.query?.rcAccessToken;
+            if (!pluginId || !rcAccountId) {
+                res.status(400).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: 'pluginId and rcAccountId are required' }) : { successful: false, returnMessage: 'pluginId and rcAccountId are required' });
+                return;
+            }
+            if (!rcAccessToken) {
+                res.status(400).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: 'Missing RingCentral access token' }) : { successful: false, returnMessage: 'Missing RingCentral access token' });
+                return;
+            }
+            const { isValidated, rcAccountId: validatedRcAccountId } = await adminCore.validateAdminRole({ rcAccessToken });
+            if (!isValidated) {
+                res.status(403).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: 'Admin validation failed' }) : { successful: false, returnMessage: 'Admin validation failed' });
+                return;
+            }
+            if (validatedRcAccountId?.toString() !== rcAccountId?.toString()) {
+                res.status(403).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: 'rcAccountId mismatch' }) : { successful: false, returnMessage: 'rcAccountId mismatch' });
+                return;
+            }
+
+            await pluginCore.unregisterPluginAccount({
+                pluginId,
+                rcAccountId: rcAccountId?.toString(),
+                pluginName,
+            });
+            res.status(200).send(tracer ? tracer.wrapResponse({ successful: true }) : { successful: true });
+            success = true;
+        } catch (e) {
+            logger.error('Plugin unregister failed', { stack: e.stack });
+            res.status(400).send(tracer ? tracer.wrapResponse({ successful: false, returnMessage: e.message || e }) : { successful: false, returnMessage: e.message || e });
+            tracer?.traceError('pluginUnregister:error', e);
+            success = false;
+        }
+        const requestEndTime = new Date().getTime();
+        analytics.track({
+            eventName: 'Plugin Unregister',
+            interfaceName: 'pluginUnregister',
+            accountId: hashedAccountId,
+            extensionId: hashedExtensionId,
+            success,
+            requestDuration: (requestEndTime - requestStartTime) / 1000,
+            userAgent,
+            ip,
+            author,
+            eventAddedVia
+        });
+    });
+
+    router.get('/plugin/licenseStatus', async function (req, res) {
+        const tracer = req.headers['is-debug'] === 'true' ? DebugTracer.fromRequest(req) : null;
+        tracer?.trace('getPluginLicenseStatus:start', { query: req.query });
+        try {
+            const jwtToken = req.jwtToken || req.query.jwtToken;
+            if (!jwtToken) {
+                tracer?.trace('getPluginLicenseStatus:noToken', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('Please go to Settings and authorize CRM platform') : 'Please go to Settings and authorize CRM platform');
+                return;
+            }
+            const unAuthData = jwt.decodeJwt(jwtToken);
+            const user = await UserModel.findByPk(unAuthData?.id);
+            if (!user) {
+                tracer?.trace('getPluginLicenseStatus:userNotFound', {});
+                res.status(400).send(tracer ? tracer.wrapResponse('User not found') : 'User not found');
+                return;
+            }
+            const { rcAccountId, pluginId } = req.query;
+            if (!rcAccountId || !pluginId) {
+                res.status(400).send(tracer ? tracer.wrapResponse('rcAccountId and pluginId are required') : 'rcAccountId and pluginId are required');
+                return;
+            }
+            const licenseStatus = await pluginCore.getPluginLicenseStatus({ rcAccountId, pluginId });
+            res.status(200).send(tracer ? tracer.wrapResponse(licenseStatus) : licenseStatus);
+        }
+        catch (e) {
+            logger.error('Get plugin license status failed', { stack: e.stack });
+            res.status(200).send(tracer ? tracer.wrapResponse({ licenseStatus: false, licenseStatusDescription: e.message || e }) : { licenseStatus: false, licenseStatusDescription: e.message || e });
+            tracer?.traceError('getPluginLicenseStatus:error', e);
+        }
+    });
+
     if (process.env.IS_PROD === 'false') {
         router.post('/registerMockUser', async function (req, res) {
             const secretKey = req.query.secretKey;
@@ -1778,7 +2887,7 @@ function createCoreRouter() {
                 res.status(200).send(mockUser ? 'Mock user registered' : 'Mock user already existed');
             }
             else {
-                res.status(401).send('Unauthorized');
+                res.status(403).send('Unauthorized');
             }
         });
         router.delete('/deleteMockUser', async function (req, res) {
@@ -1788,27 +2897,27 @@ function createCoreRouter() {
                 res.status(200).send(foundAndDeleted ? 'Mock user deleted' : 'Mock user not found');
             }
             else {
-                res.status(401).send('Unauthorized');
+                res.status(403).send('Unauthorized');
             }
         });
         router.get('/mockCallLog', async function (req, res) {
             const secretKey = req.query.secretKey;
             if (secretKey === process.env.APP_SERVER_SECRET_KEY) {
-                const callLogs = await mock.getCallLog({ sessionIds: req.query.sessionIds });
+                const callLogs = await mock.getCallLog({ sessionIds: req.query.sessionIds, extensionNumber: req.query.extensionNumber });
                 res.status(200).send(callLogs);
             }
             else {
-                res.status(401).send('Unauthorized');
+                res.status(403).send('Unauthorized');
             }
         });
         router.post('/mockCallLog', async function (req, res) {
             const secretKey = req.query.secretKey;
             if (secretKey === process.env.APP_SERVER_SECRET_KEY) {
-                await mock.createCallLog({ sessionId: req.body.sessionId });
+                await mock.createCallLog({ sessionId: req.body.sessionId, extensionNumber: req.body.extensionNumber });
                 res.status(200).send('Mock call log created');
             }
             else {
-                res.status(401).send('Unauthorized');
+                res.status(403).send('Unauthorized');
             }
         });
         router.delete('/mockCallLog', async function (req, res) {
@@ -1818,10 +2927,144 @@ function createCoreRouter() {
                 res.status(200).send('Mock call logs cleaned up');
             }
             else {
-                res.status(401).send('Unauthorized');
+                res.status(403).send('Unauthorized');
             }
         });
     }
+    // For chatGPT verification
+    router.get('/.well-known/openai-apps-challenge', (req, res) => {
+        res.send(process.env.CHATGPT_VERIFICATION_CODE);
+    });
+
+    // --- METADATA ENDPOINT 1: Resource Metadata ---
+    // Tells the client "I am protected" and "Here is who protects me"
+    router.get('/.well-known/oauth-protected-resource', (req, res) => {
+        res.json({
+            resource: process.env.APP_SERVER,
+            // CHANGE THIS: Point to your own server so the client fetches YOUR metadata next
+            authorization_servers: [process.env.APP_SERVER],
+            scopes_supported: ["ReadAccounts"]
+        });
+    });
+
+    // --- METADATA ENDPOINT 2: Auth Server Metadata ---
+    // Usually, you can redirect to your provider's configuration.
+    // If your provider supports OIDC discovery, this is often sufficient.
+    router.get('/.well-known/oauth-authorization-server', (req, res) => {
+        res.json({
+            issuer: process.env.APP_SERVER,
+            registration_endpoint: `${process.env.APP_SERVER}/oauth/register`,
+
+            // CHANGE THIS: Don't point to RingCentral. Point to your own Shim.
+            authorization_endpoint: `${process.env.APP_SERVER}/oauth/authorize_shim`,
+
+            // Keep the token endpoint pointing to RingCentral (that usually works fine)
+            token_endpoint: `${process.env.RINGCENTRAL_SERVER}/restapi/oauth/token`,
+            token_endpoint_auth_methods_supported: ["client_secret_basic"],
+            response_types_supported: ["code"]
+        });
+    });
+
+    router.get('/oauth/authorize_shim', (req, res) => {
+        // 1. Get the parameters ChatGPT sent us
+        const { response_type, client_id, redirect_uri, state, scope } = req.query;
+
+        // 2. Rebuild the query string for RingCentral
+        // We explicitly LEAVE OUT 'resource' and any other junk
+        const params = new URLSearchParams({
+            response_type,
+            client_id, // This will be your RC Client ID (since ChatGPT got it from /register)
+            redirect_uri,
+            state,
+            scope
+        });
+
+        // 3. Redirect the user's browser to the REAL RingCentral URL
+        const rcUrl = `${process.env.RINGCENTRAL_SERVER}/restapi/oauth/authorize?${params.toString()}`;
+
+        console.log("Proxying OAuth request to:", rcUrl); // Helpful for debugging
+        res.redirect(rcUrl);
+    });
+
+    router.post('/oauth/register', (req, res) => {
+        // The MCP client calls this to get credentials.
+        // We simply return our hardcoded RingCentral app credentials.
+        res.json({
+            client_id: process.env.RINGCENTRAL_CLIENT_ID,
+            client_secret: process.env.RINGCENTRAL_CLIENT_SECRET
+        });
+    });
+
+    router.use('/mcp', (req, res, next) => {
+        // Widget tool calls are unauthenticated — they come from the iframe
+        // which has no access to the RC bearer token.
+        if (req.path === '/widget-tool-call') {
+            return next();
+        }
+
+        const authHeader = req.headers.authorization;
+        const token = authHeader?.split(' ')[1]; // Remove "Bearer "
+        // Allow GET and OPTIONS (CORS preflight) to pass freely.
+        if (req.method === 'GET' || req.method === 'OPTIONS') {
+            return next();
+        }
+        // Allow MCP discovery/handshake methods — these carry no user data and must be
+        // reachable without auth so the ChatGPT developer portal can scan tools.
+        const mcpMethod = req.body?.method;
+        const UNAUTHENTICATED_MCP_METHODS = new Set([
+            'initialize',
+            'tools/list',
+            'ping',
+            'notifications/initialized',
+            'notifications/cancelled',
+        ]);
+        if (mcpMethod && UNAUTHENTICATED_MCP_METHODS.has(mcpMethod)) {
+            return next();
+        }
+        // SCENARIO 1: No Token provided. Kick off the OAuth flow.
+        if (!token) {
+            res.setHeader('WWW-Authenticate', `Bearer realm="mcp", resource_metadata="${process.env.APP_SERVER}/.well-known/oauth-protected-resource"`);
+            return res.status(401).send();
+        }
+
+        // SCENARIO 2: Token provided. Verify it.
+        try {
+            next();
+        } catch {
+            res.setHeader('WWW-Authenticate', `Bearer realm="mcp", resource_metadata="${process.env.APP_SERVER}/.well-known/oauth-protected-resource"`);
+            return res.status(401).send();
+        }
+    });
+    // Handle OPTIONS for CORS preflight
+    router.options('/mcp', (req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.status(200).end();
+    });
+
+    // Dedicated endpoint for all MCP traffic
+    router.post('/mcp', async (req, res) => {
+        // Set CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Content-Type', 'application/json');
+
+        await mcpHandler.handleMcpRequest(req, res);
+    });
+
+    // Lightweight endpoint for widget tool calls (bypasses MCP protocol)
+    router.options('/mcp/widget-tool-call', (req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        res.status(200).end();
+    });
+    router.post('/mcp/widget-tool-call', async (req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Content-Type', 'application/json');
+        await mcpHandler.handleWidgetToolCall(req, res);
+    });
 
     return router;
 }
@@ -1840,7 +3083,8 @@ function createCoreMiddleware() {
             }
         }),
         cors({
-            methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE']
+            methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+            exposedHeaders: ['x-refreshed-jwt-token']
         })
     ];
 }
@@ -1863,8 +3107,31 @@ async function initializeCore(options = {}) {
 
 // Create a complete app with core functionality
 function createCoreApp(options = {}) {
-    initializeCore(options);
+    const coreInit = initializeCore(options).catch((err) => {
+        logger.error('initializeCore failed (database init or analytics)', {
+            message: err?.message,
+            stack: err?.stack,
+        });
+        throw err;
+    });
     const app = express();
+
+    // Block routing until DB sync/migrations finish so traffic never hits a half-ready DB,
+    // and ensure init failures are logged instead of only as unhandled rejections.
+    app.use(async (req, res, next) => {
+        try {
+            await coreInit;
+            next();
+        } catch (e) {
+            logger.error('Request rejected: core initialization failed', {
+                message: e?.message,
+                stack: e?.stack,
+            });
+            res.status(503)
+                .set('Retry-After', '5')
+                .json({ error: 'Service unavailable', detail: e?.message });
+        }
+    });
 
     // Allow bigger POST body size
     app.use(express.json({ limit: '50mb' }));

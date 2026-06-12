@@ -58,6 +58,9 @@ We recommend using the "RingCentral App Connect" role created for you when you i
 | Lists        | Subsidiaries                         | View  (OneWorld users only) |
 | Lists        | Notes Tab                            | Full                        |
 | Lists        | Documents and Files                  | Full                        |
+| Lists        | Employees                            | View                        |
+| Lists        | Employee Record                      | View                        |
+| Lists        | Events                               | Full  (required for Appointments feature) |
 | Reports      | SuiteAnalytics Workbook              | Edit                        |
 | Setup        | Log in using OAuth 2.0 Access Tokens | Full                        |
 | Setup        | REST Web Services                    | Full                        |
@@ -65,6 +68,9 @@ We recommend using the "RingCentral App Connect" role created for you when you i
 | Transactions | Sales Order                          | Full                        |
 | Transactions | Opportunity                          | Full                        |
 | Transactions | Find Transaction                     | View                        |
+
+!!! note "Employees and Employee Record permissions"
+    The Employees and Employee Record permissions are used for the [user mapping feature](../users/server-side-logging.md#activity-record-owner) used by server side call logging. If you have concerns about granting this permission, feel free to remove it and grant it only to the user who sets up server side call logging, typically an admin.
 
 ## Install the Chrome/Edge extension
 
@@ -123,6 +129,81 @@ If you are experiencing a timeout issue during contact search, you can follow th
 * Disable  "Sales Order logging" to prevents calls from being logged against sales orders.
 
 ![NetSuite contact matching optimization](../img/netsuite-optimization.png){ .mw-200 }
+
+## Entity Search and Creation
+
+NetSuite's entity management system in App Connect provides flexible contact handling with support for multiple entity types during both search and creation operations.
+
+### Supported Entity Types
+
+App Connect for NetSuite supports working with the following entity types:
+
+#### **During Entity Search**
+When searching for existing records, App Connect searches across these entity types:
+
+- **Contact** - Individual person records associated with companies
+- **Customer** - Business entities that purchase products or services
+- **Vendor** - Business entities that provide products or services
+
+!!! info "Customer Search Behavior"
+    When searching within the "Customer" entity type, App Connect will find records regardless of their customer status (Lead, Prospect, or Customer). The search does not differentiate between these customer subtypes.
+
+#### **During Contact Creation**
+When creating new contact records, App Connect supports creating these entity types:
+
+- **Contact** - Individual person records
+- **Customer** - Customer entity records  
+- **Vendor** - Vendor entity records
+- **Lead** - Prospective customer records (customer subtype)
+- **Prospect** - Potential customer records (customer subtype)
+
+### Entity Search Configuration
+
+You can optimize entity search performance and results by configuring the search settings in App Connect:
+
+1. **Navigate to Settings** → **NetSuite Options**
+2. **Under "Entities to search"** - Select which entity types to include in search results:
+   - ✅ **Contacts** - Include individual person records
+   - ✅ **Customers** - Include customer entity records (includes Leads and Prospects)
+   - ✅ **Vendors** - Include vendor entity records
+
+### Search vs Creation Differences
+
+| **Operation** | **Available Entity Types** | **Behavior** |
+|---------------|---------------------------|--------------|
+| **Search** | Contact, Customer, Vendor | Customer search includes all customer subtypes (Lead, Prospect, Customer) |
+| **Creation** | Contact, Customer, Vendor, Lead, Prospect | Each type creates a distinct entity record with appropriate classification |
+
+### Best Practices for Entity Management
+
+#### **Search Optimization**
+- **Limit Entity Types**: Only enable entity types you actively use to improve search performance
+- **Review Results**: Customer search results may include Leads and Prospects - review carefully before selecting
+- **Use Filters**: Leverage the phone field search options to narrow results effectively
+
+#### **Creation Guidelines**
+- **Choose Appropriate Type**: Select the most specific entity type when creating records:
+  - Use **Contact** for individuals associated with companies
+  - Use **Lead** for early-stage prospects requiring nurturing
+  - Use **Prospect** for qualified potential customers
+  - Use **Customer** for active purchasing entities
+  - Use **Vendor** for service/product providers
+
+#### **Entity Type Selection Tips**
+
+| **Entity Type** | **Best Used For** | **NetSuite Classification** |
+|-----------------|-------------------|----------------------------|
+| **Contact** | Individual people at companies | Person record |
+| **Lead** | Early-stage prospects | Customer subtype |
+| **Prospect** | Qualified potential customers | Customer subtype |
+| **Customer** | Active purchasing entities | Customer entity |
+| **Vendor** | Service/product providers | Vendor entity |
+
+!!! tip "Performance Tip"
+    To improve search performance, disable entity types you don't actively use in your NetSuite environment. This reduces the scope of each search operation and speeds up contact matching.
+
+!!! warning "Search Scope Consideration"
+    Remember that Customer entity searches will return Leads and Prospects as well. If you need to distinguish between these subtypes, consider the entity creation type when reviewing search results.
 
 ## Concurrency limits
 
