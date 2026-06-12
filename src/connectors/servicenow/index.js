@@ -10,7 +10,7 @@ const { initModels } = require('../servicenow-models/init-models');
 const Sequelize = require('sequelize');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { raw } = require('mysql2');
-const models = initModels(sequelize);
+const models = sequelize ? initModels(sequelize) : null;
 const { secondsToHoursMinutesSeconds } = require('@app-connect/core/lib/util');
 const fs = require("fs");
 const path = require("path");
@@ -46,6 +46,9 @@ serviceNowApiClient.interceptors.response.use(
 
 async function getLicenseStatus({ userId }) {
     try {
+        if (!models) {
+            return { isLicenseValid: false, licenseStatus: 'DB not configured', licenseStatusDescription: '' };
+        }
         const user = await UserModel.findByPk(userId);
         if (!user) {
             return {
