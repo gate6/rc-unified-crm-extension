@@ -9,7 +9,7 @@ const { AccountDataModel } = require('@app-connect/core/models/accountDataModel'
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
-const models = initModels(sequelize);
+const models = sequelize ? initModels(sequelize) : null;
 
 const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
 
@@ -41,6 +41,9 @@ agencyZoomApiClient.interceptors.response.use(
 
 async function getLicenseStatus({ userId }) {
   try {
+    if (!models) {
+      return { isLicenseValid: false, licenseStatus: 'DB not configured', licenseStatusDescription: '' };
+    }
     const user = await UserModel.findByPk(userId);
     if (!user) {
       return {

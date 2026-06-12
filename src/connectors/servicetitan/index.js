@@ -11,7 +11,7 @@ const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel'
 const qs = require('qs');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
-const models = initModels(sequelize);
+const models = sequelize ? initModels(sequelize) : null;
 
 const SERVICE_TITAN_JPM_URL= "https://api-integration.servicetitan.io/jpm/v2/tenant"
 const SERVICE_TITAN_CRM_URL= "https://api-integration.servicetitan.io/crm/v2/tenant"
@@ -44,6 +44,9 @@ serviceTitanApiClient.interceptors.response.use(
 
 async function getLicenseStatus({ userId }) {
   try {
+    if (!models) {
+      return { isLicenseValid: false, licenseStatus: 'DB not configured', licenseStatusDescription: '' };
+    }
     const user = await UserModel.findByPk(userId);
     if (!user) {
       return {

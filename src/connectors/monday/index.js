@@ -5,7 +5,7 @@ const { initModels } = require('../servicenow-models/init-models');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
-const models = initModels(sequelize);
+const models = sequelize ? initModels(sequelize) : null;
 const FormData = require('form-data')
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
@@ -382,6 +382,7 @@ async function unAuthorize() {
 }
 
 async function getCompanyByHostname({ hostname, rcAccountId }) {
+  if (!models) return null;
   const where = { hostname };
   if (rcAccountId) where.rcAccountId = rcAccountId;
 
