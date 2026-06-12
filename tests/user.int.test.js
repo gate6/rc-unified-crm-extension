@@ -1,6 +1,4 @@
 const axios = require('axios');
-const dotenv = require('dotenv');
-dotenv.config();
 const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
 const { getHashValue } = require('@app-connect/core/lib/util');
 const { getUserSettingsByAdmin, updateUserSettings } = require('@app-connect/core/handlers/user');
@@ -26,7 +24,7 @@ describe('user.js tests', () => {
             };
             const hashedRcAccountId = 'testHashedRcAccountId';
             const adminConfig = {
-                customConnector: 'http://example.com/connector',
+                customAdapter: 'http://example.com/adapter',
                 userSettings: { theme: 'dark' }
             };
 
@@ -37,6 +35,7 @@ describe('user.js tests', () => {
             const result = await getUserSettingsByAdmin({ rcAccessToken });
 
             expect(result).toEqual({
+                customManifestUrl: 'http://example.com/adapter',
                 userSettings: { theme: 'dark' }
             });
             expect(axios.get).toHaveBeenCalledWith(

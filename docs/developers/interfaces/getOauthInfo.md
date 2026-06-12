@@ -33,12 +33,12 @@ This method should return an associative array with the following keys and value
 === "Example CRM"
 
     ```js
-    {!> packages/template/src/connectors/interfaces/getOauthInfo.js !}
+    {!> src/adapters/testCRM/index.js [ln:19-54] !}
 	```
 	
 === "Pipedrive"
 
 	```js
-    {!> src/connectors/pipedrive/index.js [ln:19-26] !}
+    {!> src/adapters/pipedrive/index.js [ln:12-19] !}
 	```
 

@@ -5,7 +5,7 @@ Core package for RingCentral App Connect project providing modular APIs for CRM 
 ## Features
 
 - **Modular API Design**: Flexible Express app setup with customizable middleware and routes
-- **CRM Connector Registry**: Centralized connector management for multiple CRM platforms
+- **CRM Adapter Registry**: Centralized adapter management for multiple CRM platforms
 - **Authentication**: OAuth and API key authentication support
 - **Contact Management**: Find, create, and manage contacts across CRM platforms
 - **Call Logging**: Comprehensive call and message logging capabilities
@@ -23,15 +23,15 @@ npm install @app-connect/core
 ### Basic Usage
 
 ```javascript
-const { createCoreApp, connectorRegistry } = require('@app-connect/core');
-const myCRMConnector = require('./connectors/myCRM');
-const manifest = require('./connectors/manifest.json');
-// Set the default manifest for the connector registry. This ensures that all connectors
+const { createCoreApp, adapterRegistry } = require('@app-connect/core');
+const myCRMAdapter = require('./adapters/myCRM');
+const manifest = require('./adapters/manifest.json');
+// Set the default manifest for the adapter registry. This ensures that all adapters
 // have access to the necessary configuration and metadata before registration.
-connectorRegistry.setDefaultManifest(manifest);
-// Register your CRM connectors. The default manifest must be set before registration
-// to ensure proper initialization of the connector with the required settings.
-connectorRegistry.registerConnector('myCRM', myCRMConnector, manifest);
+adapterRegistry.setDefaultManifest(manifest);
+// Register your CRM adapters. The default manifest must be set before registration
+// to ensure proper initialization of the adapter with the required settings.
+adapterRegistry.registerAdapter('myCRM', myCRMAdapter, manifest);
 
 // Create Express app with all core functionality
 const app = createCoreApp();
@@ -44,12 +44,12 @@ app.get('/my-custom-route', (req, res) => {
 exports.getServer = () => app;
 ```
 
-### Connector Interface Registration
+### Adapter Interface Registration
 
-The connector registry supports dynamic interface registration, allowing you to extend connector functionality without modifying the original connector:
+The adapter registry supports dynamic interface registration, allowing you to extend adapter functionality without modifying the original adapter:
 
 ```javascript
-const { connectorRegistry } = require('@app-connect/core');
+const { adapterRegistry } = require('@app-connect/core');
 
 // Register interface functions for a platform
 async function customCreateCallLog({ user, contactInfo, authHeader, callLog, note }) {
@@ -78,32 +78,32 @@ async function customFindContact({ user, authHeader, phoneNumber }) {
 }
 
 // Register interface functions
-connectorRegistry.registerConnectorInterface('myCRM', 'createCallLog', customCreateCallLog);
-connectorRegistry.registerConnectorInterface('myCRM', 'findContact', customFindContact);
+adapterRegistry.registerAdapterInterface('myCRM', 'createCallLog', customCreateCallLog);
+adapterRegistry.registerAdapterInterface('myCRM', 'findContact', customFindContact);
 
-// Register the base connector
-connectorRegistry.registerConnector('myCRM', myCRMConnector);
+// Register the base adapter
+adapterRegistry.registerAdapter('myCRM', myCRMAdapter);
 
-// Get composed connector with interfaces
-const composedConnector = connectorRegistry.getConnector('myCRM');
+// Get composed adapter with interfaces
+const composedAdapter = adapterRegistry.getAdapter('myCRM');
 ```
 
-**Interface-Only Connectors (No Base Connector):**
+**Interface-Only Adapters (No Base Adapter):**
 
 ```javascript
-// Register only interface functions, no base connector
-connectorRegistry.registerConnectorInterface('interfaceOnlyCRM', 'createCallLog', customCreateCallLog);
-connectorRegistry.registerConnectorInterface('interfaceOnlyCRM', 'findContact', customFindContact);
+// Register only interface functions, no base adapter
+adapterRegistry.registerAdapterInterface('interfaceOnlyCRM', 'createCallLog', customCreateCallLog);
+adapterRegistry.registerAdapterInterface('interfaceOnlyCRM', 'findContact', customFindContact);
 
-// Get interface-only connector
-const interfaceOnlyConnector = connectorRegistry.getConnector('interfaceOnlyCRM');
-console.log('Interface-only methods:', Object.keys(interfaceOnlyConnector));
+// Get interface-only adapter
+const interfaceOnlyAdapter = adapterRegistry.getAdapter('interfaceOnlyCRM');
+console.log('Interface-only methods:', Object.keys(interfaceOnlyAdapter));
 // Output: ['createCallLog', 'findContact']
 
-// Later, you can add a base connector
-connectorRegistry.registerConnector('interfaceOnlyCRM', myCRMConnector);
-const fullConnector = connectorRegistry.getConnector('interfaceOnlyCRM');
-console.log('Full connector methods:', Object.keys(fullConnector));
+// Later, you can add a base adapter
+adapterRegistry.registerAdapter('interfaceOnlyCRM', myCRMAdapter);
+const fullAdapter = adapterRegistry.getAdapter('interfaceOnlyCRM');
+console.log('Full adapter methods:', Object.keys(fullAdapter));
 // Output: ['getAuthType', 'getUserInfo', 'updateCallLog', 'unAuthorize', 'createContact', 'createCallLog', 'findContact']
 ```
 
@@ -115,15 +115,15 @@ const {
     createCoreRouter, 
     createCoreMiddleware, 
     initializeCore, 
-    connectorRegistry 
+    adapterRegistry 
 } = require('@app-connect/core');
 
-const myCRMConnector = require('./connectors/myCRM');
-const manifest = require('./connectors/manifest.json');
+const myCRMAdapter = require('./adapters/myCRM');
+const manifest = require('./adapters/manifest.json');
 // Set manifest
-connectorRegistry.setDefaultManifest(manifest);
-// Register connectors
-connectorRegistry.registerConnector('myCRM', myCRMConnector, manifest);
+adapterRegistry.setDefaultManifest(manifest);
+// Register adapters
+adapterRegistry.registerAdapter('myCRM', myCRMAdapter, manifest);
 
 // Initialize core services
 initializeCore();
@@ -181,24 +181,24 @@ Initializes core services (database, analytics).
   - `skipDatabaseInit` (Boolean): Skip database initialization (default: false)
   - `skipAnalyticsInit` (Boolean): Skip analytics initialization (default: false)
 
-### Connector Registry
+### Adapter Registry
 
-#### `connectorRegistry.setDefaultManifest(manifest)`
-Sets the default manifest for connectors.
+#### `adapterRegistry.setDefaultManifest(manifest)`
+Sets the default manifest for adapters.
 
 **Parameters:**
 - `manifest` (Object): Default manifest
 
-#### `connectorRegistry.registerConnector(name, connector, manifest)`
-Registers a CRM connector.
+#### `adapterRegistry.registerAdapter(name, adapter, manifest)`
+Registers a CRM adapter.
 
 **Parameters:**
-- `name` (String): Connector name
-- `connector` (Object): Connector implementation
-- `manifest` (Object, optional): Connector manifest
+- `name` (String): Adapter name
+- `adapter` (Object): Adapter implementation
+- `manifest` (Object, optional): Adapter manifest
 
-#### `connectorRegistry.registerConnectorInterface(platformName, interfaceName, interfaceFunction)`
-Registers an interface function for a specific platform that will be composed with the connector at retrieval time.
+#### `adapterRegistry.registerAdapterInterface(platformName, interfaceName, interfaceFunction)`
+Registers an interface function for a specific platform that will be composed with the adapter at retrieval time.
 
 **Parameters:**
 - `platformName` (String): Platform identifier (e.g., 'pipedrive', 'salesforce')
@@ -219,32 +219,32 @@ async function customCreateCallLog({ user, contactInfo, authHeader, callLog, not
   };
 }
 
-connectorRegistry.registerConnectorInterface('myCRM', 'createCallLog', customCreateCallLog);
+adapterRegistry.registerAdapterInterface('myCRM', 'createCallLog', customCreateCallLog);
 ```
 
-#### `connectorRegistry.getConnector(name)`
-Retrieves a registered connector with composed interfaces.
+#### `adapterRegistry.getAdapter(name)`
+Retrieves a registered adapter with composed interfaces.
 
 **Parameters:**
-- `name` (String): Connector name
+- `name` (String): Adapter name
 
-**Returns:** Composed connector object or interface-only object
+**Returns:** Composed adapter object or interface-only object
 
 **Behavior:**
-- If connector exists and interfaces exist: Returns composed connector with both
-- If connector exists but no interfaces: Returns original connector
-- If no connector but interfaces exist: Returns object with just interface functions
-- If no connector and no interfaces: Throws error
+- If adapter exists and interfaces exist: Returns composed adapter with both
+- If adapter exists but no interfaces: Returns original adapter
+- If no adapter but interfaces exist: Returns object with just interface functions
+- If no adapter and no interfaces: Throws error
 
-#### `connectorRegistry.getOriginalConnector(name)`
-Retrieves the original connector without any composed interface functions.
+#### `adapterRegistry.getOriginalAdapter(name)`
+Retrieves the original adapter without any composed interface functions.
 
 **Parameters:**
-- `name` (String): Connector name
+- `name` (String): Adapter name
 
-**Returns:** Original connector object
+**Returns:** Original adapter object
 
-#### `connectorRegistry.getPlatformInterfaces(platformName)`
+#### `adapterRegistry.getPlatformInterfaces(platformName)`
 Returns a Map of registered interface functions for a platform.
 
 **Parameters:**
@@ -252,7 +252,7 @@ Returns a Map of registered interface functions for a platform.
 
 **Returns:** Map of interface functions
 
-#### `connectorRegistry.hasPlatformInterface(platformName, interfaceName)`
+#### `adapterRegistry.hasPlatformInterface(platformName, interfaceName)`
 Checks if a specific interface function is registered for a platform.
 
 **Parameters:**
@@ -261,20 +261,20 @@ Checks if a specific interface function is registered for a platform.
 
 **Returns:** Boolean indicating if interface exists
 
-#### `connectorRegistry.unregisterConnectorInterface(platformName, interfaceName)`
+#### `adapterRegistry.unregisterAdapterInterface(platformName, interfaceName)`
 Unregisters an interface function for a platform.
 
 **Parameters:**
 - `platformName` (String): Platform identifier
 - `interfaceName` (String): Interface function name
 
-#### `connectorRegistry.getConnectorCapabilities(platformName)`
-Gets comprehensive information about an connector including its capabilities and registered interfaces.
+#### `adapterRegistry.getAdapterCapabilities(platformName)`
+Gets comprehensive information about an adapter including its capabilities and registered interfaces.
 
 **Parameters:**
 - `platformName` (String): Platform identifier
 
-**Returns:** Promise with Object with connector capabilities information
+**Returns:** Object with adapter capabilities information
 
 ### Exported Components
 
@@ -377,29 +377,29 @@ The core package uses the following environment variables:
 - `IS_PROD` - Production environment flag
 - `DYNAMODB_LOCALHOST` - Local DynamoDB endpoint for development, used for lock cache
 
-## Connector Interface Registration Benefits
+## Adapter Interface Registration Benefits
 
 ### Key Features
 
-- **Composition over Mutation**: Interface functions are composed with connectors at retrieval time, preserving the original connector
-- **Dynamic Registration**: Register interface functions before or after connector registration
-- **Immutability**: Original connector objects remain unchanged
-- **Clean Separation**: Interface functions are kept separate from core connector logic
-- **Flexibility**: Support for interface-only connectors (no base connector required)
+- **Composition over Mutation**: Interface functions are composed with adapters at retrieval time, preserving the original adapter
+- **Dynamic Registration**: Register interface functions before or after adapter registration
+- **Immutability**: Original adapter objects remain unchanged
+- **Clean Separation**: Interface functions are kept separate from core adapter logic
+- **Flexibility**: Support for interface-only adapters (no base adapter required)
 
 ### Best Practices
 
-1. **Register Required Interfaces**: Register all required interface functions before using the connector
+1. **Register Required Interfaces**: Register all required interface functions before using the adapter
 2. **Use Descriptive Names**: Use clear, descriptive names for interface functions
 3. **Handle Errors**: Implement proper error handling in interface functions
-4. **Test Composed Connectors**: Test the final composed connector to ensure interfaces work correctly
+4. **Test Composed Adapters**: Test the final composed adapter to ensure interfaces work correctly
 5. **Document Interfaces**: Document what each interface function does and expects
 
 ### Use Cases
 
-- **Extending Existing Connectors**: Add new functionality to existing connectors without modification
-- **Progressive Enhancement**: Start with interfaces, add base connector later
-- **Testing**: Test interface functions separately from base connectors
+- **Extending Existing Adapters**: Add new functionality to existing adapters without modification
+- **Progressive Enhancement**: Start with interfaces, add base adapter later
+- **Testing**: Test interface functions separately from base adapters
 - **Modular Development**: Develop interface functions independently
 - **Plugin Architecture**: Create pluggable interface functions for different scenarios
 
@@ -424,8 +424,8 @@ Core Package
 │   ├── jwt.js       - JWT operations
 │   ├── analytics.js - Analytics tracking
 │   └── util.js      - General utilities
-├── Connector Registry
-│   └── registry.js  - CRM connector management
+├── Adapter Registry
+│   └── registry.js  - CRM adapter management
 └── API Layer
     ├── createCoreApp()     - Complete app setup
     ├── createCoreRouter()  - Route management

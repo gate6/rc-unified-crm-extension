@@ -14,7 +14,6 @@ module.exports = {
   modulePathIgnorePatterns: [
     '<rootDir>/build/',
     '<rootDir>/serverless-deploy/',
-    '<rootDir>/serverless-deploy-test/',
-    '<rootDir>/serverless-deploy-test-beta/'
+    '<rootDir>/serverless-deploy-test/'
   ],
 };

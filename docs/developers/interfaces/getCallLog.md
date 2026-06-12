@@ -44,12 +44,12 @@ This interface should return the associated call log record in a prescribed form
 === "Example CRM"
 
     ```js
-    {!> packages/template/src/connectors/interfaces/getCallLog.js !}
+    {!> src/adapters/testCRM/index.js [ln:369-404] !}
 	```
 	
 === "Pipedrive"
 
 	```js
-    {!> src/connectors/pipedrive/index.js [ln:663-697] !}
+    {!> src/adapters/pipedrive/index.js [ln:579-611] !}
 	```
 

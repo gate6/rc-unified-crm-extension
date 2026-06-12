@@ -1,23 +1,11 @@
 const oauth = require('../lib/oauth');
 const { UserModel } = require('../models/userModel');
-const connectorRegistry = require('../connector/registry');
+const adapterRegistry = require('../adapter/registry');
 const Op = require('sequelize').Op;
-const { RingCentral } = require('../lib/ringcentral');
-const adminCore = require('./admin');
-const { Connector } = require('../models/dynamo/connectorSchema');
 
-async function onOAuthCallback({ platform, hostname, tokenUrl, query }) {
-    const callbackUri = query.callbackUri;
-    const apiUrl = query.apiUrl;
-    const username = query.username;
-    const proxyId = query.proxyId;
-    const userEmail = query.userEmail;
-    const platformModule = connectorRegistry.getConnector(platform);
-    let proxyConfig = null;
-    if (proxyId) {
-        proxyConfig = await Connector.getProxyConfig(proxyId);
-    }
-    const oauthInfo = await platformModule.getOauthInfo({ tokenUrl, hostname, rcAccountId: query.rcAccountId, proxyId, proxyConfig, userEmail });
+async function onOAuthCallback({ platform, hostname, tokenUrl, callbackUri, apiUrl, username, query }) {
+    const platformModule = adapterRegistry.getAdapter(platform);
+    const oauthInfo = await platformModule.getOauthInfo({ tokenUrl, hostname, rcAccountId: query.rcAccountId });
 
     if (oauthInfo.failMessage) {
         return {
@@ -32,14 +20,12 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, query }) {
     // Some platforms require different oauth queries, this won't affect normal OAuth process unless CRM module implements getOverridingOAuthOption() method
     let overridingOAuthOption = null;
     if (platformModule.getOverridingOAuthOption != null) {
-        const code = new URL(callbackUri).searchParams.get('code');
-        overridingOAuthOption = platformModule.getOverridingOAuthOption({ code });
+        overridingOAuthOption = platformModule.getOverridingOAuthOption({ code: callbackUri.split('code=')[1] });
     }
     const oauthApp = oauth.getOAuthApp(oauthInfo);
     const { accessToken, refreshToken, expires } = await oauthApp.code.getToken(callbackUri, overridingOAuthOption);
     const authHeader = `Bearer ${accessToken}`;
-    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader, tokenUrl, apiUrl, hostname, platform, username, callbackUri, query, proxyId, proxyConfig, userEmail });
-
+    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader, tokenUrl, apiUrl, hostname, username, callbackUri, query });
     if (successful) {
         let userInfo = await saveUserInfo({
             platformUserInfo,
@@ -50,9 +36,8 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, query }) {
             hostname: platformUserInfo?.overridingHostname ? platformUserInfo.overridingHostname : hostname,
             accessToken,
             refreshToken,
-            tokenExpiry: isNaN(expires) ? null : expires,
-            rcAccountId: query.rcAccountId,
-            proxyId
+            tokenExpiry: expires,
+            rcAccountId: query.rcAccountId
         });
         if (platformModule.postSaveUserInfo) {
             userInfo = await platformModule.postSaveUserInfo({ userInfo, oauthApp });
@@ -70,16 +55,15 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, query }) {
     }
 }
 
-async function onApiKeyLogin({ platform, hostname, apiKey, proxyId, additionalInfo }) {
-    const platformModule = connectorRegistry.getConnector(platform);
+async function onApiKeyLogin({ platform, hostname, apiKey, additionalInfo }) {
+    const platformModule = adapterRegistry.getAdapter(platform);
     const basicAuth = platformModule.getBasicAuth({ apiKey });
-    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader: `Basic ${basicAuth}`, hostname, platform, additionalInfo, apiKey, proxyId });
+    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader: `Basic ${basicAuth}`, hostname, additionalInfo, apiKey });
     if (successful) {
         let userInfo = await saveUserInfo({
             platformUserInfo,
             platform,
             hostname,
-            proxyId,
             accessToken: platformUserInfo.overridingApiKey ?? apiKey
         });
         if (platformModule.postSaveUserInfo) {
@@ -98,18 +82,16 @@ async function onApiKeyLogin({ platform, hostname, apiKey, proxyId, additionalIn
     }
 }
 
-async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken, refreshToken, tokenExpiry, rcAccountId, proxyId }) {
+async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken, refreshToken, tokenExpiry, rcAccountId }) {
     const id = platformUserInfo.id;
     const name = platformUserInfo.name;
     const existingUser = await UserModel.findByPk(id);
     const timezoneName = platformUserInfo.timezoneName;
     const timezoneOffset = platformUserInfo.timezoneOffset;
-    const platformAdditionalInfo = platformUserInfo.platformAdditionalInfo || {};
-    platformAdditionalInfo.proxyId = proxyId;
+    const platformAdditionalInfo = platformUserInfo.platformAdditionalInfo;
     if (existingUser) {
         await existingUser.update(
             {
-                platform,
                 hostname,
                 timezoneName,
                 timezoneOffset,
@@ -184,8 +166,8 @@ async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken,
 }
 
 async function getLicenseStatus({ userId, platform }) {
-    const platformModule = connectorRegistry.getConnector(platform);
-    const licenseStatus = await platformModule.getLicenseStatus({ userId, platform });
+    const platformModule = adapterRegistry.getAdapter(platform);
+    const licenseStatus = await platformModule.getLicenseStatus({ userId });
     return licenseStatus;
 }
 
@@ -202,9 +184,8 @@ async function authValidation({ platform, userId }) {
         }
     });
     if (existingUser) {
-        const platformModule = connectorRegistry.getConnector(platform);
-        const proxyId = existingUser?.platformAdditionalInfo?.proxyId;
-        const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: existingUser?.platformAdditionalInfo?.tokenUrl, hostname: existingUser?.hostname, proxyId })));
+        const platformModule = adapterRegistry.getAdapter(platform);
+        const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: existingUser?.platformAdditionalInfo?.tokenUrl, hostname: existingUser?.hostname })));
         existingUser = await oauth.checkAndRefreshAccessToken(oauthApp, existingUser);
         const { successful, returnMessage, status } = await platformModule.authValidation({ user: existingUser });
         return {
@@ -223,28 +204,7 @@ async function authValidation({ platform, userId }) {
     }
 }
 
-// Ringcentral
-async function onRingcentralOAuthCallback({ code, rcAccountId }) {
-    if (!process.env.RINGCENTRAL_SERVER || !process.env.RINGCENTRAL_CLIENT_ID || !process.env.RINGCENTRAL_CLIENT_SECRET) {
-        return;
-    }
-    const rcSDK = new RingCentral({
-        server: process.env.RINGCENTRAL_SERVER,
-        clientId: process.env.RINGCENTRAL_CLIENT_ID,
-        clientSecret: process.env.RINGCENTRAL_CLIENT_SECRET,
-        redirectUri: `${process.env.APP_SERVER}/ringcentral/oauth/callback`
-    });
-    const { access_token, refresh_token, expire_time } = await rcSDK.generateToken({ code });
-    await adminCore.updateAdminRcTokens({
-        hashedRcAccountId: rcAccountId,
-        adminAccessToken: access_token,
-        adminRefreshToken: refresh_token,
-        adminTokenExpiry: expire_time
-    });
-}
-
 exports.onOAuthCallback = onOAuthCallback;
 exports.onApiKeyLogin = onApiKeyLogin;
 exports.authValidation = authValidation;
 exports.getLicenseStatus = getLicenseStatus;
-exports.onRingcentralOAuthCallback = onRingcentralOAuthCallback;

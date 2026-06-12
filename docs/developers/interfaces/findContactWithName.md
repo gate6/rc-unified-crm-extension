@@ -1,8 +1,5 @@
 # findContactWithName
 
-!!! info "Optional interface"
-    If this interface is implemented, "**Search contacts**" (with name) would be provided as an option in contact matching.
-
 It is not uncommon that when logging a call, a contact cannot be found using the [findContact](findContact.md) interface which attempts to lookup a contact into the target CRM via a phone number. Sometimes however, a contact cannot be found, but is in fact known to be in the CRM. This is when this interface comes into play. 
 
 <figure markdown>
@@ -52,17 +49,17 @@ This interface returns a single object. That object describes the contacts that 
 
 ## Reference
 
-
+<!--
 === "Example CRM"
 
     ```js
-    {!> packages/template/src/connectors/interfaces/findContactWithName.js !}
+    {!> src/adapters/testCRM/index.js [ln:161-231] !}
 	```
-
+-->
 
 === "Clio"
 
 	```js
-    {!> src/connectors/pipedrive/index.js [ln:204-261] !}
+    {!> src/adapters/clio/index.js [ln:211-275] !}
 	```
 

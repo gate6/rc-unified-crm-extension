@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { AdminConfigModel } = require('../models/adminConfigModel');
 const { getHashValue } = require('../lib/util');
-const connectorRegistry = require('../connector/registry');
+const adapterRegistry = require('../adapter/registry');
 
 async function getUserSettingsByAdmin({ rcAccessToken, rcAccountId }) {
     let hashedRcAccountId = null;
@@ -20,6 +20,7 @@ async function getUserSettingsByAdmin({ rcAccessToken, rcAccountId }) {
     }
     const adminConfig = await AdminConfigModel.findByPk(hashedRcAccountId);
     return {
+        customManifestUrl: adminConfig?.customAdapter,
         userSettings: adminConfig?.userSettings
     };
 }
@@ -73,7 +74,7 @@ async function updateUserSettings({ user, userSettings, platformName }) {
     for (const k of keys) {
         updatedSettings[k] = userSettings[k];
     }
-    const platformModule = connectorRegistry.getConnector(platformName);
+    const platformModule = adapterRegistry.getAdapter(platformName);
     if (platformModule.onUpdateUserSettings) {
         const { successful, returnMessage } = await platformModule.onUpdateUserSettings({ user, userSettings, updatedSettings });
         if (successful) {
