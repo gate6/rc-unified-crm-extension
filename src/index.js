@@ -20,6 +20,7 @@ const serviceTitan = require('./connectors/servicetitan');
 const googleSheetsExtra = require('./connectors/googleSheets/extra.js');
 const adminCore = require('@app-connect/core/handlers/admin');
 const monday = require('./connectors/monday');
+const agencyzoom = require('./connectors/agencyzoom');
 
 // Register connectors
 connectorRegistry.setDefaultManifest(require('./connectors/manifest.json'));
