@@ -31,9 +31,9 @@
                     "page": {
                         "title": "Service Titan",
                         "content": [
-                             {
+                            {
                                 "const": "description",
-                                "description": "Please enter your Service Titan CRM credentials below",
+                                "description": "Please enter your Service Titan email below to connect.",
                                 "type": "string",
                                 "uiSchema": {
                                     "ui:field": "typography",
@@ -46,6 +46,52 @@
                                 "title": "Email",
                                 "type": "string",
                                 "required": true
+                            },
+                            {
+                                "const": "adminSetupNote",
+                                "description": "Admin setup: Enter your ServiceTitan API credentials below. These are stored once and shared across all users in your organization. Find them at developer.servicetitan.io under your app settings.",
+                                "type": "string",
+                                "uiSchema": {
+                                    "ui:field": "typography",
+                                    "ui:variant": "body2",
+                                    "ui:align": "left"
+                                }
+                            },
+                            {
+                                "const": "clientId",
+                                "title": "Client ID",
+                                "type": "string",
+                                "required": true,
+                                "managed": true,
+                                "managedScope": "account",
+                                "hidden": true
+                            },
+                            {
+                                "const": "clientSecret",
+                                "title": "Client Secret",
+                                "type": "string",
+                                "required": true,
+                                "managed": true,
+                                "managedScope": "account",
+                                "hidden": true
+                            },
+                            {
+                                "const": "tenantId",
+                                "title": "Tenant ID",
+                                "type": "string",
+                                "required": true,
+                                "managed": true,
+                                "managedScope": "account",
+                                "hidden": true
+                            },
+                            {
+                                "const": "appKey",
+                                "title": "App Key",
+                                "type": "string",
+                                "required": true,
+                                "managed": true,
+                                "managedScope": "account",
+                                "hidden": true
                             }
                         ]
                     }

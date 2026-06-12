@@ -23,11 +23,9 @@
       },
       "auth": {
         "type": "oauth",
+        "managed": true,
         "oauth": {
-          "authUrl": "https://auth.monday.com/oauth2/authorize",
-          "clientId": "0e94ce12fce86469a7cbeac4b5e367e3",
           "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
-          "customState": "",
           "scope": "me:read users:read boards:read boards:write updates:write"
         }
       },

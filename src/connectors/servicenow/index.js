@@ -159,246 +159,56 @@ async function getHostname(hostname) {
 }
 
 async function getOauthInfo(requestData) {
-    // if(!requestData.rcAccountId) {
-    //     return {
-    //         failMessage: 'RingCentral Account ID Missing'
-    //     }; 
-    // }
-    console.log("getOauthInfo requestData", requestData);
-
-    const companyData = await models.companies.findOne({
-        where: {
-            hostname: requestData.hostname
-        },
-        raw: true
-    });
-
-    if (!companyData) {
-        return {
-            failMessage: 'Company data not found for the provided hostname.'
-        };
-    }
-    
-    const { clientId, clientSecret, crmRedirectUrl, tokenUrl } = companyData;
-    
-    if (!clientId || !clientSecret || !crmRedirectUrl || !tokenUrl) {
-        return {
-            failMessage: 'RingCentral Account is not fully configured with Gate6.'
-        };
-    }
-    
+    // Credentials are managed via AppConnect admin-managed OAuth.
+    // This fallback is only reached if managed OAuth is not yet configured.
     return {
-        clientId,
-        clientSecret,
-        accessTokenUri: tokenUrl,
-        redirectUri: crmRedirectUrl
+        failMessage: 'ServiceNow OAuth credentials have not been configured. Please ask your admin to set up the connector via the AppConnect admin panel.'
     };
-    
-
-    // console.log("requestData.rcAccountId", requestData.rcAccountId)
-
-    // const isRcIdPresent = await models.companies.findOne({
-    //     where: {
-    //         rcAccountId : requestData.rcAccountId
-    //     },
-    //     attributes:['id','rcAccountId'],
-    //     raw: true
-    // })
-
-    // if(!isRcIdPresent){
-    //     return {
-    //         failMessage: 'RingCentral Account ID is not Associated with Gate6'
-    //     }; 
-    // } else {
-    //     const { clientId, clientSecret, crmRedirectUrl, tokenUrl }  = await models.companies.findOne({
-    //         where: {
-    //             hostname: requestData.hostname
-    //         },
-    //         raw: true
-    //     })
-    
-    //     return {
-    //         clientId: clientId,
-    //         clientSecret:clientSecret,
-    //         accessTokenUri: tokenUrl,
-    //         redirectUri: crmRedirectUrl
-    //     }
-    // }
-
 }
 
-// For params, if OAuth, then accessToken, refreshToken, tokenExpiry; If apiKey, then apiKey
-async function getUserInfo({ authHeader, additionalInfo, hostname}) {
-   
-    // ------------------------------------------------------
-    // ---TODO.1: Implement API call to retrieve user info---
-    // ------------------------------------------------------
+async function getUserInfo({ authHeader, hostname }) {
     try {
+        const userInfoResponse = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/sys_user?sysparm_query=user_name=javascript:gs.getUserName()&sysparm_fields=sys_id,email,user_name,first_name,last_name,time_zone,time_zone_offset&sysparm_limit=1`,
+            { headers: { Authorization: authHeader } }
+        );
 
-        const getCompanyDetails = await models.companies.findOne({
-            where: {
-                hostname: hostname
-            },
-            raw:true
-        })
-
-        const userInfoResponse = await serviceNowApiClient.get(`${getCompanyDetails.instanceUrl}/api/${getCompanyDetails.userDetailsPath}`, {
-            headers: {
-                'Authorization': authHeader
-            }
-        });
-
-        let id = userInfoResponse.data.result.id;
-        const email = userInfoResponse.data.result.email;
-        const name = userInfoResponse.data.result.user_name;
-        const timezoneName = userInfoResponse.data.result.time_zone ?? ''; // Optional. Whether or not you want to log with regards to the user's timezone
-        const timezoneOffset = userInfoResponse.data.result.time_zone_offset ?? null; // Optional. Whether or not you want to log with regards to the user's timezone. It will need to be converted to a format that CRM platform uses,
-    
-        //Generate a random alphanumeric id for case when admin is login in using the extension
-        if(id == '6816f79cc0a8016401c5a33be04be441')
-        {
-            let newId = generateAlphanumericString(id.length);
-            id = newId;
-        }
-        let userData = {
-            id: id,
-            email: email,
-            timezoneName: timezoneName,
-            timezoneOffset: timezoneOffset,
-            name: name,
-            first_name: userInfoResponse.data.result.first_name,
-            last_name: userInfoResponse.data.result.last_name
-        }
-        //Get information of company along with its customers based on hostname
-        const checkActiveUsers = await models.companies.findOne({
-            where: {
-                hostname: hostname
-            },
-            include: [{
-                model: models.customer,
-                as: 'customers',
-                required: false
-            }],
-            logging: false,
-        })
-        //check if the current company exists in the MYSQL database if not exists thorw error
-
-        if (checkActiveUsers) {
-            //Fetch the all the customers for the company and check the current loggedInUser is new or existing
-            if (checkActiveUsers.customers) {
-                //check the number of users allowed for the company and compare them with the current active users 
-                //if the max numbers of users is greater than the active customers we allow to insert new customer
-
-                if (userData.name == 'admin' && checkActiveUsers.customers.some(customer => customer.email === email)) {
-                    return {
-                        successful: true,
-                        platformUserInfo: {
-                            id,
-                            name,
-                            timezoneName,
-                            timezoneOffset,
-                            platformAdditionalInfo: {}
-                        },
-                        returnMessage: {
-                            messageType: 'success',
-                            message: 'Successfully connected to ServiceNow.',
-                            ttl: 3000
-                        }
-                    };
-                }
-                //allow login of new user
-                if (checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers) {
-
-                    if (checkActiveUsers.customers.some(customer => customer.sysId === id)) {
-                        return {
-                            successful: true,
-                            platformUserInfo: {
-                                id,
-                                name,
-                                timezoneName,
-                                timezoneOffset,
-                                platformAdditionalInfo: {}
-                            },
-                            returnMessage: {
-                                messageType: 'success',
-                                message: 'Successfully connected to ServiceNow.',
-                                ttl: 3000
-                            }
-                        };
-                    }
-                    else {
-                        const accessToken = authHeader.split(' ')[1];
-                        //Save the auth token and new user information in the MYSQL customers table
-                        await saveUserInfo(userData, accessToken, checkActiveUsers.dataValues.hostname, checkActiveUsers.dataValues.id);
-                        return {
-                            successful: true,
-                            platformUserInfo: {
-                                id,
-                                name,
-                                timezoneName,
-                                timezoneOffset,
-                                platformAdditionalInfo: {}
-                            },
-                            returnMessage: {
-                                messageType: 'success',
-                                message: 'Successfully connected to ServiceNow.',
-                                ttl: 3000
-                            }
-                        };                    
-                
-                    }    
-                } else {
-                        return {
-                        successful: false,
-                        platformUserInfo: {
-                            id: "",
-                            name: "",
-                            timezoneName: "",
-                            timezoneOffset: "",
-                            platformAdditionalInfo: {}
-                        },
-                        returnMessage: {
-                            messageType: 'danger',
-                            message: `You are not having an active license. Please contact us.`,
-                            ttl: 3000
-                        }
-                    };
-                }
-            }
-
-        } else {
+        const result = userInfoResponse.data?.result?.[0];
+        if (!result) {
             return {
                 successful: false,
-                platformUserInfo: {
-                    id,
-                    name,
-                    timezoneName,
-                    timezoneOffset,
-                    platformAdditionalInfo: {}
-                },
-                returnMessage: {
-                    messageType: 'danger',
-                    message: 'Could not find the company details.',
-                    ttl: 3000
-                }
+                returnMessage: { messageType: 'warning', message: 'Could not retrieve user info from ServiceNow.', ttl: 3000 }
             };
         }
 
+        let id = result.sys_id;
+        const name = result.user_name;
+        const timezoneName = result.time_zone ?? '';
+        const timezoneOffset = result.time_zone_offset ?? null;
+
+        // Admin sys_id — generate a unique id so admin can also connect
+        if (id === '6816f79cc0a8016401c5a33be04be441') {
+            id = generateAlphanumericString(id.length);
+        }
+
+        return {
+            successful: true,
+            platformUserInfo: {
+                id,
+                name,
+                timezoneName,
+                timezoneOffset,
+                platformAdditionalInfo: {}
+            },
+            returnMessage: { messageType: 'success', message: 'Successfully connected to ServiceNow.', ttl: 3000 }
+        };
     } catch (error) {
-        console.log("Exception in getUserInfo ", error);
+        console.log('Exception in getUserInfo', error);
         return {
             successful: false,
-            returnMessage: {
-                messageType: 'warning',
-                message: 'Failed to get user info.',
-                ttl: 3000
-            }
-        }
+            returnMessage: { messageType: 'warning', message: 'Failed to get user info.', ttl: 3000 }
+        };
     }
-
-    //---------------------------------------------------------------------------------------------------
-    //---CHECK.1: Open db.sqlite (might need to install certain viewer) to check if user info is saved---
-    //---------------------------------------------------------------------------------------------------
 }
 
 async function unAuthorize({ user }) {

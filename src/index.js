@@ -38,19 +38,9 @@ connectorRegistry.registerConnector('pipedrive', pipedrive);
 connectorRegistry.registerConnector('redtail', redtail);
 connectorRegistry.registerConnector('servicetitan', serviceTitan, require('./connectors/servicetitan/manifest.json'));
 connectorRegistry.registerConnector('servicenow', servicenow, require('./connectors/servicenow/manifest.json'));
-connectorRegistry.registerConnector('servicenow-dev226973', servicenow, require('./connectors/servicenow-dev226973/manifest.json'));
-connectorRegistry.registerConnector('servicenow-powertest2', servicenow, require('./connectors/servicenow-powertest2/manifest.json'));
-connectorRegistry.registerConnector('servicenow-kerridgecs', servicenow, require('./connectors/servicenow-kerridgecs/manifest.json'));
-connectorRegistry.registerConnector('servicenow-spiegsa', servicenow, require('./connectors/servicenow-spiegsa/manifest.json'));
-connectorRegistry.registerConnector('servicenow-ven06766', servicenow, require('./connectors/servicenow-ven06766/manifest.json'));
-connectorRegistry.registerConnector('servicenow-cmscpidev', servicenow, require('./connectors/servicenow-cmscpidev/manifest.json'));
-connectorRegistry.registerConnector('servicenow-cmscpi', servicenow, require('./connectors/servicenow-cmscpi/manifest.json'));
-connectorRegistry.registerConnector('proxy', proxyConnector);
-// connectorRegistry.registerConnector('monday', monday, require('./connectors/monday/manifest.json'));
-// connectorRegistry.registerConnector('monday-QA', monday, require('./connectors/monday-QA/manifest.json'));
+connectorRegistry.registerConnector('monday', monday, require('./connectors/monday/manifest.json'));
 connectorRegistry.registerConnector('agencyzoom', agencyzoom, require('./connectors/agencyzoom/manifest.json'));
-connectorRegistry.registerConnector('monday', monday)
-connectorRegistry.registerConnector('gate6.servicetitan', serviceTitan)
+connectorRegistry.registerConnector('proxy', proxyConnector);
 
 // Create Express app with core functionality
 const app = createCoreApp();
