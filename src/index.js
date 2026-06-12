@@ -46,9 +46,11 @@ connectorRegistry.registerConnector('servicenow-ven06766', servicenow, require('
 connectorRegistry.registerConnector('servicenow-cmscpidev', servicenow, require('./connectors/servicenow-cmscpidev/manifest.json'));
 connectorRegistry.registerConnector('servicenow-cmscpi', servicenow, require('./connectors/servicenow-cmscpi/manifest.json'));
 connectorRegistry.registerConnector('proxy', proxyConnector);
-connectorRegistry.registerConnector('monday', monday, require('./connectors/monday/manifest.json'));
-connectorRegistry.registerConnector('monday-QA', monday, require('./connectors/monday-QA/manifest.json'));
+// connectorRegistry.registerConnector('monday', monday, require('./connectors/monday/manifest.json'));
+// connectorRegistry.registerConnector('monday-QA', monday, require('./connectors/monday-QA/manifest.json'));
 connectorRegistry.registerConnector('agencyzoom', agencyzoom, require('./connectors/agencyzoom/manifest.json'));
+connectorRegistry.registerConnector('monday', monday)
+connectorRegistry.registerConnector('gate6.servicetitan', serviceTitan)
 
 // Create Express app with core functionality
 const app = createCoreApp();
