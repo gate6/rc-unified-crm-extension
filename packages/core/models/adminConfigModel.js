@@ -1,7 +1,7 @@
 const Sequelize = require('sequelize');
 const { sequelize } = require('./sequelize');
 
-// Model for Admin data
+// Model for User data
 exports.AdminConfigModel = sequelize.define('adminConfigs', {
   // hashed rc account ID
   id: {
@@ -11,23 +11,13 @@ exports.AdminConfigModel = sequelize.define('adminConfigs', {
   userSettings: {
     type: Sequelize.JSON
   },
-  // Obsolete
   customAdapter: {
     type: Sequelize.JSON
   },
-  adminAccessToken: {
-    type: Sequelize.STRING(512),
-  },
-  adminRefreshToken: {
-    type: Sequelize.STRING(512),
-  },
-  adminTokenExpiry: {
-    type: Sequelize.DATE
-  },
-    // Array of:
+  // Array of:
   // {
   //   crmUserId: string,
-  //   rcExtensionId: array of strings
+  //   rcExtensionId: string
   // }
   userMappings: {
     type: Sequelize.JSON

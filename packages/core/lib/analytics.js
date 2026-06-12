@@ -19,7 +19,7 @@ exports.init = function init() {
     mixpanel = Mixpanel.init(process.env.MIXPANEL_TOKEN);
 }
 
-exports.track = function track({ eventName, interfaceName, connectorName, accountId, extensionId, success, requestDuration, userAgent, ip, author, eventAddedVia, extras = null }) {
+exports.track = function track({ eventName, interfaceName, adapterName, accountId, extensionId, success, requestDuration, userAgent, ip, author, eventAddedVia, extras = null }) {
     if (!mixpanel || !extensionId) {
         return;
     }
@@ -27,13 +27,13 @@ exports.track = function track({ eventName, interfaceName, connectorName, accoun
     mixpanel.people.set_once(extensionId, {
         version,
         appName,
-        crmPlatform: connectorName
+        crmPlatform: adapterName
     });
     const ua = parser(userAgent);
     mixpanel.track(eventName, {
         distinct_id: extensionId,
         interfaceName,
-        adapterName: connectorName,
+        adapterName,
         rcAccountId: accountId,
         extensionId,
         success,

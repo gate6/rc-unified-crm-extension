@@ -1,6 +1,6 @@
 # createCallLog
 
-This interface is responsible for creating a new call log record in the associated CRM. The call must be associated with the contact passed in as a request parameter. Other associations may be made depending upon the CRM and the connector. 
+This interface is responsible for creating a new call log record in the associated CRM. The call must be associated with the contact passed in as a request parameter. Other associations may be made depending upon the CRM and the adapter. 
 
 There is an underlying assumption of the framework that there is a one-to-one mapping between notes (or activities) and phone calls. Therefore, when logging a call in the target CRM only create a single log entry. 
 
@@ -14,14 +14,7 @@ There is an underlying assumption of the framework that there is a one-to-one ma
 | `callLog`              | All the metadata associated with the call to be logged. [Call Log schema](https://developers.ringcentral.com/api-reference/Call-Log/readUserCallRecord) is described in our API Reference. |
 | `note`                 | The notes saved by the user during and/or after the call.                                                |
 | `additionalSubmission` | All of the additional custom fields defined in the manifest and submitted by the user.                   |
-| `aiNote`       |  AI summary of the phone call   | 
-| `transcript`       |  Transcript of the phone call   | 
-| `ringSenseTranscript`  | The transcript from [ACE](../../users/ace.md) | 
-| `ringSenseSummary`     | The summary from [ACE](../../users/ace.md) | 
-| `ringSenseBulletedSummary`     | The bulleted summary from [ACE](../../users/ace.md) |
-| `ringSenseAIScore`     | The AI score from [ACE](../../users/ace.md) | 
-| `ringSenseLink`     | The link to [ACE](../../users/ace.md) recording | 
-| `composedLogDetails`       |  Formated log details that can be directly put into log body  | 
+| `timezoneOffset`       | The timezone offset of the current user in the event you need to use UTC when calling the CRM's API.     | 
 
 ### Contact Info
 
@@ -60,13 +53,13 @@ An object with following properties:
 === "Example CRM"
 
     ```js
-    {!> packages/template/src/connectors/interfaces/createCallLog.js !}
+    {!> src/adapters/testCRM/index.js [ln:237-288] !}
 	```
 	
 === "Pipedrive"
 
 	```js
-    {!> src/connectors/pipedrive/index.js [ln:342-421] !}
+    {!> src/adapters/pipedrive/index.js [ln:284-350] !}
 	```
 
 ### Example Call Log Schema

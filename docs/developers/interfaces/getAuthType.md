@@ -15,12 +15,12 @@ This interface returns a single string, either `oauth` or `apiKey` to indicate w
 === "Example CRM"
 
     ```js
-    {!> packages/template/src/connectors/interfaces/getAuthType.js !}
+    {!> src/adapters/testCRM/index.js [ln:15-17] !}
 	```
 	
 === "Pipedrive"
 
 	```js
-    {!> src/connectors/pipedrive/index.js [ln:11-13] !}
+    {!> src/adapters/pipedrive/index.js [ln:8-10] !}
 	```
 

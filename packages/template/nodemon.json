@@ -4,9 +4,6 @@
   ],
   "ext": "*",
   "ignore": [
-      "node_modules",
-      "src/connectors/mockContacts.json",
-      "src/connectors/mockCallLogs.json",
-      "src/connectors/mockMessageLogs.json"
+      "node_modules"
   ]
 }

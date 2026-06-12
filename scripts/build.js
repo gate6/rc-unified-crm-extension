@@ -9,7 +9,7 @@ rm('-rf', `${deployPath}/*.js`);
 rm('-rf', `${deployPath}/*.json`);
 rm('-rf', `${deployPath}/node_modules`);
 rm('-rf', `${deployPath}/packages`);
-rm('-rf', `${deployPath}/connectors`);
+rm('-rf', `${deployPath}/adapters`);
 echo('building...');
 mkdir(deployPath)
 cp(`${projectPath}/package.json`, `${deployPath}/package.json`);
@@ -19,6 +19,6 @@ cp(`${projectPath}/src/server.js`, `${deployPath}/server.js`);
 cp(`${projectPath}/src/dbAccessor.js`, `${deployPath}/dbAccessor.js`);
 mkdir(`${deployPath}/packages`);
 cp('-r', `${projectPath}/packages/core`, `${deployPath}/packages/core`);
-cp('-r', `${projectPath}/src/connectors`, `${deployPath}/connectors`);
+cp('-r', `${projectPath}/src/adapters`, `${deployPath}/adapters`);
 
 echo(`build done, output in ${deployPath}`);

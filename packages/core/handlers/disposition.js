@@ -5,8 +5,7 @@ const { UserModel } = require('../models/userModel');
 const oauth = require('../lib/oauth');
 // const userCore = require('../handlers/user');
 const errorMessage = require('../lib/generalErrorMessage');
-const connectorRegistry = require('../connector/registry');
-const { Connector } = require('../models/dynamo/connectorSchema');
+const adapterRegistry = require('../adapter/registry');
 
 async function upsertCallDisposition({ platform, userId, sessionId, dispositions, additionalSubmission, userSettings }) {
     try {
@@ -36,17 +35,12 @@ async function upsertCallDisposition({ platform, userId, sessionId, dispositions
                 }
             }
         }
-        const proxyId = user.platformAdditionalInfo?.proxyId;
-        let proxyConfig = null;
-        if (proxyId) {
-            proxyConfig = await Connector.getProxyConfig(proxyId);
-        }
-        const platformModule = connectorRegistry.getConnector(platform);
-        const authType = await platformModule.getAuthType({ proxyId, proxyConfig });
+        const platformModule = adapterRegistry.getAdapter(platform);
+        const authType = platformModule.getAuthType();
         let authHeader = '';
         switch (authType) {
             case 'oauth':
-                const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname, proxyId, proxyConfig })));
+                const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname })));
                 user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
                 authHeader = `Bearer ${user.accessToken}`;
                 break;
@@ -59,8 +53,7 @@ async function upsertCallDisposition({ platform, userId, sessionId, dispositions
             user,
             existingCallLog: log,
             authHeader,
-            dispositions,
-            proxyConfig
+            dispositions
         });
         return { successful: !!logId, logId, returnMessage, extraDataTracking };
     }
@@ -133,17 +126,12 @@ async function upsertCallDisposition({ platform, userId, sessionId, dispositions
 //                 }
 //             }
 //         }
-//         const proxyId = user.platformAdditionalInfo?.proxyId;
-//         let proxyConfig = null;
-//         if (proxyId) {
-//             proxyConfig = await Connector.getProxyConfig(proxyId);
-//         }
-//         const platformModule = connectorRegistry.getConnector(platform);
-//         const authType = await platformModule.getAuthType({ proxyId, proxyConfig });
+//         const platformModule = adapterRegistry.getAdapter(platform);
+//         const authType = platformModule.getAuthType();
 //         let authHeader = '';
 //         switch (authType) {
 //             case 'oauth':
-//                 const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname, proxyId, proxyConfig })));
+//                 const oauthApp = oauth.getOAuthApp((await platformModule.getOauthInfo({ tokenUrl: user?.platformAdditionalInfo?.tokenUrl, hostname: user?.hostname })));
 //                 user = await oauth.checkAndRefreshAccessToken(oauthApp, user);
 //                 authHeader = `Bearer ${user.accessToken}`;
 //                 break;
@@ -156,8 +144,7 @@ async function upsertCallDisposition({ platform, userId, sessionId, dispositions
 //             user,
 //             existingMessageLog: existingSameDateMessageLog,
 //             authHeader,
-//             dispositions,
-//             proxyConfig
+//             dispositions
 //         });
 //         return { successful: !!logId, logId, returnMessage, extraDataTracking };
 //     }
