@@ -36,14 +36,18 @@ connectorRegistry.registerConnector('insightly', insightly);
 connectorRegistry.registerConnector('netsuite', netsuite);
 connectorRegistry.registerConnector('pipedrive', pipedrive);
 connectorRegistry.registerConnector('redtail', redtail);
+function reKeyManifest(manifest, originalKey, newKey) {
+    return { ...manifest, platforms: { [newKey]: manifest.platforms[originalKey] } };
+}
+
 connectorRegistry.registerConnector('servicetitan', serviceTitan, require('./connectors/servicetitan/manifest.json'));
-connectorRegistry.registerConnector('gate6.servicetitan', serviceTitan, require('./connectors/servicetitan/manifest.json'));
+connectorRegistry.registerConnector('gate6.servicetitan', serviceTitan, reKeyManifest(require('./connectors/servicetitan/manifest.json'), 'servicetitan', 'gate6.servicetitan'));
 connectorRegistry.registerConnector('servicenow', servicenow, require('./connectors/servicenow/manifest.json'));
-connectorRegistry.registerConnector('gate6.servicenow', servicenow, require('./connectors/servicenow/manifest.json'));
+connectorRegistry.registerConnector('gate6.servicenow', servicenow, reKeyManifest(require('./connectors/servicenow/manifest.json'), 'servicenow', 'gate6.servicenow'));
 connectorRegistry.registerConnector('monday', monday, require('./connectors/monday/manifest.json'));
-connectorRegistry.registerConnector('gate6.monday', monday, require('./connectors/monday/manifest.json'));
+connectorRegistry.registerConnector('gate6.monday', monday, reKeyManifest(require('./connectors/monday/manifest.json'), 'monday', 'gate6.monday'));
 connectorRegistry.registerConnector('agencyzoom', agencyzoom, require('./connectors/agencyzoom/manifest.json'));
-connectorRegistry.registerConnector('gate6.agencyzoom', agencyzoom, require('./connectors/agencyzoom/manifest.json'));
+connectorRegistry.registerConnector('gate6.agencyzoom', agencyzoom, reKeyManifest(require('./connectors/agencyzoom/manifest.json'), 'agencyzoom', 'gate6.agencyzoom'));
 connectorRegistry.registerConnector('proxy', proxyConnector);
 
 // Create Express app with core functionality
