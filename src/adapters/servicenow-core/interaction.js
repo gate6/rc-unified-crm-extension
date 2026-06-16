@@ -2,26 +2,49 @@ const axios = require('axios');
 const moment = require('moment');
 const serviceNowApiClient = axios.create();
 
-function stringifyForLog(value, maxLength = 1200) {
-    try {
-        const str = typeof value === 'string' ? value : JSON.stringify(value);
-        return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
-    } catch (error) {
-        return String(value);
+// ─── Axios Interceptors ───────────────────────────────────────────────────────
+
+serviceNowApiClient.interceptors.request.use(
+    (config) => {
+        console.log(JSON.stringify({
+            event: 'SN_API_REQUEST',
+            operation: config._snOperation || 'unknown',
+            method: (config.method || 'GET').toUpperCase(),
+            url: config.url,
+            timestamp: new Date().toISOString()
+        }));
+        return config;
+    },
+    (error) => {
+        return Promise.reject(error);
     }
-}
+);
 
 serviceNowApiClient.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        const config = response.config || {};
+        console.log(JSON.stringify({
+            event: 'SN_API_SUCCESS',
+            operation: config._snOperation || 'unknown',
+            method: (config.method || 'GET').toUpperCase(),
+            url: config.url,
+            status: response.status,
+            timestamp: new Date().toISOString()
+        }));
+        return response;
+    },
     (error) => {
-        console.error('[ServiceNow][interaction][apiError]', {
-            method: error?.config?.method || '',
-            url: error?.config?.url || '',
-            status: error?.response?.status || null,
-            statusText: error?.response?.statusText || '',
-            responseBody: stringifyForLog(error?.response?.data),
-            errorMessage: error?.message || ''
-        });
+        const config = error?.config || {};
+        console.error(JSON.stringify({
+            event: 'SN_API_ERROR',
+            operation: config._snOperation || 'unknown',
+            method: (config.method || 'GET').toUpperCase(),
+            url: config.url,
+            status: error.response?.status,
+            error: error.message,
+            response: error.response?.data,
+            timestamp: new Date().toISOString()
+        }));
         return Promise.reject(error);
     }
 );
@@ -65,7 +88,8 @@ async function fetchChoices(hostname, authHeader, element) {
     const response = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=${element}&sysparm_fields=label,value&sysparm_limit=500`,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader },
+            _snOperation: 'fetchChoices'
         }
     );
 
@@ -146,7 +170,8 @@ async function findStateValueById(hostname, authHeader, inputId){
         const stateSelection = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${inputId}&sysparm_fields=sys_id,label,value`,
             {
-                headers: { 'Authorization':  authHeader }
+                headers: { 'Authorization':  authHeader },
+                _snOperation: 'findStateValueById'
             });
         
         if (stateSelection.data && stateSelection.data.result && stateSelection.data.result.length > 0) {
@@ -204,7 +229,8 @@ async function findTypeValueById(hostname, authHeader, inputId) {
         const typeSelection = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${inputId}&sysparm_fields=sys_id,label,value`,
             {
-                headers: { 'Authorization': authHeader }
+                headers: { 'Authorization': authHeader },
+                _snOperation: 'findTypeValueById'
             });
         
         if (typeSelection.data && typeSelection.data.result && typeSelection.data.result.length > 0) {
@@ -230,7 +256,7 @@ async function getAllAccounts(hostname, authHeader) {
     try {
         const response = await serviceNowApiClient.get(
             `https://${hostname}/api/now/account?sysparm_limit=1000`,
-            { headers: { Authorization: authHeader } }
+            { headers: { Authorization: authHeader }, _snOperation: 'getAllAccounts' }
         );
         const data = response.data?.result || [];
         accountCache.set(hostname, { data, expiresAt: Date.now() + ACCOUNT_CACHE_TTL_MS });
