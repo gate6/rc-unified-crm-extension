@@ -1256,6 +1256,21 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, hostname }
   }
 }
 
+function getOverridingOAuthOption({ code, oauthInfo }) {
+  return {
+    query: {
+      grant_type: 'authorization_code',
+      client_id: oauthInfo?.clientId || '',
+      client_secret: oauthInfo?.clientSecret || '',
+      redirect_uri: oauthInfo?.redirectUri || '',
+      code: code,
+    },
+    headers: {
+      Authorization: ''
+    }
+  }
+}
+
 
 exports.getAuthType = getAuthType;
 exports.getOauthInfo = getOauthInfo;
@@ -1272,3 +1287,4 @@ exports.createMessageLog = createMessageLog;
 exports.updateMessageLog = updateMessageLog;
 exports.getUserList = getUserList;
 exports.getLicenseStatus = getLicenseStatus;
+exports.getOverridingOAuthOption = getOverridingOAuthOption
