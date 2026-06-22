@@ -4,47 +4,26 @@ const serviceNowApiClient = axios.create();
 
 // ─── Axios Interceptors ───────────────────────────────────────────────────────
 
+// Request interceptor — pass-through only (function-level logs handle tracing)
 serviceNowApiClient.interceptors.request.use(
-    (config) => {
-        console.log(JSON.stringify({
-            event: 'SN_API_REQUEST',
-            operation: config._snOperation || 'unknown',
-            method: (config.method || 'GET').toUpperCase(),
-            url: config.url,
-            timestamp: new Date().toISOString()
-        }));
-        return config;
-    },
-    (error) => {
-        return Promise.reject(error);
-    }
+    (config) => config,
+    (error) => Promise.reject(error)
 );
 
+// Response interceptor — only log on error
 serviceNowApiClient.interceptors.response.use(
-    (response) => {
-        const config = response.config || {};
-        console.log(JSON.stringify({
-            event: 'SN_API_SUCCESS',
-            operation: config._snOperation || 'unknown',
-            method: (config.method || 'GET').toUpperCase(),
-            url: config.url,
-            status: response.status,
-            timestamp: new Date().toISOString()
-        }));
-        return response;
-    },
+    (response) => response,
     (error) => {
         const config = error?.config || {};
-        console.error(JSON.stringify({
-            event: 'SN_API_ERROR',
+        console.error('[ServiceNow][interaction][apiError]', {
             operation: config._snOperation || 'unknown',
             method: (config.method || 'GET').toUpperCase(),
             url: config.url,
-            status: error.response?.status,
-            error: error.message,
-            response: error.response?.data,
-            timestamp: new Date().toISOString()
-        }));
+            status: error?.response?.status || null,
+            statusText: error?.response?.statusText || '',
+            responseBody: (() => { try { const s = typeof error?.response?.data === 'string' ? error.response.data : JSON.stringify(error?.response?.data); return s && s.length > 1200 ? s.slice(0, 1200) + '...' : s; } catch(e) { return String(error?.response?.data); } })(),
+            errorMessage: error?.message || ''
+        });
         return Promise.reject(error);
     }
 );
