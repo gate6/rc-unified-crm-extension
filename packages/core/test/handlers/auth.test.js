@@ -891,8 +891,9 @@ describe('Auth Handler', () => {
       // Act
       await authHandler.onOAuthCallback(requestData);
 
-      // Assert
-      expect(mockConnector.getOverridingOAuthOption).toHaveBeenCalledWith({ code: 'code123' });
+      // Assert — getOverridingOAuthOption receives the resolved oauthInfo so connectors
+      // (e.g. Monday) can build the token-exchange request from the managed credentials.
+      expect(mockConnector.getOverridingOAuthOption).toHaveBeenCalledWith({ code: 'code123', oauthInfo: { clientId: 'id', clientSecret: 'secret' } });
       expect(mockOAuthApp.code.getToken).toHaveBeenCalledWith(
         expect.any(String),
         overridingOption

@@ -18,6 +18,9 @@ const SERVICE_TITAN_CRM_URL= "https://api-integration.servicetitan.io/crm/v2/ten
 
 const serviceTitanApiClient = axios.create();
 
+const licenseHelper = require('../shared/license');
+const apiLog = require('../shared/apiLogger');
+
 function stringifyForLog(value, maxLength = 1200) {
     try {
         const str = typeof value === 'string' ? value : JSON.stringify(value);
@@ -27,94 +30,14 @@ function stringifyForLog(value, maxLength = 1200) {
     }
 }
 
-serviceTitanApiClient.interceptors.response.use(
-    (response) => response,
-    (error) => {
-        console.error('[ServiceTitan][apiError]', {
-            method: error?.config?.method || '',
-            url: error?.config?.url || '',
-            status: error?.response?.status || null,
-            statusText: error?.response?.statusText || '',
-            responseBody: stringifyForLog(error?.response?.data),
-            errorMessage: error?.message || ''
-        });
-        return Promise.reject(error);
-    }
-);
+apiLog.installErrorInterceptor(serviceTitanApiClient, 'ServiceTitan');
 
 async function getLicenseStatus({ userId }) {
-  try {
-    if (!models) {
-      return { isLicenseValid: false, licenseStatus: 'DB not configured', licenseStatusDescription: '' };
-    }
-    const user = await UserModel.findByPk(userId);
-    if (!user) {
-      return {
-        isLicenseValid: false,
-        licenseStatus: "User Not Found",
-        licenseStatusDescription: ""
-      };
-    }
-
-    const company = await models.companies.findOne({
-      where: {
-        hostname: user.hostname
-      },
-      raw: true
-    });
-
-    if (!company || company.status !== true) {
-      return {
-        isLicenseValid: false,
-        licenseStatus: "Inactive",
-        licenseStatusDescription: "Purchase license to continue"
-      };
-    }
-
-    return {
-      isLicenseValid: true,
-      licenseStatus: "Active",
-      licenseStatusDescription: "Basic"
-    };
-
-  } catch (error) {
-    console.error("getLicenseStatus error:", error);
-
-    return {
-      isLicenseValid: false,
-      licenseStatus: "Error",
-      licenseStatusDescription: "Error validating license"
-    };
-  }
+  return licenseHelper.getLicenseStatus({ models, userId });
 }
 
 async function validateLicenseOrFail(user) {
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-  if (!licenseStatus.isLicenseValid) {
-    return {
-      successful: false,
-      returnMessage: {
-        message: 'License validation failed',
-        messageType: 'error',
-        details: [
-          {
-            title: 'License Issue',
-            items: [
-              {
-                id: '1',
-                type: 'text',
-                text: 'Please go to user settings page and refresh license status'
-              }
-            ]
-          }
-        ],
-        ttl: 5000
-      }
-    };
-  }
-
-  return null; 
+  return licenseHelper.validateLicenseOrFail({ models, user });
 }
 
 function getAuthType() {
@@ -125,8 +48,11 @@ function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}`).toString('base64');
 }
 
-async function getUserInfo({ hostname, additionalInfo }) {
-    const { email, clientId, clientSecret, tenantId, appKey: stAppKey } = additionalInfo ?? {};
+async function getUserInfo({ additionalInfo }) {
+    // RC identity arrives via the manifest's rcAdditionalSubmission (auto-pulled from RC
+    // cached data — no user prompt, no framework change). ServiceTitan API auth is
+    // app-level (client_credentials); the email field has been removed.
+    const { clientId, clientSecret, tenantId, appKey: stAppKey, rcAccountId, rcExtensionId, rcUserName, rcUserEmail } = additionalInfo ?? {};
 
     if (!clientId || !clientSecret || !tenantId || !stAppKey) {
         return {
@@ -139,15 +65,48 @@ async function getUserInfo({ hostname, additionalInfo }) {
         };
     }
 
+    // ServiceTitan auth is app-level (client_credentials) — there is no per-user CRM
+    // credential. We identify the connected user by their RC identity (one record/seat
+    // per RC user) and label them with their RC display name. No email prompt needed.
+    //
+    // Per-user uniqueness: the extension id is preferred, but only when it's genuinely
+    // distinct from the account id — observed RC cached data can surface the same number
+    // for both (extensionInfo.id == account.id), which would collapse every user onto one
+    // record/seat. In that case (or when the extension id is missing) we key on the email,
+    // which is reliably per-user (this is what the original email-based id used).
+    const emailKey = rcUserEmail ? rcUserEmail.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : '';
+    const perUserKey =
+        (rcExtensionId && String(rcExtensionId) !== String(rcAccountId)) ? String(rcExtensionId)
+        : (emailKey || (rcExtensionId ? String(rcExtensionId) : ''));
+    const userId = (rcAccountId && perUserKey)
+        ? `st-user-${rcAccountId}-${perUserKey}`
+        : `st-user-${rcAccountId || 'noacct'}-${perUserKey || 'unknown'}`;
+    const displayName = rcUserName || rcUserEmail || 'ServiceTitan User';
+
+    // Always log the resolved RC identity (no secrets) so the per-user key can be verified.
+    console.log('[ServiceTitan][getUserInfo] RC identity', {
+        additionalInfoKeys: Object.keys(additionalInfo ?? {}),
+        rcAccountId,
+        rcExtensionId,
+        extIdSameAsAccount: !!(rcExtensionId && String(rcExtensionId) === String(rcAccountId)),
+        hasRcUserName: !!rcUserName,
+        hasRcUserEmail: !!rcUserEmail,
+        userId
+    });
+
+    apiLog.logStart('ServiceTitan', 'getUserInfo', { userId, tenantId, rcAccountId });
+
     try {
         const accessToken = await generateServiceTitanToken(clientId, clientSecret);
+
+        apiLog.logSuccess('ServiceTitan', 'getUserInfo', { userId, tenantId, apiEndpoint: process.env.SERVICETITAN_ACCESS_TOKEN_URI });
 
         return {
             successful: true,
             platformUserInfo: {
-                id: `st-user-${email}`,
-                name: email,
-                email,
+                id: userId,
+                name: displayName,
+                email: rcUserEmail || '',
                 overridingApiKey: accessToken,
                 platformAdditionalInfo: {
                     client_id: clientId,
@@ -181,7 +140,7 @@ async function generateServiceTitanToken(clientId, clientSecret) {
     const authRes = await serviceTitanApiClient.post(
         tokenUrl,
         qs.stringify(tokenPayload),
-        { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+        { headers: { "Content-Type": "application/x-www-form-urlencoded" }, _operation: 'generateServiceTitanToken' }
     );
 
     return authRes.data.access_token;
@@ -191,6 +150,7 @@ async function unAuthorize({ user }) {
     user.accessToken = '';
     user.refreshToken = '';
     await user.save();
+    licenseHelper.clearLicenseCache(user.id ?? user.dataValues?.id);
     return {
         returnMessage: {
             messageType: 'success',
@@ -201,8 +161,10 @@ async function unAuthorize({ user }) {
 }
 
 async function findContact({ user, phoneNumber, isExtension }) {
-    // const licenseError = await validateLicenseOrFail(user);
-    // if (licenseError) return licenseError;
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceTitan', 'findContact', { phoneNumber, isExtension });
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -219,13 +181,15 @@ async function findContact({ user, phoneNumber, isExtension }) {
     if (phoneNumberObj.valid) {
         phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
     }
+    const findContactUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}`;
     const personInfo = await serviceTitanApiClient.get(
-        `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}`,
+        findContactUrl,
         {
             headers: {
                 'Authorization': `Bearer ${auth}`,
                 'ST-App-Key': user.dataValues.platformAdditionalInfo.st_app_key
-            }
+            },
+            _operation: 'findContact'
         });
 
     if (personInfo.data && personInfo.data.data) {
@@ -258,6 +222,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
         name: 'Create new contact...',
         isNewContact: true
     });
+    apiLog.logSuccess('ServiceTitan', 'findContact', { phoneNumber, matchedCount: matchedContactInfo.length, apiEndpoint: findContactUrl });
     return {
         successful: true,
         matchedContactInfo
@@ -279,14 +244,18 @@ async function findContactWithName({ user, name }) {
         };
     }
 
+    apiLog.logStart('ServiceTitan', 'findContactWithName', { name });
+
     try {
+        const findContactWithNameUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?name=${name}`;
         const personInfo = await serviceTitanApiClient.get(
-            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?name=${name}`,
+            findContactWithNameUrl,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
                     'ST-App-Key': stAppKey
-                }
+                },
+                _operation: 'findContactWithName'
             }
         );
 
@@ -297,6 +266,7 @@ async function findContactWithName({ user, name }) {
                 matchedContactInfo.push(formatContact(rawPersonInfo));
             }
         }
+        apiLog.logSuccess('ServiceTitan', 'findContactWithName', { name, matchedCount: matchedContactInfo.length, apiEndpoint: findContactWithNameUrl });
         return {
             successful: true,
             matchedContactInfo
@@ -314,6 +284,8 @@ async function findContactWithName({ user, name }) {
 async function createContact({ user, phoneNumber, newContactName }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceTitan', 'createContact', { phoneNumber, newContactName });
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -365,8 +337,9 @@ async function createContact({ user, phoneNumber, newContactName }) {
             ],
         };
 
+        const createContactUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers`;
         const response = await serviceTitanApiClient.post(
-            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers`,
+            createContactUrl,
             payload,
             {
                 headers: {
@@ -374,10 +347,13 @@ async function createContact({ user, phoneNumber, newContactName }) {
                     'ST-App-Key': stAppKey,
                     'Content-Type': 'application/json',
                 },
+                _operation: 'createContact'
             }
         );
 
         const createdContact = response.data;
+
+        apiLog.logSuccess('ServiceTitan', 'createContact', { contactId: createdContact.id, apiEndpoint: createContactUrl });
 
         return {
             contactInfo: {
@@ -404,18 +380,22 @@ async function createContact({ user, phoneNumber, newContactName }) {
 }
 
 async function getUserList({ user, authHeader }) {
+    apiLog.logStart('ServiceTitan', 'getUserList', {});
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     try {
+        const getUserListUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers`;
         const userListResp = await serviceTitanApiClient.get(
-            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers`,
+            getUserListUrl,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
                     'ST-App-Key': stAppKey
-                }
+                },
+                _operation: 'getUserList'
             }
         );
 
@@ -423,6 +403,8 @@ async function getUserList({ user, authHeader }) {
             id: employee.id,
             name: employee.name
         })) || [];
+
+        apiLog.logSuccess('ServiceTitan', 'getUserList', { count: userList.length, apiEndpoint: getUserListUrl });
 
         return userList;
     } catch (error) {
@@ -433,22 +415,28 @@ async function getUserList({ user, authHeader }) {
 
 async function fetchJobs({ user, params = {} }) {
     try {
+        apiLog.logStart('ServiceTitan', 'fetchJobs', { customerId: params?.customerId });
+
         const auth = await getRefreshedAuthToken(user);
         const tenantId = user.dataValues.platformAdditionalInfo.tenant;
         const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
+        const fetchJobsUrl = `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`;
         const resp = await serviceTitanApiClient.get(
-            `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`,
+            fetchJobsUrl,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
                     'ST-App-Key': stAppKey
-                }
+                },
+                _operation: 'fetchJobs'
             }
         );
 
         // ServiceTitan responses typically put results under `data` key
-        return resp.data?.data || [];
+        const jobs = resp.data?.data || [];
+        apiLog.logSuccess('ServiceTitan', 'fetchJobs', { customerId: params?.customerId, count: jobs.length, apiEndpoint: fetchJobsUrl });
+        return jobs;
     } catch (err) {
         console.error('fetchJobs error:', err?.response?.data, err?.response, err);
         return [];
@@ -459,6 +447,8 @@ async function fetchJobs({ user, params = {} }) {
 async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceTitan', 'createCallLog', { contactId: contactInfo?.id, direction: callLog?.direction, duration: callLog?.duration });
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -514,18 +504,21 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
     let addNoteRes;
     let logType = "note";
+    let createCallLogUrl;
 
     if (!jobs || jobs.length === 0) {
 
+        createCallLogUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}/notes`;
         addNoteRes = await serviceTitanApiClient.post(
-            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}/notes`,
+            createCallLogUrl,
             { text: noteText },
             {
                 headers: {
                     Authorization: `Bearer ${auth}`,
                     "ST-App-Key": stAppKey,
                     "Content-Type": "application/json"
-                }
+                },
+                _operation: 'createCallLog'
             }
         );
 
@@ -533,23 +526,28 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
         const latestJob = jobs.reduce((max, job) => job.id > max.id ? job : max);
 
+        createCallLogUrl = `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${latestJob.id}`;
         addNoteRes = await serviceTitanApiClient.patch(
-            `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${latestJob.id}`,
+            createCallLogUrl,
             { summary: noteText },
             {
                 headers: {
                     Authorization: `Bearer ${auth}`,
                     "ST-App-Key": stAppKey,
                     "Content-Type": "application/json"
-                }
+                },
+                _operation: 'createCallLog'
             }
         );
 
         logType = "job";
     }
 
+    const logId = `${addNoteRes.data.id}_${logType}`;
+    apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, contactId: contactInfo.id, apiEndpoint: createCallLogUrl });
+
     return {
-        logId: `${addNoteRes.data.id}_${logType}`,
+        logId,
         contactId: contactInfo.id,
         returnMessage: {
             message: "Call log created",
@@ -563,6 +561,8 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNote, transcript, subject }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceTitan', 'updateCallLog', { logId: existingCallLog?.thirdPartyLogId, contactId: existingCallLog?.contactId });
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -589,7 +589,8 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
                 headers: {
                     Authorization: `Bearer ${auth}`,
                     "ST-App-Key": stAppKey
-                }
+                },
+                _operation: 'updateCallLog'
             }
         );
 
@@ -605,7 +606,8 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
                 headers: {
                     Authorization: `Bearer ${auth}`,
                     "ST-App-Key": stAppKey
-                }
+                },
+                _operation: 'updateCallLog'
             }
         );
 
@@ -685,7 +687,8 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
                     Authorization: `Bearer ${auth}`,
                     "ST-App-Key": stAppKey,
                     "Content-Type": "application/json"
-                }
+                },
+                _operation: 'updateCallLog'
             }
         );
 
@@ -704,7 +707,8 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
                     Authorization: `Bearer ${auth}`,
                     "ST-App-Key": stAppKey,
                     "Content-Type": "application/json"
-                }
+                },
+                _operation: 'updateCallLog'
             }
         );
 
@@ -722,6 +726,8 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         logID_db.thirdPartyLogId = newLogId;
         await logID_db.save();
     }
+
+    apiLog.logSuccess('ServiceTitan', 'updateCallLog', { logId: newLogId, contactId });
 
     return {
         logId: newLogId,
@@ -746,6 +752,8 @@ async function upsertCallDisposition({ user, existingCallLog, authHeader, dispos
 async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceTitan', 'createMessageLog', { contactId: contactInfo?.id, direction: message?.direction });
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -791,17 +799,21 @@ ${faxDocLink}
 `.trim();
     }
 
+    const createMessageLogUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`;
     const addLogRes = await serviceTitanApiClient.post(
-        `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
+        createMessageLogUrl,
         { text: noteText },
         {
             headers: {
                 Authorization: `Bearer ${auth}`,
                 "ST-App-Key": stAppKey,
                 "Content-Type": "application/json"
-            }
+            },
+            _operation: 'createMessageLog'
         }
     );
+
+    apiLog.logSuccess('ServiceTitan', 'createMessageLog', { logId: addLogRes.data.id, contactId, apiEndpoint: createMessageLogUrl });
 
     return {
         logId: addLogRes.data.id,
@@ -817,6 +829,8 @@ ${faxDocLink}
 async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceTitan', 'updateMessageLog', { contactId: contactInfo?.id, logId: existingMessageLog?.thirdPartyLogId, direction: message?.direction });
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -838,7 +852,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
                 headers: {
                     Authorization: `Bearer ${auth}`,
                     "ST-App-Key": stAppKey
-                }
+                },
+                _operation: 'updateMessageLog'
             }
         );
 
@@ -913,15 +928,17 @@ ${faxDocLink}
 `.trim();
     }
 
+    const updateMessageLogUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`;
     const addLogRes = await serviceTitanApiClient.post(
-        `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
+        updateMessageLogUrl,
         { text: noteText },
         {
             headers: {
                 Authorization: `Bearer ${auth}`,
                 "ST-App-Key": stAppKey,
                 "Content-Type": "application/json"
-            }
+            },
+            _operation: 'updateMessageLog'
         }
     );
 
@@ -936,6 +953,8 @@ ${faxDocLink}
         await messageLogID_db.save();
     }
 
+    apiLog.logSuccess('ServiceTitan', 'updateMessageLog', { logId: addLogRes.data.id, contactId, apiEndpoint: updateMessageLogUrl });
+
     return {
         logId: addLogRes.data.id,
         returnMessage: {
@@ -948,6 +967,8 @@ ${faxDocLink}
 async function getCallLog({ user, callLogId }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceTitan', 'getCallLog', { logId: callLogId });
 
     const [realId, logType = "note"] = callLogId.split("_");
 
@@ -970,7 +991,8 @@ async function getCallLog({ user, callLogId }) {
                     headers: {
                         Authorization: `Bearer ${auth}`,
                         "ST-App-Key": stAppKey
-                    }
+                    },
+                    _operation: 'getCallLog'
                 }
             );
 
@@ -1021,7 +1043,8 @@ async function getCallLog({ user, callLogId }) {
                     headers: {
                         Authorization: `Bearer ${auth}`,
                         "ST-App-Key": stAppKey
-                    }
+                    },
+                    _operation: 'getCallLog'
                 }
             );
 
@@ -1057,6 +1080,8 @@ async function getCallLog({ user, callLogId }) {
         );
 
     }
+
+    apiLog.logSuccess('ServiceTitan', 'getCallLog', { logId: callLogId, logType });
 
     return {
         callLogInfo: {
@@ -1099,7 +1124,8 @@ async function getRefreshedAuthToken(user) {
         {
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded'
-            }
+            },
+            _operation: 'getRefreshedAuthToken'
         }
     );
 

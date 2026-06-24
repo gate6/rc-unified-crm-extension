@@ -1,30 +1,9 @@
 const axios = require('axios');
 const moment = require('moment');
+const apiLog = require('../shared/apiLogger');
 const serviceNowApiClient = axios.create();
 
-function stringifyForLog(value, maxLength = 1200) {
-    try {
-        const str = typeof value === 'string' ? value : JSON.stringify(value);
-        return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
-    } catch (error) {
-        return String(value);
-    }
-}
-
-serviceNowApiClient.interceptors.response.use(
-    (response) => response,
-    (error) => {
-        console.error('[ServiceNow][interaction][apiError]', {
-            method: error?.config?.method || '',
-            url: error?.config?.url || '',
-            status: error?.response?.status || null,
-            statusText: error?.response?.statusText || '',
-            responseBody: stringifyForLog(error?.response?.data),
-            errorMessage: error?.message || ''
-        });
-        return Promise.reject(error);
-    }
-);
+apiLog.installErrorInterceptor(serviceNowApiClient, 'ServiceNow');
 
 const stateMapping = {
     // "wrap up": "wrap_up",
@@ -65,7 +44,7 @@ async function fetchChoices(hostname, authHeader, element) {
     const response = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=${element}&sysparm_fields=label,value&sysparm_limit=500`,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader }, _operation: 'fetchChoices'
         }
     );
 
@@ -146,7 +125,7 @@ async function findStateValueById(hostname, authHeader, inputId){
         const stateSelection = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state^sys_id=${inputId}&sysparm_fields=sys_id,label,value`,
             {
-                headers: { 'Authorization':  authHeader }
+                headers: { 'Authorization':  authHeader }, _operation: 'findStateValueById'
             });
         
         if (stateSelection.data && stateSelection.data.result && stateSelection.data.result.length > 0) {
@@ -204,7 +183,7 @@ async function findTypeValueById(hostname, authHeader, inputId) {
         const typeSelection = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type^sys_id=${inputId}&sysparm_fields=sys_id,label,value`,
             {
-                headers: { 'Authorization': authHeader }
+                headers: { 'Authorization': authHeader }, _operation: 'findTypeValueById'
             });
         
         if (typeSelection.data && typeSelection.data.result && typeSelection.data.result.length > 0) {
@@ -230,7 +209,7 @@ async function getAllAccounts(hostname, authHeader) {
     try {
         const response = await serviceNowApiClient.get(
             `https://${hostname}/api/now/account?sysparm_limit=1000`,
-            { headers: { Authorization: authHeader } }
+            { headers: { Authorization: authHeader }, _operation: 'getAllAccounts' }
         );
         const data = response.data?.result || [];
         accountCache.set(hostname, { data, expiresAt: Date.now() + ACCOUNT_CACHE_TTL_MS });

@@ -33,19 +33,13 @@
                         "content": [
                             {
                                 "const": "description",
-                                "description": "Please enter your Service Titan email below to connect.",
+                                "description": "ServiceTitan connects using credentials configured by your admin. Click Connect to continue.",
                                 "type": "string",
                                 "uiSchema": {
                                     "ui:field": "typography",
                                     "ui:variant": "body2",
                                     "ui:align": "center"
                                 }
-                            },
-                            {
-                                "const": "email",
-                                "title": "Email",
-                                "type": "string",
-                                "required": true
                             },
                             {
                                 "const": "adminSetupNote",
@@ -194,6 +188,22 @@
                 {
                     "id": "departmentName",
                     "path": "cachedData.extensionInfo.contact.department"
+                },
+                {
+                    "id": "rcAccountId",
+                    "path": "cachedData.extensionInfo.account.id"
+                },
+                {
+                    "id": "rcExtensionId",
+                    "path": "cachedData.extensionInfo.id"
+                },
+                {
+                    "id": "rcUserName",
+                    "path": "cachedData.extensionInfo.name"
+                },
+                {
+                    "id": "rcUserEmail",
+                    "path": "cachedData.extensionInfo.contact.email"
                 }
             ]
         }
