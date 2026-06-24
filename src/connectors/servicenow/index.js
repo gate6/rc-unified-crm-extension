@@ -11,6 +11,7 @@ const Sequelize = require('sequelize');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { raw } = require('mysql2');
 const models = sequelize ? initModels(sequelize) : null;
+const licenseHelper = require('../shared/license');
 const { secondsToHoursMinutesSeconds } = require('@app-connect/core/lib/util');
 const fs = require("fs");
 const path = require("path");
@@ -18,6 +19,7 @@ const FormData = require("form-data");
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
+const apiLog = require('../shared/apiLogger');
 const serviceNowApiClient = axios.create();
 
 function stringifyForLog(value, maxLength = 1200) {
@@ -29,94 +31,14 @@ function stringifyForLog(value, maxLength = 1200) {
     }
 }
 
-serviceNowApiClient.interceptors.response.use(
-    (response) => response,
-    (error) => {
-        console.error('[ServiceNow][apiError]', {
-            method: error?.config?.method || '',
-            url: error?.config?.url || '',
-            status: error?.response?.status || null,
-            statusText: error?.response?.statusText || '',
-            responseBody: stringifyForLog(error?.response?.data),
-            errorMessage: error?.message || ''
-        });
-        return Promise.reject(error);
-    }
-);
+apiLog.installErrorInterceptor(serviceNowApiClient, 'ServiceNow');
 
 async function getLicenseStatus({ userId }) {
-    try {
-        if (!models) {
-            return { isLicenseValid: false, licenseStatus: 'DB not configured', licenseStatusDescription: '' };
-        }
-        const user = await UserModel.findByPk(userId);
-        if (!user) {
-            return {
-                isLicenseValid: false,
-                licenseStatus: "User Not Found",
-                licenseStatusDescription: ""
-            };
-        }
-
-        const company = await models.companies.findOne({
-            where: {
-                hostname: user.hostname,
-                rcAccountId: user.rcAccountId
-            }
-        });
-
-        if (!company || company.status !== true) {
-            return {
-                isLicenseValid: false,
-                licenseStatus: "Inactive",
-                licenseStatusDescription: "Purchase license to continue"
-            };
-        }
-
-        return {
-            isLicenseValid: true,
-            licenseStatus: "Active",
-            licenseStatusDescription: "Basic"
-        };
-
-    } catch (error) {
-        console.error("getLicenseStatus error:", error);
-
-        return {
-            isLicenseValid: false,
-            licenseStatus: "Error",
-            licenseStatusDescription: "Error validating license"
-        };
-    }
+    return licenseHelper.getLicenseStatus({ models, userId });
 }
 
 async function validateLicenseOrFail(user) {
-    const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-    if (!licenseStatus.isLicenseValid) {
-        return {
-            successful: false,
-            returnMessage: {
-                message: 'License validation failed',
-                messageType: 'error',
-                details: [
-                    {
-                        title: 'License Issue',
-                        items: [
-                            {
-                                id: '1',
-                                type: 'text',
-                                text: 'Please go to user settings page and refresh license status'
-                            }
-                        ]
-                    }
-                ],
-                ttl: 5000
-            }
-        };
-    }
-
-    return null; 
+    return licenseHelper.validateLicenseOrFail({ models, user });
 }
 
 //function to generate aplhanumeric string for admin login sysid
@@ -169,11 +91,15 @@ async function getOauthInfo(requestData) {
     };
 }
 
-async function getUserInfo({ authHeader, hostname }) {
+async function getUserInfo({ authHeader, hostname, query }) {
+    // OAuth callback already provides `query` with rcAccountId — no framework change needed.
+    const rcAccountId = query?.rcAccountId;
     try {
+        apiLog.logStart('ServiceNow', 'getUserInfo', { hostname, rcAccountId });
+        const userInfoUrl = `https://${hostname}/api/now/table/sys_user?sysparm_query=user_name=javascript:gs.getUserName()&sysparm_fields=sys_id,email,user_name,first_name,last_name,time_zone,time_zone_offset&sysparm_limit=1`;
         const userInfoResponse = await serviceNowApiClient.get(
-            `https://${hostname}/api/now/table/sys_user?sysparm_query=user_name=javascript:gs.getUserName()&sysparm_fields=sys_id,email,user_name,first_name,last_name,time_zone,time_zone_offset&sysparm_limit=1`,
-            { headers: { Authorization: authHeader } }
+            userInfoUrl,
+            { headers: { Authorization: authHeader }, _operation: 'getUserInfo' }
         );
 
         const result = userInfoResponse.data?.result?.[0];
@@ -194,6 +120,16 @@ async function getUserInfo({ authHeader, hostname }) {
             id = generateAlphanumericString(id.length);
         }
 
+        // Tenant-scope the id so the same ServiceNow user under different RC accounts
+        // never collides (multi-tenant isolation + per-tenant seat counting).
+        if (!rcAccountId) {
+            console.warn('[ServiceNow][getUserInfo] missing rcAccountId — falling back to non-tenant-scoped id');
+        }
+        if (rcAccountId) {
+            id = `snow-${rcAccountId}-${id}`;
+        }
+
+        apiLog.logSuccess('ServiceNow', 'getUserInfo', { contactId: id, apiEndpoint: userInfoUrl });
         return {
             successful: true,
             platformUserInfo: {
@@ -229,7 +165,9 @@ async function unAuthorize({ user }) {
     //     {
     //         headers: { 'Authorization': `Basic ${getBasicAuth({ apiKey: user.accessToken })}` }
     //     });
+    const removedUserId = user.id ?? user.dataValues?.id;
     await user.destroy();
+    licenseHelper.clearLicenseCache(removedUserId);
     return {
         returnMessage: {
             messageType: 'success',
@@ -310,6 +248,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
+    apiLog.logStart('ServiceNow', 'findContact', { phoneNumber, isExtension });
+
     console.log("authHeader", authHeader)
     let numberToQueryArray = [];
 
@@ -337,7 +277,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     try {
         const stateSelection = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
-            { headers: { 'Authorization': authHeader } }
+            { headers: { 'Authorization': authHeader }, _operation: 'findContact' }
         );
         states = stateSelection.data.result.length > 0 ? stateSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : [];
     } catch (err) {
@@ -346,7 +286,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     try {
         const typeSelection = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
-            { headers: { 'Authorization': authHeader } }
+            { headers: { 'Authorization': authHeader }, _operation: 'findContact' }
         );
         interactionType = typeSelection.data.result.length > 0 ? typeSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : [];
     } catch (err) {
@@ -386,7 +326,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         const personInfo = await serviceNowApiClient.get(
             `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}^ORmobile_phoneLIKE${numberToQuery}`,
             {
-                headers: { 'Authorization':  authHeader }
+                headers: { 'Authorization':  authHeader }, _operation: 'findContact'
             });
 
         if (personInfo.data.result.length > 0) {
@@ -405,7 +345,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         if (fallbackQuery) {
             const fallbackRes = await serviceNowApiClient.get(
                 `https://${hostname}/api/now/${contactTable}?sysparm_query=${encodeURIComponent(fallbackQuery)}&sysparm_limit=200`,
-                { headers: { 'Authorization': authHeader } }
+                { headers: { 'Authorization': authHeader }, _operation: 'findContact' }
             );
 
             for (const result of (fallbackRes.data?.result || [])) {
@@ -420,7 +360,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         if (matchedContactInfo.length === 0) {
             const broadRes = await serviceNowApiClient.get(
                 `https://${hostname}/api/now/${contactTable}?sysparm_query=${encodeURIComponent('phoneISNOTEMPTY^ORmobile_phoneISNOTEMPTY')}&sysparm_fields=sys_id,user_name,name,phone,mobile_phone&sysparm_limit=1000`,
-                { headers: { 'Authorization': authHeader } }
+                { headers: { 'Authorization': authHeader }, _operation: 'findContact' }
             );
 
             for (const result of (broadRes.data?.result || [])) {
@@ -469,6 +409,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     //-----------------------------------------------------
     //---CHECK.3: In console, if contact info is printed---
     //-----------------------------------------------------
+    apiLog.logSuccess('ServiceNow', 'findContact', { phoneNumber, matchedCount: matchedContactInfo.length, apiEndpoint: `https://${hostname}/api/now/${contactTable}` });
     return {
         successful: true,
         matchedContactInfo
@@ -481,6 +422,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ------------------------------------
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceNow', 'createCallLog', { contactId: contactInfo?.id, direction: callLog?.direction, duration: callLog?.duration });
 
     let subject =
         (user.userSettings?.addCallLogSubject?.value ?? true)
@@ -536,7 +479,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const caller_id = await serviceNowApiClient.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
-        }
+        },
+        _operation: 'createCallLog'
     });
 
     // const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
@@ -559,7 +503,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         }
         const existing = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/interaction?sysparm_query=${encodeURIComponent(queryParts.join('^'))}&sysparm_fields=sys_id,short_description,opened_for,sys_created_on&sysparm_limit=1`,
-            { headers: { 'Authorization': authHeader } }
+            { headers: { 'Authorization': authHeader }, _operation: 'createCallLog' }
         );
         if (existing.data?.result?.length > 0) {
             const existingLog = existing.data.result[0];
@@ -570,6 +514,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             const isRecent = Number.isFinite(existingCreatedAt) && (Date.now() - existingCreatedAt) <= 10 * 60 * 1000;
 
             if (isSameContact && isSameSubject && isRecent) {
+                apiLog.logSuccess('ServiceNow', 'createCallLog', { logId: existingLog.sys_id, contactId: contactInfo?.id, deduped: true, apiEndpoint: `https://${hostname}/api/now/table/interaction` });
                 return {
                     logId: existingLog.sys_id,
                     returnMessage: { message: 'Call log already exists.', messageType: 'warning', ttl: 3000 }
@@ -610,10 +555,10 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         `https://${hostname}/api/now/table/interaction`,
         postBody,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader }, _operation: 'createCallLog'
         }
     );
-    
+
     if (callLog?.recording?.downloadUrl) {
         const timestamp = moment().format("DD-MM-YYYY_HH_MM_SS");
         const fileName = `downloaded_audio_${timestamp}`;
@@ -625,6 +570,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     //----------------------------------------------------------------------------
     //---CHECK.4: Open db.sqlite and CRM website to check if call log is saved ---
     //----------------------------------------------------------------------------
+    apiLog.logSuccess('ServiceNow', 'createCallLog', { logId: addLogRes.data.result.sys_id, contactId: contactInfo?.id, apiEndpoint: `https://${hostname}/api/now/table/interaction` });
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
@@ -728,6 +674,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
+    apiLog.logStart('ServiceNow', 'getCallLog', { logId: callLogId });
+
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
@@ -735,13 +683,13 @@ async function getCallLog({ user, callLogId, authHeader }) {
     const getLogRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/interaction/${callLogId}`,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader }, _operation: 'getCallLog'
         });
-    
+
     const journalRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/sys_journal_field?sysparm_query=element_id=${callLogId}^element=work_notes&sysparm_fields=value,sys_created_on`,
         {
-            headers: { Authorization: authHeader }
+            headers: { Authorization: authHeader }, _operation: 'getCallLog'
         });
     
     const latestNote = journalRes.data.result
@@ -752,6 +700,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     //-------------------------------------------------------------------------------------
     //---CHECK.5: In extension, for a logged call, click edit to see if info is fetched ---
     //-------------------------------------------------------------------------------------
+    apiLog.logSuccess('ServiceNow', 'getCallLog', { logId: callLogId, apiEndpoint: `https://${hostname}/api/now/table/interaction/${callLogId}` });
     return {
         callLogInfo: {
             subject: getLogRes.data.result.short_description,
@@ -772,6 +721,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
+    apiLog.logStart('ServiceNow', 'updateCallLog', { logId: existingCallLog?.thirdPartyLogId, duration });
+
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
@@ -780,7 +731,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const getLogRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader }, _operation: 'updateCallLog'
         });
     const originalNote = getLogRes?.data?.result?.work_notes ?? '';
     const originalSubject = getLogRes?.data?.result?.short_description || '';
@@ -811,7 +762,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader }, _operation: 'updateCallLog'
         }
     );
 
@@ -833,6 +784,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     //-----------------------------------------------------------------------------------------
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
     //-----------------------------------------------------------------------------------------
+    apiLog.logSuccess('ServiceNow', 'updateCallLog', { logId: existingLogId, apiEndpoint: `https://${hostname}/api/now/table/interaction/${existingLogId}` });
     return {
         updatedNote: note,
         returnMessage: {
@@ -849,6 +801,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---------------------------------------
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceNow', 'createMessageLog', { contactId: contactInfo?.id, direction: message?.direction });
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -882,7 +836,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const caller_id = await serviceNowApiClient.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
-        }
+        },
+        _operation: 'createMessageLog'
     });
 
     // detect message type (SMS / Voicemail / Fax)
@@ -923,7 +878,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         `https://${hostname}/api/now/table/interaction`,
         postBody,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader }, _operation: 'createMessageLog'
         });
 
     if (recordingLink || faxDocLink) {
@@ -934,20 +889,20 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             recordingLink
                 ? `Voicemail-${Date.now()}.mp3`
                 : `Fax-${Date.now()}.pdf`;
-                
+
         const s3Key = fileName;
 
         const s3Url = await downloadAudioFile(
-            downloadUrl, 
-            process.env.S3_BUCKET, 
+            downloadUrl,
+            process.env.S3_BUCKET,
             s3Key
         );
 
         await uploadToServiceNow(
-            s3Url, 
-            hostname, 
-            authHeader, 
-            addLogRes?.data?.result?.sys_id, 
+            s3Url,
+            hostname,
+            authHeader,
+            addLogRes?.data?.result?.sys_id,
             fileName
         );
     }
@@ -955,6 +910,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     //-------------------------------------------------------------------------------------------------------------
     //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
     //-------------------------------------------------------------------------------------------------------------
+    apiLog.logSuccess('ServiceNow', 'createMessageLog', { logId: addLogRes.data.result.sys_id, contactId: contactInfo?.id, apiEndpoint: `https://${hostname}/api/now/table/interaction` });
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
@@ -973,10 +929,12 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
+    apiLog.logStart('ServiceNow', 'updateMessageLog', { contactId: contactInfo?.id, logId: existingMessageLog?.thirdPartyLogId, direction: message?.direction });
+
     const userInfo = await getHostname(user.dataValues.hostname);
-    const instanceId = userInfo.instanceId; 
+    const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
-    
+
     const existingLogId = existingMessageLog.thirdPartyLogId;
 
     if (!existingLogId) {
@@ -992,7 +950,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
     const getLogRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
-        { headers: { 'Authorization': authHeader } }
+        { headers: { 'Authorization': authHeader }, _operation: 'updateMessageLog' }
     );
 
     let originalNote = getLogRes?.data?.result?.work_notes ?? '';
@@ -1030,7 +988,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader }, _operation: 'updateMessageLog'
         });
 
     if (recordingLink || faxDocLink) {
@@ -1062,6 +1020,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     //---------------------------------------------------------------------------------------------------------------------------------------------
     //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
     //---------------------------------------------------------------------------------------------------------------------------------------------
+    apiLog.logSuccess('ServiceNow', 'updateMessageLog', { logId: existingLogId, contactId: contactInfo?.id, apiEndpoint: `https://${hostname}/api/now/table/interaction/${existingLogId}` });
     return {
         logId: existingLogId,
         returnMessage: {
@@ -1078,6 +1037,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ----------------------------------------
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceNow', 'createContact', { phoneNumber, newContactType });
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -1096,6 +1057,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     }
 
     let contactInfoRes;
+    let createContactEndpoint;
     const isExtensionNumber = phoneNumber.toString().length <= 8 && phoneNumber.toString().length >= 3;
 
     if (companyData?.contactTable == 'contact' && !isExtensionNumber) {
@@ -1106,29 +1068,31 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
         } else {
             const account = await serviceNowApiClient.get(
             `https://${hostname}/api/now/account?sysparm_limit=1`,
-            { headers: { Authorization: authHeader } }
+            { headers: { Authorization: authHeader }, _operation: 'createContact' }
             );
             const fallbackAccountId = account?.data?.result?.[0]?.sys_id;
             if (fallbackAccountId) {
             postBody.account = fallbackAccountId;
             }
         }
-    
+
         postBody.name = newContactName?.toLowerCase();
+        createContactEndpoint = `https://${hostname}/api/now/contact`;
         contactInfoRes = await serviceNowApiClient.post(
-            `https://${hostname}/api/now/contact`,
+            createContactEndpoint,
             postBody,
             {
-                headers: { 'Authorization': authHeader }
+                headers: { 'Authorization': authHeader }, _operation: 'createContact'
             }
         );
     } else {
         postBody.user_name = newContactName?.toLowerCase();
+        createContactEndpoint = `https://${hostname}/api/now/table/sys_user`;
         contactInfoRes = await serviceNowApiClient.post(
-            `https://${hostname}/api/now/table/sys_user`,
+            createContactEndpoint,
             postBody,
             {
-                headers: { 'Authorization': authHeader }
+                headers: { 'Authorization': authHeader }, _operation: 'createContact'
             }
         );
     }
@@ -1136,6 +1100,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     //--------------------------------------------------------------------------------
     //---CHECK.9: In extension, try create a new contact against an unknown number ---
     //--------------------------------------------------------------------------------
+    apiLog.logSuccess('ServiceNow', 'createContact', { contactId: contactInfoRes.id, apiEndpoint: createContactEndpoint });
     return {
         contactInfo: {
             id: contactInfoRes.id,
@@ -1168,6 +1133,7 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
                 Authorization: `Bearer ${accessToken}`,
             },
             responseType: "stream",
+            _operation: 'downloadAudioFile',
         });
 
         // console.log("Downloading audio file...", response.data);
@@ -1208,6 +1174,7 @@ async function uploadToServiceNow(s3Url, hostname, accessToken, sys_id, fileName
                 "Authorization": accessToken,
                 ...formData.getHeaders(),
             },
+            _operation: 'uploadToServiceNow',
         });
 
         console.log("File uploaded to ServiceNow:", response.data);

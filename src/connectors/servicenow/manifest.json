@@ -26,7 +26,12 @@
                 "managed": true,
                 "oauth": {
                     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
-                    "scope": ""
+                    "customState": "platform=gate6.servicenow",
+                    "scope": "useraccount",
+                    "adminManaged": {
+                        "enabled": true,
+                        "setupNotes": "Admin setup: register an OAuth app in your ServiceNow instance (System OAuth > Application Registry > Create an OAuth API endpoint for external clients), then enter its credentials here. Use YOUR instance for the URIs: Authorization URI = https://YOUR-INSTANCE.service-now.com/oauth_auth.do | Access Token URI = https://YOUR-INSTANCE.service-now.com/oauth_token.do | Redirect URI = https://ringcentral.github.io/ringcentral-embeddable/redirect.html (also add this as the Redirect URL in your ServiceNow OAuth app) | Scopes = useraccount | Hostname = YOUR-INSTANCE.service-now.com. Stored once and shared across your organization."
+                    }
                 }
             },
             "canOpenLogPage": true,

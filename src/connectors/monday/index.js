@@ -10,10 +10,21 @@ const FormData = require('form-data')
 const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 
+const licenseHelper = require('../shared/license');
+const apiLog = require('../shared/apiLogger');
+
 const MONDAY_API_URL = process.env.MONDAY_API_URL;
 const columnIdCache = new Map();
+// Cache of discovered CRM boards (those with a Phone column) per connected user.
+const boardCache = new Map(); // userId -> { boards: [{ id, name, phoneColumnId }], expiry }
+const BOARD_CACHE_TTL_MS = 5 * 60 * 1000;
 
-const mondayApiClient = axios.create();
+// A per-request timeout so a slow/hanging Monday call fails fast instead of blocking
+// findContact (the contact-existence check) until the extension itself times out and
+// aborts the whole "create new contact + log" flow. On timeout the request rejects, the
+// caller's try/catch treats it as "no match", and the create prompt still appears.
+const MONDAY_REQUEST_TIMEOUT_MS = 12000;
+const mondayApiClient = axios.create({ timeout: MONDAY_REQUEST_TIMEOUT_MS });
 
 function stringifyForLog(value, maxLength = 1200) {
   try {
@@ -24,103 +35,103 @@ function stringifyForLog(value, maxLength = 1200) {
   }
 }
 
-mondayApiClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    console.error('[Monday][apiError]', {
-      method: error?.config?.method || '',
-      url: error?.config?.url || '',
-      status: error?.response?.status || null,
-      statusText: error?.response?.statusText || '',
-      responseBody: stringifyForLog(error?.response?.data),
-      errorMessage: error?.message || ''
-    });
-    return Promise.reject(error);
-  }
-);
+apiLog.installErrorInterceptor(mondayApiClient, 'Monday');
 
-async function getLicenseStatus({ userId }) {
-  try {
-    const user = await UserModel.findByPk(userId);
-    if (!user) {
-      return {
-        isLicenseValid: false,
-        licenseStatus: "User Not Found",
-        licenseStatusDescription: ""
-      };
-    }
-
-    const company = await getCompanyByHostname({
-      hostname: user.hostname,
-      rcAccountId: user.rcAccountId
-    });
-
-    if (!company || company.status !== true) {
-      return {
-        isLicenseValid: false,
-        licenseStatus: "Inactive",
-        licenseStatusDescription: "Purchase license to continue"
-      };
-    }
-
-    return {
-      isLicenseValid: true,
-      licenseStatus: "Active",
-      licenseStatusDescription: "Basic"
-    };
-
-  } catch (error) {
-    console.error("getLicenseStatus error:", error);
-
-    return {
-      isLicenseValid: false,
-      licenseStatus: "Error",
-      licenseStatusDescription: "Error validating license"
-    };
-  }
+// Normalize a hostname to the bare host the companies table stores:
+// strips scheme (http/https), any path/query, port, and trailing slash; lowercased.
+function normalizeHostname(raw) {
+  if (!raw) return raw;
+  let host = String(raw).trim();
+  host = host.replace(/^https?:\/\//i, '');   // drop scheme
+  host = host.split('/')[0];                   // drop path / trailing slash
+  host = host.split('?')[0];                   // drop query
+  host = host.split(':')[0];                   // drop port
+  return host.toLowerCase();
 }
 
-async function validateLicenseOrFail(user) {
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
+async function getLicenseStatus({ userId }) {
+  return licenseHelper.getLicenseStatus({ models, userId });
+}
 
-  if (!licenseStatus.isLicenseValid) {
-    return {
-      successful: false,
-      returnMessage: {
-        message: 'License validation failed',
-        messageType: 'error',
-        details: [
-          {
-            title: 'License Issue',
-            items: [
-              {
-                id: '1',
-                type: 'text',
-                text: 'Please go to user settings page and refresh license status'
-              }
-            ]
-          }
-        ],
-        ttl: 5000
-      }
-    };
-  }
+// `operation` is accepted for call-site compatibility (logged context); the shared
+// helper performs the actual license + seat check.
+async function validateLicenseOrFail(user, operation = 'unknown') { // eslint-disable-line no-unused-vars
+  return licenseHelper.validateLicenseOrFail({ models, user });
+}
 
-  return null; 
+let mondayApiCallCounter = 0;
+
+// Extract the GraphQL operation kind + first root field for concise logging.
+function describeGraphqlOperation(query) {
+  const text = String(query || '');
+  const kind = /\bmutation\b/.test(text) ? 'mutation' : 'query';
+  const fieldMatch = text.match(/\{\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
+  return `${kind} ${fieldMatch ? fieldMatch[1] : 'unknown'}`;
 }
 
 async function mondayRequest(accessToken, query, variables = {}) {
-  const res = await mondayApiClient.post(
-    MONDAY_API_URL,
-    { query, variables },
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
+  const reqId = ++mondayApiCallCounter;
+  const op = describeGraphqlOperation(query);
+  const startedAt = Date.now();
+  console.log('[Monday][api] →', { reqId, op, variables: stringifyForLog(variables, 600) });
+  try {
+    const res = await mondayApiClient.post(
+      MONDAY_API_URL,
+      { query, variables },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
       }
+    );
+    const ms = Date.now() - startedAt;
+    const body = res.data;
+    // Monday returns GraphQL errors with HTTP 200, so they bypass the axios
+    // interceptor — surface them explicitly here.
+    if (body?.errors?.length) {
+      console.error('[Monday][api] ✗ GraphQL error', {
+        reqId,
+        op,
+        ms,
+        errors: stringifyForLog(body.errors, 1000)
+      });
+    } else {
+      console.log('[Monday][api] ←', {
+        reqId,
+        op,
+        ms,
+        dataKeys: body?.data ? Object.keys(body.data) : []
+      });
     }
-  )
-  return res.data
+    return body;
+  } catch (err) {
+    const ms = Date.now() - startedAt;
+    console.error('[Monday][api] ✗ HTTP error', {
+      reqId,
+      op,
+      ms,
+      status: err?.response?.status || null,
+      message: err?.message || '',
+      responseBody: stringifyForLog(err?.response?.data, 1000)
+    });
+    throw err;
+  }
+}
+
+// Throw a descriptive error when a GraphQL response carried errors but the caller
+// expects data — keeps failures from surfacing as "Cannot read property of undefined".
+function assertNoGraphqlErrors(res, context) {
+  if (res?.errors?.length) {
+    const message = res.errors.map(e => e?.message).filter(Boolean).join('; ') || 'Unknown Monday GraphQL error';
+    throw new Error(`Monday ${context} failed: ${message}`);
+  }
+}
+
+// Monday update/item IDs are numeric. A non-numeric stored thirdPartyLogId (e.g. a
+// hash from a stale record) is invalid and must not be sent to the API.
+function isNumericMondayId(id) {
+  return id != null && /^\d+$/.test(String(id));
 }
 
 async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'Call Logs' }) {
@@ -315,7 +326,9 @@ async function getOauthInfo() {
   };
 }
 
-async function getUserInfo({ authHeader, hostname }) {
+async function getUserInfo({ authHeader, hostname, query }) {
+  // OAuth callback already provides `query` with rcAccountId — no framework change needed.
+  const rcAccountId = query?.rcAccountId;
   try {
     const accessToken = authHeader.replace('Bearer ', '');
     if (!accessToken) {
@@ -325,6 +338,7 @@ async function getUserInfo({ authHeader, hostname }) {
       };
     }
 
+    console.log('[Monday][api] → query me (getUserInfo)');
     const userDataResponse = await mondayApiClient.post(
       MONDAY_API_URL,
       { query: "query { me { id name email } }" },
@@ -337,6 +351,11 @@ async function getUserInfo({ authHeader, hostname }) {
     );
 
     const result = userDataResponse.data;
+    if (result?.errors?.length) {
+      console.error('[Monday][api] ✗ GraphQL error (getUserInfo me)', stringifyForLog(result.errors, 800));
+    } else {
+      console.log('[Monday][api] ← query me (getUserInfo)', { meId: result?.data?.me?.id });
+    }
     if (!result?.data?.me) {
       return {
         successful: false,
@@ -344,11 +363,33 @@ async function getUserInfo({ authHeader, hostname }) {
       };
     }
 
+    // Tenant-scope the user id so the same Monday user under different RC accounts
+    // never collides (multi-tenant isolation + per-tenant seat counting).
+    if (!rcAccountId) {
+      console.warn('[Monday][getUserInfo] missing rcAccountId — falling back to non-tenant-scoped id');
+    }
     const userData = {
-      id: result.data.me.id,
+      id: rcAccountId ? `monday-${rcAccountId}-${result.data.me.id}` : result.data.me.id,
       name: result.data.me.name,
       email: result.data.me.email
     };
+
+    // Normalize the hostname (admin may enter a full URL in the managed-OAuth form)
+    // so it is stored as a bare host — required for the license lookup and for the
+    // {hostname} URL templates to resolve correctly.
+    const cleanHostname = normalizeHostname(hostname);
+    console.log('[Monday][getUserInfo] hostname normalized', { rawHostname: hostname, cleanHostname });
+
+    // Discover the connector's single board once, at connect time, and store it so the
+    // rest of the system reuses it without re-discovering.
+    let boardId = null;
+    try {
+      const boards = await getCrmBoards({ accessToken, userId: null });
+      boardId = pickDefaultBoard(boards)?.id || null;
+      console.log('[Monday][getUserInfo] selected board', { boardId, discoveredBoardCount: boards.length });
+    } catch (e) {
+      console.warn('[Monday][getUserInfo] board discovery failed (will retry lazily):', e.message);
+    }
 
     return {
       successful: true,
@@ -357,7 +398,8 @@ async function getUserInfo({ authHeader, hostname }) {
         name: userData.name,
         email: userData.email,
         overridingApiKey: accessToken,
-        platformAdditionalInfo: {}
+        ...(cleanHostname ? { overridingHostname: cleanHostname } : {}),
+        platformAdditionalInfo: { ...(boardId ? { boardId } : {}) }
       },
       returnMessage: { messageType: 'success', message: 'Successfully connected to Monday.', ttl: 3000 }
     };
@@ -371,7 +413,15 @@ async function getUserInfo({ authHeader, hostname }) {
   }
 }
 
-async function unAuthorize() {
+async function unAuthorize({ user }) {
+  // Blank the token so the user no longer holds a license seat (seat counting keys on
+  // a non-empty accessToken). Mirrors the other connectors' disconnect behaviour.
+  if (user) {
+    user.accessToken = '';
+    user.refreshToken = '';
+    await user.save();
+    licenseHelper.clearLicenseCache(user.id ?? user.dataValues?.id);
+  }
   return {
     returnMessage: {
       messageType: 'success',
@@ -381,14 +431,100 @@ async function unAuthorize() {
   }
 }
 
-async function getCompanyByHostname({ hostname, rcAccountId }) {
-  if (!models) return null;
-  const where = { hostname };
-  if (rcAccountId) where.rcAccountId = rcAccountId;
+// Discover the CRM boards a connected user can access — any active board that has a
+// Phone column. Results are cached briefly per user to avoid repeated board lookups.
+async function getCrmBoards({ accessToken, userId }) {
+  const now = Date.now();
+  const cached = userId ? boardCache.get(userId) : null;
+  if (cached && cached.expiry > now) {
+    return cached.boards;
+  }
 
-  const company = await models.companies.findOne({ where, raw: true });
+  const res = await mondayRequest(
+    accessToken,
+    `
+    query {
+      boards(limit: 200, state: active) {
+        id
+        name
+        columns { id title type }
+      }
+    }
+    `
+  );
 
-  return company || null;
+  const rawBoards = res?.data?.boards || [];
+  const boards = rawBoards
+    .map(board => {
+      const columns = board.columns || [];
+      const phoneColumn = columns.find(col => col.type === 'phone')
+        || columns.find(col => /phone/i.test(col.title || ''));
+      return phoneColumn
+        ? { id: String(board.id), name: board.name, phoneColumnId: phoneColumn.id }
+        : null;
+    })
+    .filter(Boolean);
+
+  if (userId) {
+    boardCache.set(userId, { boards, expiry: now + BOARD_CACHE_TTL_MS });
+  }
+  return boards;
+}
+
+// Pick a sensible default board for creating new contacts: prefer a board named like
+// "Contact"/"Lead", otherwise the first discovered CRM board.
+function pickDefaultBoard(boards = []) {
+  return boards.find(board => /contact/i.test(board.name))
+    || boards.find(board => /lead/i.test(board.name))
+    || boards[0]
+    || null;
+}
+
+function getUserId(user) {
+  return user?.dataValues?.id || user?.id || null;
+}
+
+// The connector uses a single board for everything. It is discovered once (the default
+// board with a Phone column), stored on the user record's platformAdditionalInfo, and
+// reused everywhere — no per-contact board lookup.
+async function getBoardId({ user, accessToken }) {
+  const pai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {};
+  if (pai.boardId) {
+    return String(pai.boardId);
+  }
+  // Not stored yet — discover the default board and persist it on the user record.
+  const boards = await getCrmBoards({ accessToken, userId: getUserId(user) });
+  const board = pickDefaultBoard(boards);
+  const boardId = board?.id || null;
+  console.log('[Monday][board] discovered board', { boardId, boardName: board?.name, discoveredBoardCount: boards.length });
+  if (boardId && typeof user?.update === 'function') {
+    try {
+      const nextPai = { ...pai, boardId };
+      await user.update({ platformAdditionalInfo: nextPai });
+      // JSON columns don't always auto-flag as changed; force a save to be safe.
+      if (typeof user.changed === 'function') {
+        user.changed('platformAdditionalInfo', true);
+        if (typeof user.save === 'function') await user.save();
+      }
+      console.log('[Monday][board] stored boardId on user record', { boardId });
+    } catch (e) {
+      console.warn('[Monday][board] failed to persist boardId on user record:', e.message);
+    }
+  }
+  return boardId;
+}
+
+// Logging always targets the connector's single board (read stored, else discover).
+// This does not depend on contactInfo.type surviving the extension round-trip.
+async function resolveBoardId({ accessToken, user }) {
+  const boardId = await getBoardId({ user, accessToken });
+  console.log('[Monday][board] resolveBoardId ->', { boardId });
+  return boardId;
+}
+
+// The Phone column id for a board, cached via getColumnIdByName.
+async function getPhoneColumnId({ accessToken, boardId }) {
+  return getColumnIdByName({ accessToken, boardId, columnName: 'Phone' });
 }
 
 function parseMondayCallLogBody(body = '') {
@@ -408,6 +544,7 @@ function parseMondayCallLogBody(body = '') {
   const endTime = normalized.match(/End Time:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
   const result = normalized.match(/Result:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
   const duration = normalized.match(/Duration:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
+  const recording = normalized.match(/Recording:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
   let agentNote = ''
   const agentMatch = normalized.match(
     /Agent Notes?:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/i
@@ -415,6 +552,16 @@ function parseMondayCallLogBody(body = '') {
 
   if (agentMatch) {
     agentNote = agentMatch[1].trim()
+  }
+  let aiNote = ''
+  const aiMatch = normalized.match(/AI Note:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/i)
+  if (aiMatch) {
+    aiNote = aiMatch[1].trim()
+  }
+  let transcript = ''
+  const transcriptMatch = normalized.match(/Transcript:\s*([\s\S]*?)(?:\n[A-Z][^\n]*:|$)/i)
+  if (transcriptMatch) {
+    transcript = transcriptMatch[1].trim()
   }
 
   return {
@@ -424,96 +571,88 @@ function parseMondayCallLogBody(body = '') {
     endTime,
     result,
     duration,
+    recording,
     agentNote,
+    aiNote,
+    transcript,
     normalizedBody: normalized
   }
 }
 
+async function searchBoardByPhone({ accessToken, boardId, phoneColumnId, phone }) {
+  // Monday's items_page_by_column_values matches an item if the column equals ANY value
+  // in column_values, so all phone formats go in ONE request rather than 9 concurrent
+  // ones. This is the single biggest latency/throttling win for the existence check:
+  // one round-trip, bounded by the client timeout, instead of waiting on the slowest of
+  // nine parallel GraphQL calls (which under Monday's complexity limits caused timeouts).
+  const phoneFallbacks = generatePhoneFormats(phone)
+  if (!phoneFallbacks.length) return []
+  try {
+    const res = await mondayRequest(
+      accessToken,
+      `
+      query ($values: [String!]) {
+        items_page_by_column_values(
+          board_id: ${boardId},
+          columns: [{ column_id: "${phoneColumnId}", column_values: $values }]
+        ) {
+          items { id name }
+        }
+      }
+      `,
+      { values: phoneFallbacks }
+    )
+    if (res?.errors?.length) {
+      console.warn('[Monday] searchBoardByPhone error on board', boardId, res.errors[0].message)
+      return []
+    }
+    const items = res?.data?.items_page_by_column_values?.items || []
+    // Dedupe defensively (an item matching multiple formats is returned once).
+    const byId = new Map()
+    for (const item of items) byId.set(item.id, item)
+    const merged = [...byId.values()]
+    if (merged.length > 0) {
+      console.log('[Monday] findContact: matched', merged.length, 'contact(s) on board', boardId)
+    }
+    return merged
+  } catch (e) {
+    console.warn('[Monday] searchBoardByPhone request failed on board', boardId, e.message)
+    return []
+  }
+}
+
 async function findContact({ phoneNumber, accessToken, authHeader, user }) {
-  const licenseError = await validateLicenseOrFail(user);
+  const licenseError = await validateLicenseOrFail(user, 'findContact');
   if (licenseError) return licenseError;
 
-  const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname
-  })
-  const boardId = company.tenantId
-  const phone = normalizePhone(phoneNumber)
-  const matchedContactInfo = []
   const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-  const phoneColumnId = await getColumnIdByName({
-    accessToken: resolvedAccessToken,
-    boardId: boardId,
-    columnName: 'Phone'
-  })
-  if (!phoneColumnId) {
-    return {
-      successful: false,
-      returnMessage: {
-        messageType: 'error',
-        message: 'Monday phone column not found. Set MONDAY_PHONE_COLUMN_ID or MONDAY_PHONE_COLUMN_NAME.',
-        ttl: 3000
-      }
-    }
+  const boardId = await getBoardId({ user, accessToken: resolvedAccessToken })
+  if (!boardId) {
+    return { successful: false, returnMessage: { messageType: 'error', message: 'No Monday board with a Phone column was found. Add a Phone column to your board and try again.', ttl: 3000 } }
   }
 
+  const phone = normalizePhone(phoneNumber)
+  const matchedContactInfo = []
+
   if (phone) {
-    // Monday phone column stores as JSON {phone, countryShortName} — try all common formats
-    const phoneFallbacks = generatePhoneFormats(phone)
-
-    let items = []
-    for (const searchValue of phoneFallbacks) {
-      const res = await mondayRequest(
-        resolvedAccessToken,
-        `
-        query ($value: String!) {
-          items_page_by_column_values(
-            board_id: ${boardId},
-            columns: [{ column_id: "${phoneColumnId}", column_values: [$value] }]
-          ) {
-            items { id name }
-          }
-        }
-        `,
-        { value: searchValue }
-      )
-      if (res?.errors?.length) {
-        return {
-          successful: false,
-          returnMessage: {
-            messageType: 'error',
-            message: res.errors[0].message || 'Failed to fetch contacts from Monday.',
-            ttl: 3000
-          }
-        }
-      }
-      items = res?.data?.items_page_by_column_values?.items || []
-      if (items.length > 0) {
-        console.log('[Monday] findContact: matched', items.length, 'contact(s) with format:', searchValue)
-        break
+    const phoneColumnId = await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId })
+    if (phoneColumnId) {
+      const items = await searchBoardByPhone({ accessToken: resolvedAccessToken, boardId, phoneColumnId, phone })
+      for (const item of items) {
+        // The extension reads `type` off the contact to build the RC entity's
+        // contactType (contacts/match.js), which feeds the {contactType} URL variable
+        // for both "view call log" and "open contact". Set both names to be safe.
+        matchedContactInfo.push({ id: item.id, name: item.name, phone, type: String(boardId), contactType: String(boardId), boardId })
       }
     }
 
-    for (const item of items || []) {
-      matchedContactInfo.push({
-        id: item.id,
-        name: item.name,
-        phone
-      })
-    }
-
-    // No real contacts found in Monday — delete stale cache entry if it exists
-    if (items.length === 0 && user?.rcAccountId) {
+    if (matchedContactInfo.length === 0 && user?.rcAccountId) {
       try {
+        const cachePlatform = user?.dataValues?.platform || user?.platform || 'gate6.monday'
         const deleted = await AccountDataModel.destroy({
-          where: {
-            rcAccountId: user.rcAccountId,
-            platformName: 'monday',
-            dataKey: `contact-${phoneNumber}`
-          }
+          where: { rcAccountId: user.rcAccountId, platformName: cachePlatform, dataKey: `contact-${phoneNumber}` }
         })
-        if (deleted > 0) {
-          console.log('[Monday] findContact: deleted stale cache for phone:', phoneNumber)
-        }
+        if (deleted > 0) console.log('[Monday] findContact: deleted stale cache for phone:', phoneNumber)
       } catch (err) {
         console.warn('[Monday] findContact: failed to delete stale cache:', err.message)
       }
@@ -526,70 +665,141 @@ async function findContact({ phoneNumber, accessToken, authHeader, user }) {
     isNewContact: true
   })
 
-  return {
-    successful: true,
-    matchedContactInfo
-  }
+  return { successful: true, matchedContactInfo }
 }
 
-async function findContactWithName() {
-  return {
-    successful: true,
-    matchedContactInfo: []
+async function findContactWithName({ name, accessToken, authHeader, user }) {
+  const licenseError = await validateLicenseOrFail(user, 'findContactWithName');
+  if (licenseError) return licenseError;
+
+  const term = (name || '').trim()
+  if (!term) {
+    return { successful: true, matchedContactInfo: [] }
   }
+
+  const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
+  const boardId = await getBoardId({ user, accessToken: resolvedAccessToken })
+  if (!boardId) {
+    return { successful: true, matchedContactInfo: [] }
+  }
+
+  // Inline the search term via JSON.stringify so it is a safely-escaped GraphQL list
+  // literal (e.g. ["O'Brien"]). compare_value is Monday's JSON CompareValue scalar.
+  const compareValue = JSON.stringify([term])
+
+  let items = []
+  try {
+    const res = await mondayRequest(
+      resolvedAccessToken,
+      `
+      query ($boardId: [ID!]) {
+        boards(ids: $boardId) {
+          items_page(
+            limit: 25,
+            query_params: { rules: [{ column_id: "name", compare_value: ${compareValue}, operator: contains_text }] }
+          ) {
+            items { id name }
+          }
+        }
+      }
+      `,
+      { boardId: [boardId] }
+    )
+    if (res?.errors?.length) {
+      console.warn('[Monday] findContactWithName error on board', boardId, res.errors[0].message)
+    } else {
+      items = res?.data?.boards?.[0]?.items_page?.items || []
+    }
+  } catch (e) {
+    console.warn('[Monday] findContactWithName threw on board', boardId, e.message)
+  }
+
+  // `type` feeds the RC entity contactType (contacts/match.js) → {contactType} URL var.
+  const matchedContactInfo = items.map(item => ({ id: item.id, name: item.name, type: String(boardId), contactType: String(boardId), boardId }))
+  console.log('[Monday] findContactWithName', { term, matches: matchedContactInfo.length })
+
+  return { successful: true, matchedContactInfo }
 }
 
 async function createContact({ phoneNumber, newContactName, accessToken, authHeader, user }) {
-  const licenseError = await validateLicenseOrFail(user);
+  const licenseError = await validateLicenseOrFail(user, 'createContact');
   if (licenseError) return licenseError;
 
-  const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname
-  })
-  const boardId = company.tenantId
   const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-  const phoneColumnId = await getColumnIdByName({
-    accessToken: resolvedAccessToken,
-    boardId: boardId,
-    columnName: 'Phone'
-  })
-  if (!phoneColumnId) {
+  const boardId = await getBoardId({ user, accessToken: resolvedAccessToken })
+  const phoneColumnId = boardId ? await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId }) : null
+  if (!boardId || !phoneColumnId) {
     return {
       contactInfo: null,
       returnMessage: {
         messageType: 'error',
-        message: 'Monday phone column not found. Set MONDAY_PHONE_COLUMN_ID or MONDAY_PHONE_COLUMN_NAME.',
+        message: 'No Monday board with a Phone column was found to create the contact in.',
         ttl: 3000
       }
     }
   }
 
-  const res = await mondayRequest(
-    resolvedAccessToken,
-    `
-    mutation ($name: String!, $values: JSON!) {
-      create_item(
-        board_id: ${boardId},
-        item_name: $name,
-        column_values: $values
-      ) {
-        id
-        name
+  // Monday "phone"-type columns expect a JSON object { phone, countryShortName }; a
+  // plain string is rejected. Text columns named "Phone" accept a plain string. Try
+  // the structured format first, then fall back to the plain string.
+  const parsed = parsePhoneNumber(phoneNumber || '')
+  const e164 = parsed?.valid ? parsed.number.e164 : (phoneNumber || '')
+  const countryShortName = parsed?.valid ? parsed.regionCode : ''
+  const phoneVariants = [
+    countryShortName ? { phone: e164, countryShortName } : { phone: e164 },
+    e164
+  ]
+
+  let created = null
+  let lastError = ''
+  for (const variant of phoneVariants) {
+    const res = await mondayRequest(
+      resolvedAccessToken,
+      `
+      mutation ($name: String!, $values: JSON!) {
+        create_item(
+          board_id: ${boardId},
+          item_name: $name,
+          column_values: $values
+        ) {
+          id
+          name
+        }
+      }
+      `,
+      {
+        name: newContactName,
+        values: JSON.stringify({ [phoneColumnId]: variant })
+      }
+    )
+    if (!res?.errors?.length && res?.data?.create_item?.id) {
+      created = res.data.create_item
+      break
+    }
+    lastError = res?.errors?.[0]?.message || 'unknown error'
+    console.warn('[Monday][createContact] create_item attempt failed; trying next phone format', { boardId, variant, error: lastError })
+  }
+
+  if (!created) {
+    return {
+      contactInfo: null,
+      returnMessage: {
+        messageType: 'error',
+        message: `Failed to create contact in Monday: ${lastError}`,
+        ttl: 3000
       }
     }
-    `,
-    {
-      name: newContactName,
-      values: JSON.stringify({
-        [phoneColumnId]: phoneNumber
-      })
-    }
-  )
+  }
 
+  console.log('[Monday][createContact] created item', { itemId: created.id, boardId })
   return {
     contactInfo: {
-      id: res.data.create_item.id,
-      name: res.data.create_item.name
+      id: created.id,
+      name: created.name,
+      // `type` feeds the RC entity contactType so logging/URLs target the right board.
+      type: String(boardId),
+      contactType: String(boardId),
+      boardId
     },
     returnMessage: {
       messageType: 'success',
@@ -600,18 +810,18 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
 }
 
 async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, accessToken, authHeader, user }) {
-  const licenseError = await validateLicenseOrFail(user);
+  const licenseError = await validateLicenseOrFail(user, 'createCallLog');
   if (licenseError) return licenseError;
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-  const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname
-  })
-  const boardId = company.tenantId
+  const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user });
+  // Fall back to a generated subject when no custom subject is supplied — matches every
+  // other connector (clio/insightly/netsuite) and avoids the blank "Subject:" line.
+  const defaultSubject = `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo?.name || 'contact'}`
   const subject =
     (user.userSettings?.addCallLogSubject?.value ?? true)
-      ? (callLog?.customSubject?.trim() || "")
+      ? (callLog?.customSubject?.trim() || defaultSubject)
       : ""
 
   let sections = []
@@ -661,8 +871,13 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
       body
     }
   )
+  assertNoGraphqlErrors(res, `createCallLog (create_update itemId=${contactInfo.id})`)
 
-  const updateId = res.data.create_update.id
+  const updateId = res?.data?.create_update?.id
+  if (!updateId) {
+    throw new Error(`Monday createCallLog: create_update returned no id for itemId=${contactInfo.id}`)
+  }
+  console.log('[Monday][createCallLog] created update', { updateId, itemId: Number(contactInfo.id), boardId })
 
   // ---- Recording Upload ----
   if (callLog?.recording?.downloadUrl) {
@@ -679,7 +894,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
       accessToken: resolvedAccessToken,
       itemId: Number(contactInfo.id),
       fileName,
-      hostname: user.dataValues.hostname
+      boardId
     })
   }
 
@@ -695,25 +910,52 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
 }
 
 async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user, subject, duration, startTime }) {
-  const licenseError = await validateLicenseOrFail(user);
+  const licenseError = await validateLicenseOrFail(user, 'updateCallLog');
   if (licenseError) return licenseError;
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-  const res = await mondayRequest(
-    resolvedAccessToken,
-    `
-    query ($updateId: [ID!]) {
-      updates(ids: $updateId) {
-        id
-        body
-      }
-    }
-    `,
-    { updateId: [existingCallLog.thirdPartyLogId] }
-  )
+  const logId = existingCallLog?.thirdPartyLogId
+  const itemId = Number(existingCallLog?.contactId)
+  console.log('[Monday][updateCallLog] start', {
+    thirdPartyLogId: logId,
+    contactId: existingCallLog?.contactId,
+    isNumericId: isNumericMondayId(logId)
+  })
 
-  const oldBody = res?.data?.updates?.[0]?.body || ''
+  // 1. Read the existing update so we can merge with it — only if the stored id is a
+  // valid (numeric) Monday update id. A stale/hash id is skipped to avoid the API 500.
+  let oldBody = ''
+  let canEditExisting = false
+  if (isNumericMondayId(logId)) {
+    try {
+      const res = await mondayRequest(
+        resolvedAccessToken,
+        `
+        query ($updateId: [ID!]) {
+          updates(ids: $updateId) {
+            id
+            body
+          }
+        }
+        `,
+        { updateId: [logId] }
+      )
+      if (res?.errors?.length) {
+        console.warn('[Monday][updateCallLog] could not read existing update; will recreate', { logId })
+      } else if (res?.data?.updates?.length) {
+        oldBody = res.data.updates[0].body || ''
+        canEditExisting = true
+      } else {
+        console.warn('[Monday][updateCallLog] existing update not found; will recreate', { logId })
+      }
+    } catch (e) {
+      console.warn('[Monday][updateCallLog] reading existing update threw; will recreate', { logId, message: e.message })
+    }
+  } else {
+    console.warn('[Monday][updateCallLog] stored thirdPartyLogId is not a numeric Monday update id; will recreate', { logId })
+  }
+
   const parsed = parseMondayCallLogBody(oldBody)
   let subjectToUse = parsed.subject
 
@@ -721,25 +963,36 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
     subjectToUse = subject.trim()
   }
 
+  // Preserve sections the original log already had: an update often supplies only ONE
+  // field (e.g. a recording-sync or disposition update arrives with note/duration empty).
+  // Without these fallbacks the rebuilt body silently drops the existing note, duration
+  // and recording — which is exactly how a fully-populated log became "Subject:/Direction/
+  // Start/End" only. Fall back to the parsed (existing) value when no new one is supplied.
+  const effectiveNote = note || parsed.agentNote
+  const effectiveDurationLine = duration ? `${duration} sec` : parsed.duration
+  const effectiveRecording = recordingLink || parsed.recording
+  const effectiveAiNote = aiNote || parsed.aiNote
+  const effectiveTranscript = transcript || parsed.transcript
+
   let sections = []
 
-  if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
-    sections.push(`Agent Notes:<br>${note.replace(/\r?\n/g, '<br>')}`)
+  if (effectiveNote && (user.userSettings?.addCallLogNote?.value ?? true)) {
+    sections.push(`Agent Notes:<br>${effectiveNote.replace(/\r?\n/g, '<br>')}`)
   }
   if (parsed.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
     sections.push(`Result:<br>${parsed.result}`)
   }
-  if (duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
-    sections.push(`Duration:<br>${duration} sec`)
+  if (effectiveDurationLine && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+    sections.push(`Duration:<br>${effectiveDurationLine}`)
   }
-  if (recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) {
-    sections.push(`Recording:<br>${recordingLink}`)
+  if (effectiveRecording && (user.userSettings?.addCallLogRecording?.value ?? true)) {
+    sections.push(`Recording:<br>${effectiveRecording}`)
   }
-  if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-    sections.push(`AI Note:<br>${aiNote.replace(/\r?\n/g, '<br>')}`)
+  if (effectiveAiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+    sections.push(`AI Note:<br>${effectiveAiNote.replace(/\r?\n/g, '<br>')}`)
   }
-  if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-    sections.push(`Transcript:<br>${transcript.replace(/\r?\n/g, '<br>')}`)
+  if (effectiveTranscript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+    sections.push(`Transcript:<br>${effectiveTranscript.replace(/\r?\n/g, '<br>')}`)
   }
 
   let startTimeToUse = parsed.startTime
@@ -764,34 +1017,83 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
 
   const body = lines.join("<br>");
 
-  const updateRes = await mondayRequest(
+  // 2. Edit the existing update if we could read it.
+  if (canEditExisting) {
+    try {
+      const updateRes = await mondayRequest(
+        resolvedAccessToken,
+        `
+        mutation ($updateId: ID!, $body: String!) {
+          edit_update(id: $updateId, body: $body) {
+            id
+          }
+        }
+        `,
+        { updateId: logId, body }
+      )
+      if (!updateRes?.errors?.length && updateRes?.data?.edit_update?.id) {
+        return {
+          logId: updateRes.data.edit_update.id,
+          returnMessage: { message: "Call log updated", messageType: "success", ttl: 2000 }
+        }
+      }
+      console.warn('[Monday][updateCallLog] edit_update failed; will recreate', { logId, errors: stringifyForLog(updateRes?.errors, 500) })
+    } catch (e) {
+      console.warn('[Monday][updateCallLog] edit_update threw; will recreate', { logId, message: e.message })
+    }
+  }
+
+  // 3. Fallback: the stored update is missing/invalid — create a fresh update on the
+  // contact item and repoint thirdPartyLogId so future updates edit it (no duplicates).
+  if (!itemId) {
+    throw new Error(`Monday updateCallLog: cannot recreate update — existingCallLog.contactId is missing/invalid (${existingCallLog?.contactId})`)
+  }
+  const createRes = await mondayRequest(
     resolvedAccessToken,
     `
-    mutation ($updateId: ID!, $body: String!) {
-      edit_update(id: $updateId, body: $body) {
+    mutation ($itemId: ID!, $body: String!) {
+      create_update(item_id: $itemId, body: $body) {
         id
       }
     }
     `,
-    {
-      updateId: existingCallLog.thirdPartyLogId,
-      body
-    }
+    { itemId, body }
   )
+  assertNoGraphqlErrors(createRes, 'updateCallLog (create_update fallback)')
+  const newLogId = createRes?.data?.create_update?.id
+  if (!newLogId) {
+    throw new Error('Monday updateCallLog: fallback create_update returned no id')
+  }
+  console.log('[Monday][updateCallLog] recreated update', { oldLogId: logId, newLogId, itemId })
+  // Repoint the stored id so the next update edits this new update instead of recreating.
+  try {
+    if (typeof existingCallLog?.update === 'function') {
+      await existingCallLog.update({ thirdPartyLogId: newLogId })
+    }
+  } catch (e) {
+    console.warn('[Monday][updateCallLog] failed to repoint thirdPartyLogId', { newLogId, message: e.message })
+  }
 
   return {
-    logId: updateRes.data.edit_update.id,
-    returnMessage: {
-      message: "Call log updated",
-      messageType: "success",
-      ttl: 2000
-    }
+    logId: newLogId,
+    returnMessage: { message: "Call log updated", messageType: "success", ttl: 2000 }
   }
 }
 
 async function getCallLog({ callLogId, accessToken, authHeader, user }) {
-  const licenseError = await validateLicenseOrFail(user);
+  const licenseError = await validateLicenseOrFail(user, 'getCallLog');
   if (licenseError) return licenseError;
+
+  // A non-numeric stored id (e.g. a stale hash) is not a valid Monday update id and
+  // makes the API 500 — skip the doomed query and report "not found" cleanly so the
+  // caller (updateCallLog) recreates the update instead.
+  if (!isNumericMondayId(callLogId)) {
+    console.warn('[Monday][getCallLog] skipping fetch — callLogId is not a numeric Monday update id', { callLogId })
+    return {
+      callLogInfo: {},
+      returnMessage: { messageType: 'warning', message: 'Call log not found', ttl: 3000 }
+    }
+  }
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
@@ -808,7 +1110,7 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
     { updateId: [callLogId] }
   )
 
-  if (!res?.data?.updates?.length) {
+  if (res?.errors?.length || !res?.data?.updates?.length) {
     return {
       callLogInfo: {},
       returnMessage: {
@@ -843,14 +1145,11 @@ async function upsertCallDisposition({ existingCallLog }) {
 }
 
 async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink, accessToken }) {
-  const licenseError = await validateLicenseOrFail(user);
+  const licenseError = await validateLicenseOrFail(user, 'createMessageLog');
   if (licenseError) return licenseError;
 
   const resolvedAccessToken = accessToken || user?.accessToken
-  const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname
-  })
-  const boardId = company.tenantId
+  const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user });
   const itemId = Number(contactInfo.id)
   const callLogsColumnId = await getOrCreateCallLogsColumn({
     accessToken: resolvedAccessToken,
@@ -943,7 +1242,7 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
       accessToken: resolvedAccessToken,
       itemId,
       fileName,
-      hostname: user.dataValues.hostname
+      boardId
     })
   }
 
@@ -959,15 +1258,12 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
 }
 
 async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink, accessToken }) {
-  const licenseError = await validateLicenseOrFail(user);
+  const licenseError = await validateLicenseOrFail(user, 'updateMessageLog');
   if (licenseError) return licenseError;
 
   const MAX_THREAD_MESSAGES = 10
   const resolvedAccessToken = accessToken || user?.accessToken
-  const company = await getCompanyByHostname({
-    hostname: user.dataValues.hostname
-  })
-  const boardId = company.tenantId
+  const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user });
   const itemId = Number(contactInfo.id)
   const updateId = existingMessageLog.thirdPartyLogId
   const callLogsColumnId = await getOrCreateCallLogsColumn({
@@ -1135,7 +1431,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
       accessToken: resolvedAccessToken,
       itemId,
       fileName,
-      hostname: user.dataValues.hostname
+      boardId
     })
   }
 
@@ -1188,15 +1484,9 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
   }
 }
 
-async function uploadToMonday({ s3Url, accessToken, itemId, fileName, hostname }) {
-  if (!hostname) {
-    throw new Error('uploadToMonday: hostname is missing')
-  }
-  const company = await getCompanyByHostname({ hostname })
-  const boardId = company.tenantId
-
+async function uploadToMonday({ s3Url, accessToken, itemId, fileName, boardId }) {
   try {
-    console.log('Uploading file to Monday...')
+    console.log('[Monday][api] → file upload (add_file_to_column)', { itemId, boardId, fileName })
     const filesColumnId = await getOrCreateFilesColumn({
       accessToken,
       boardId
@@ -1242,14 +1532,18 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, hostname }
       }
     )
 
-    console.log('File uploaded to Monday:', response.data)
+    if (response.data?.errors?.length) {
+      console.error('[Monday][api] ✗ GraphQL error (file upload)', stringifyForLog(response.data.errors, 800))
+    } else {
+      console.log('[Monday][api] ← file upload ok', stringifyForLog(response.data, 400))
+    }
     await s3Helper.deleteObject(s3Key, 'audio')
     console.log('File deleted from S3:', s3Key)
 
     return response.data
   } catch (error) {
-    console.log(
-      'Error uploading file to Monday:',
+    console.error(
+      '[Monday][api] ✗ file upload error:',
       error?.response?.data || error.message
     )
     throw error
@@ -1257,8 +1551,24 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, hostname }
 }
 
 
+function getOverridingOAuthOption({ code, oauthInfo }) {
+  return {
+    query: {
+      grant_type: 'authorization_code',
+      client_id: oauthInfo?.clientId,
+      client_secret: oauthInfo?.clientSecret,
+      redirect_uri: oauthInfo?.redirectUri,
+      code,
+    },
+    headers: {
+      Authorization: ''
+    }
+  };
+}
+
 exports.getAuthType = getAuthType;
 exports.getOauthInfo = getOauthInfo;
+exports.getOverridingOAuthOption = getOverridingOAuthOption;
 exports.getUserInfo = getUserInfo;
 exports.unAuthorize = unAuthorize;
 exports.findContact = findContact;

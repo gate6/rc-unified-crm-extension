@@ -11,6 +11,9 @@ const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = sequelize ? initModels(sequelize) : null;
 
+const licenseHelper = require('../shared/license');
+const apiLog = require('../shared/apiLogger');
+
 const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
 
 const agencyZoomApiClient = axios.create();
@@ -24,94 +27,14 @@ function stringifyForLog(value, maxLength = 1200) {
   }
 }
 
-agencyZoomApiClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    console.error('[AgencyZoom][apiError]', {
-      method: error?.config?.method || '',
-      url: error?.config?.url || '',
-      status: error?.response?.status || null,
-      statusText: error?.response?.statusText || '',
-      responseBody: stringifyForLog(error?.response?.data),
-      errorMessage: error?.message || ''
-    });
-    return Promise.reject(error);
-  }
-);
+apiLog.installErrorInterceptor(agencyZoomApiClient, 'AgencyZoom');
 
 async function getLicenseStatus({ userId }) {
-  try {
-    if (!models) {
-      return { isLicenseValid: false, licenseStatus: 'DB not configured', licenseStatusDescription: '' };
-    }
-    const user = await UserModel.findByPk(userId);
-    if (!user) {
-      return {
-        isLicenseValid: false,
-        licenseStatus: "User Not Found",
-        licenseStatusDescription: ""
-      };
-    }
-
-    const company = await models.companies.findOne({
-      where: {
-        hostname: user.hostname
-      },
-      raw: true
-    });
-
-    if (!company || company.status !== true) {
-      return {
-        isLicenseValid: false,
-        licenseStatus: "Inactive",
-        licenseStatusDescription: "Purchase license to continue"
-      };
-    }
-
-    return {
-      isLicenseValid: true,
-      licenseStatus: "Active",
-      licenseStatusDescription: "Basic"
-    };
-
-  } catch (error) {
-    console.error("getLicenseStatus error:", error);
-
-    return {
-      isLicenseValid: false,
-      licenseStatus: "Error",
-      licenseStatusDescription: "Error validating license"
-    };
-  }
+  return licenseHelper.getLicenseStatus({ models, userId });
 }
 
 async function validateLicenseOrFail(user) {
-  const licenseStatus = await getLicenseStatus({ userId: user.dataValues.id });
-
-  if (!licenseStatus.isLicenseValid) {
-    return {
-      successful: false,
-      returnMessage: {
-        message: 'License validation failed',
-        messageType: 'error',
-        details: [
-          {
-            title: 'License Issue',
-            items: [
-              {
-                id: '1',
-                type: 'text',
-                text: 'Please go to user settings page and refresh license status'
-              }
-            ]
-          }
-        ],
-        ttl: 5000
-      }
-    };
-  }
-
-  return null; 
+  return licenseHelper.validateLicenseOrFail({ models, user });
 }
 
 function extractLogId(noteBody) {
@@ -150,6 +73,8 @@ function getBasicAuth({ apiKey }) {
 /* ---------------- AUTHENTICATION ---------------- */
 
 async function authenticate(username, password) {
+  apiLog.logStart('AgencyZoom', 'authenticate', { username });
+
   const res = await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/auth/login`,
     {
@@ -159,9 +84,12 @@ async function authenticate(username, password) {
     {
       headers: {
         "Content-Type": "application/json"
-      }
+      },
+      _operation: 'authenticate'
     }
   );
+
+  apiLog.logSuccess('AgencyZoom', 'authenticate', { username, apiEndpoint: `${AZ_BASE_URL}/auth/login` });
 
   return res.data?.jwt || res.data?.token;
 }
@@ -188,7 +116,9 @@ async function getRefreshedAuthToken(user) {
 /* ---------------- USER INFO ---------------- */
 
 async function getUserInfo({ hostname, additionalInfo }) {
-  const { username, password } = additionalInfo ?? {};
+  // rcAccountId arrives via the manifest's rcAdditionalSubmission (auto from RC cached
+  // data — no user prompt, no framework change).
+  const { username, password, rcAccountId } = additionalInfo ?? {};
 
   if (!hostname || !username || !password) {
     return {
@@ -198,13 +128,28 @@ async function getUserInfo({ hostname, additionalInfo }) {
     };
   }
 
+  // Tenant-scope the id so the same AgencyZoom username under different RC accounts
+  // never collides (AgencyZoom uses one fixed URL for all tenants). The username is the
+  // per-user key (no RC extension id needed here); sanitize it the same way ServiceTitan
+  // sanitizes its email key — AZ usernames are often emails, so the raw value can carry
+  // '@'/'.'/spaces and produce an unstable id.
+  if (!rcAccountId) {
+    console.warn('[AgencyZoom][getUserInfo] missing rcAccountId — falling back to non-tenant-scoped id');
+  }
+  const userKey = String(username).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const userId = rcAccountId ? `az-user-${rcAccountId}-${userKey}` : `az-user-${userKey}`;
+
+  apiLog.logStart('AgencyZoom', 'getUserInfo', { userId, username, rcAccountId });
+
   try {
     const token = await authenticate(username, password);
+
+    apiLog.logSuccess('AgencyZoom', 'getUserInfo', { userId, apiEndpoint: `${AZ_BASE_URL}/auth/login` });
 
     return {
       successful: true,
       platformUserInfo: {
-        id: `az-user-${username}`,
+        id: userId,
         name: username,
         email: username,
         overridingApiKey: token,
@@ -230,6 +175,7 @@ async function unAuthorize({ user }) {
 
   user.accessToken = "";
   await user.save();
+  licenseHelper.clearLicenseCache(user.id ?? user.dataValues?.id);
 
   return {
     returnMessage: {
@@ -258,6 +204,8 @@ async function findContact({ user, phoneNumber }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
+    apiLog.logStart('AgencyZoom', 'findContact', { phoneNumber });
+
     const auth = await getRefreshedAuthToken(user);
     const phone = normalizePhone(phoneNumber);
 
@@ -269,7 +217,8 @@ async function findContact({ user, phoneNumber }) {
       {
         headers: {
           Authorization: `Bearer ${auth}`
-        }
+        },
+        _operation: 'findContact'
       }
     );
 
@@ -311,6 +260,8 @@ async function findContact({ user, phoneNumber }) {
       isNewContact: true
     });
 
+    apiLog.logSuccess('AgencyZoom', 'findContact', { phoneNumber, matchedCount: customers.length, apiEndpoint: `${AZ_BASE_URL}/customers` });
+
     return {
       successful: true,
       matchedContactInfo
@@ -332,6 +283,8 @@ async function findContact({ user, phoneNumber }) {
 async function findContactWithName({ user, name }) {
   try {
 
+    apiLog.logStart('AgencyZoom', 'findContactWithName', { name });
+
     const auth = await getRefreshedAuthToken(user);
     const encodedName = encodeURIComponent(name || "");
 
@@ -340,7 +293,8 @@ async function findContactWithName({ user, name }) {
       {
         headers: {
           Authorization: `Bearer ${auth}`
-        }
+        },
+        _operation: 'findContactWithName'
       }
     );
 
@@ -351,6 +305,8 @@ async function findContactWithName({ user, name }) {
       name: c.housename || [c.firstname, c.middlename, c.lastname].filter(Boolean).join(" "),
       type: "contact"
     }));
+
+    apiLog.logSuccess('AgencyZoom', 'findContactWithName', { name, matchedCount: customers.length, apiEndpoint: `${AZ_BASE_URL}/customers?name=${encodedName}` });
 
     return {
       successful: true,
@@ -386,6 +342,8 @@ async function createContact({ user, phoneNumber, newContactName }) {
     };
   }
 
+  apiLog.logStart('AgencyZoom', 'createContact', { phoneNumber });
+
   const auth = await getRefreshedAuthToken(user);
 
   const phone = normalizePhone(phoneNumber);
@@ -420,9 +378,12 @@ async function createContact({ user, phoneNumber, newContactName }) {
     {
       headers: {
         Authorization: `Bearer ${auth}`
-      }
+      },
+      _operation: 'createContact'
     }
   );
+
+  apiLog.logSuccess('AgencyZoom', 'createContact', { contactId: res.data.id, phoneNumber, apiEndpoint: `${AZ_BASE_URL}/customers/create` });
 
   return {
     contactInfo: {
@@ -445,6 +406,9 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
   const auth = await getRefreshedAuthToken(user);
   const logId = `az-log-${Date.now().toString(36)}`;
+
+  apiLog.logStart('AgencyZoom', 'createCallLog', { contactId: contactInfo?.id, logId, direction: callLog?.direction, duration: callLog?.duration });
+
   const subject =
     (user.userSettings?.addCallLogSubject?.value ?? true)
       ? (callLog?.customSubject?.trim() || "")
@@ -480,8 +444,10 @@ ${description}
   await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/${contactInfo.id}/notes`,
     { note: noteBody },
-    { headers: { Authorization: `Bearer ${auth}` } }
+    { headers: { Authorization: `Bearer ${auth}` }, _operation: 'createCallLog' }
   );
+
+  apiLog.logSuccess('AgencyZoom', 'createCallLog', { logId, contactId: Number(contactInfo.id), apiEndpoint: `${AZ_BASE_URL}/customers/${contactInfo.id}/notes` });
 
   return {
     logId,
@@ -515,6 +481,8 @@ async function updateCallLog({ user, existingCallLog, subject, startTime, durati
 
   const contactId = existingCallLog.contactId;
   const logId = existingCallLog.thirdPartyLogId;
+
+  apiLog.logStart('AgencyZoom', 'updateCallLog', { contactId, logId, duration });
 
   const oldBody =
     existingCallLogDetails?.body ||
@@ -586,8 +554,10 @@ ${description}
   await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/${contactId}/notes`,
     { note: noteBody },
-    { headers: { Authorization: `Bearer ${auth}` } }
+    { headers: { Authorization: `Bearer ${auth}` }, _operation: 'updateCallLog' }
   );
+
+  apiLog.logSuccess('AgencyZoom', 'updateCallLog', { logId, contactId, apiEndpoint: `${AZ_BASE_URL}/customers/${contactId}/notes` });
 
   return {
     logId,
@@ -615,6 +585,8 @@ async function getCallLog({ user, callLogId }) {
     };
   }
 
+  apiLog.logStart('AgencyZoom', 'getCallLog', { logId: callLogId });
+
   const auth = await getRefreshedAuthToken(user);
 
   // Fetch contactId from DB
@@ -640,7 +612,8 @@ async function getCallLog({ user, callLogId }) {
     {
       headers: {
         Authorization: `Bearer ${auth}`
-      }
+      },
+      _operation: 'getCallLog'
     }
   );
 
@@ -679,6 +652,8 @@ async function getCallLog({ user, callLogId }) {
     agentNote = agentMatch[1].trim();
   }
 
+  apiLog.logSuccess('AgencyZoom', 'getCallLog', { logId: callLogId, contactId, apiEndpoint: `${AZ_BASE_URL}/customers/${contactId}` });
+
   return {
     callLogInfo: {
       subject,
@@ -716,6 +691,8 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
     recordingLink ? "Voicemail" :
       (faxDocLink ? "Fax" : "SMS");
 
+  apiLog.logStart('AgencyZoom', 'createMessageLog', { contactId: contactInfo?.id, logId, messageType, direction: message?.direction });
+
   let subject = "";
   let description = "";
 
@@ -751,8 +728,10 @@ ${description}
   await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/${contactInfo.id}/notes`,
     { note: noteBody },
-    { headers: { Authorization: `Bearer ${auth}` } }
+    { headers: { Authorization: `Bearer ${auth}` }, _operation: 'createMessageLog' }
   );
+
+  apiLog.logSuccess('AgencyZoom', 'createMessageLog', { logId, contactId: Number(contactInfo.id), apiEndpoint: `${AZ_BASE_URL}/customers/${contactInfo.id}/notes` });
 
   return {
     logId,
@@ -795,12 +774,15 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
   const contactId = contactInfo.id;
   const logId = existingMessageLog.thirdPartyLogId;
 
+  apiLog.logStart('AgencyZoom', 'updateMessageLog', { contactId, logId, direction: message?.direction });
+
   const res = await agencyZoomApiClient.get(
     `${AZ_BASE_URL}/customers/${contactId}`,
     {
       headers: {
         Authorization: `Bearer ${auth}`
-      }
+      },
+      _operation: 'updateMessageLog'
     }
   );
 
@@ -856,8 +838,10 @@ ${updatedConversation}
   await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/${contactId}/notes`,
     { note: noteBody },
-    { headers: { Authorization: `Bearer ${auth}` } }
+    { headers: { Authorization: `Bearer ${auth}` }, _operation: 'updateMessageLog' }
   );
+
+  apiLog.logSuccess('AgencyZoom', 'updateMessageLog', { logId, contactId, apiEndpoint: `${AZ_BASE_URL}/customers/${contactId}/notes` });
 
   return {
     logId,

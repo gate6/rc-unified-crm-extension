@@ -1,0 +1,106 @@
+{
+  "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
+  "documentationUrl": "https://developer.monday.com/",
+  "auth": {
+    "type": "oauth",
+    "managed": true,
+    "oauth": {
+      "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
+      "authorizationUri": "https://auth.monday.com/oauth2/authorize",
+      "accessTokenUri": "https://auth.monday.com/oauth2/token",
+      "customState": "platform=gate6.monday",
+      "scope": "me:read users:read boards:read boards:write updates:write",
+      "adminManaged": {
+        "setupNotes": "Enter your Monday.com OAuth app credentials. Only Client ID, Client Secret, and Hostname are required — the other fields are optional and will be filled automatically by the server. If needed: Authorization URI = https://auth.monday.com/oauth2/authorize | Token URI = https://auth.monday.com/oauth2/token | Scopes = me:read users:read boards:read boards:write updates:write",
+        "enabled": true
+      }
+    }
+  },
+  "displayName": "Monday",
+  "rcAdditionalSubmission": [
+    {
+      "path": "cachedData.extensionInfo.contact.department",
+      "id": "departmentName"
+    }
+  ],
+  "description": "",
+  "serverSideLogging": {
+    "additionalFields": [],
+    "rcClientId": "Y4m1YREFKbXdDoet5djv46",
+    "url": "https://crm-logging.labs.ringcentral.com",
+    "useAdminAssignedUserToken": false
+  },
+  "releaseNotesUrl": "https://ringcentral.github.io/rc-unified-crm-extension/release-notes/",
+  "contactPageUrl": "https://{hostname}/boards/{contactType}/pulses/{contactId}",
+  "logPageUrl": "https://{hostname}/boards/{contactType}/pulses/{contactId}",
+  "enableExtensionNumberLoggingSetting": false,
+  "canOpenLogPage": true,
+  "serverUrl": "https://epicardial-sandy-subseptate.ngrok-free.dev",
+  "embedUrls": [
+    "https://*.monday.com/*"
+  ],
+  "requestConfig": {
+    "timeout": 30
+  },
+  "settings": [
+    {
+      "name": "Monday Logging Options",
+      "id": "mondayLogging",
+      "type": "section",
+      "items": [
+        {
+          "name": "Attach call recording link",
+          "id": "addCallLogRecording",
+          "type": "boolean",
+          "defaultValue": true
+        },
+        {
+          "name": "Attach AI summary",
+          "id": "addCallLogAiNote",
+          "type": "boolean",
+          "defaultValue": true
+        },
+        {
+          "name": "Attach call transcript",
+          "id": "addCallLogTranscript",
+          "type": "boolean",
+          "defaultValue": true
+        }
+      ]
+    }
+  ],
+  "writeReviewUrl": "https://chromewebstore.google.com/detail/ringcentral-crm-extension/kkhkjhafgdlihndcbnebljipgkandkhh/reviews",
+  "embeddedOnCrmPage": {
+    "welcomePage": {
+      "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
+      "videoLink": "https://youtu.be/pQgdsAR1UCI"
+    }
+  },
+  "contactTypes": [],
+  "version": "0.1.0",
+  "logoUrl": "https://cdn.prod.website-files.com/688204efe519806dcf03fdaf/6885f51d6fdff45c989d73ff_monday.com.svg",
+  "environment": {
+    "type": "dynamic",
+    "instructions": [
+      "Please log in to Monday.com and open any board.",
+      "Copy your Monday.com workspace URL from the address bar (e.g. https://mycompany.monday.com)."
+    ],
+    "urlIdentifier": "*monday.com*"
+  },
+  "logFormat": "text/plain",
+  "useLicense": true,
+  "name": "gate6.monday",
+  "page": {
+    "messageLog": {
+      "additionalFields": []
+    },
+    "useContactSearch": true,
+    "callLog": {
+      "additionalFields": [],
+      "logPageUrl": "https://{hostname}/boards/{contactType}/pulses/{contactId}",
+      "canOpenLogPage": true
+    },
+    "disableContactCache": true
+  },
+  "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22"
+}

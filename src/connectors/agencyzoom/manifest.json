@@ -147,6 +147,14 @@
         {
           "id": "departmentName",
           "path": "cachedData.extensionInfo.contact.department"
+        },
+        {
+          "id": "rcAccountId",
+          "path": "cachedData.extensionInfo.account.id"
+        },
+        {
+          "id": "rcExtensionId",
+          "path": "cachedData.extensionInfo.id"
         }
       ]
     }
