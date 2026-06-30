@@ -75,7 +75,7 @@
                                 "type": "string",
                                 "required": true,
                                 "managed": true,
-                                "managedScope": "account",
+                                "managedScope": "user",
                                 "hidden": true
                             },
                             {
@@ -182,7 +182,8 @@
                             "contactDependent": true
                         }
                     ]
-                }
+                },
+                "useContactSearch": true
             },
             "rcAdditionalSubmission": [
                 {

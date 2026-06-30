@@ -13,8 +13,12 @@ const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = sequelize ? initModels(sequelize) : null;
 
-const SERVICE_TITAN_JPM_URL= "https://api-integration.servicetitan.io/jpm/v2/tenant"
-const SERVICE_TITAN_CRM_URL= "https://api-integration.servicetitan.io/crm/v2/tenant"
+// Env-driven so the same connector works in integration and production (the token URL is
+// already env-driven via SERVICETITAN_ACCESS_TOKEN_URI). Defaults to the integration/sandbox
+// host so existing behaviour is unchanged. For production set SERVICETITAN_CRM_URL /
+// SERVICETITAN_JPM_URL to the api.servicetitan.io equivalents (and matching prod creds).
+const SERVICE_TITAN_JPM_URL = process.env.SERVICETITAN_JPM_URL || "https://api-integration.servicetitan.io/jpm/v2/tenant"
+const SERVICE_TITAN_CRM_URL = process.env.SERVICETITAN_CRM_URL || "https://api-integration.servicetitan.io/crm/v2/tenant"
 
 const serviceTitanApiClient = axios.create();
 
@@ -444,6 +448,33 @@ async function fetchJobs({ user, params = {} }) {
 }
 
 
+// ServiceTitan notes are PLAIN TEXT (no markdown/HTML rendering), so AI/RingSense content
+// arrives with literal "**...**" markers and uneven spacing. This tidies it for plain text:
+//  - a short, fully-bold line (a header like **Recap**) -> "Recap:" with a blank line BEFORE
+//    it and its content sitting directly UNDER it (no blank line between header and body)
+//  - a long fully-bold line (an emphasized sentence)    -> bold markers stripped, kept as text
+//  - any remaining inline **bold** / __bold__ / # heading markers -> stripped
+//  - trailing spaces removed and runs of 3+ blank lines collapsed to one
+const HEADER_MARK = '\u0001'; // sentinel for converted header lines; stripped at end
+function sanitizeNoteText(text) {
+    if (!text) return '';
+    let s = String(text).replace(/\r\n/g, '\n');
+    // Fully-bold line: short -> header sentinel "Recap:"; long -> plain emphasized sentence.
+    s = s.replace(/^[ \t]*\*\*(.+?)\*\*[ \t]*$/gm, (_, h) => {
+        const t = h.trim().replace(/:+$/, '');
+        return (t.length <= 30 && t.split(/\s+/).length <= 4) ? `${HEADER_MARK}${t}:` : t;
+    });
+    // Strip any remaining inline markdown.
+    s = s.replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1').replace(/^[ \t]*#{1,6}[ \t]*/gm, '');
+    s = s.replace(/[ \t]+$/gm, '');
+    // Header content sits directly under the header: drop blank line(s) right after a header.
+    s = s.replace(new RegExp(`${HEADER_MARK}([^\\n]*)\\n\\s*\\n`, 'g'), `${HEADER_MARK}$1\n`);
+    // Ensure a blank line BEFORE each header (separating sections), except at the very start.
+    s = s.replace(new RegExp(`([^\\n])\\n${HEADER_MARK}`, 'g'), `$1\n\n${HEADER_MARK}`);
+    s = s.replace(new RegExp(HEADER_MARK, 'g'), '');
+    return s.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
@@ -454,17 +485,19 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-    const jobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
-
+    // Restore the 1.0 generated-subject fallback so the activity title is never blank
+    // (matches main-gate6 src/adapters/servicetitan/index.js:456). The 2.0 rewrite dropped
+    // the `?? generated` part, which both blanked the subject and broke edit-autofill.
+    const defaultSubject = `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo?.name || 'contact'}`;
     const subject =
         (user.userSettings?.addCallLogSubject?.value ?? true)
-            ? (callLog?.customSubject?.trim() || "")
+            ? (callLog?.customSubject?.trim() || defaultSubject)
             : ""
 
     let sections = [];
 
     if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
-        sections.push(`Agent Notes:\n${note}`);
+        sections.push(`Agent Notes:\n${sanitizeNoteText(note)}`);
     }
 
     if (contactInfo?.phone && (user.userSettings?.addCallLogContactNumber?.value ?? true)) {
@@ -484,64 +517,48 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     }
 
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-        sections.push(`AI Note:\n${aiNote}`);
+        sections.push(`AI Note:\n${sanitizeNoteText(aiNote)}`);
     }
 
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-        sections.push(`Transcript:\n${transcript}`);
+        sections.push(`Transcript:\n${sanitizeNoteText(transcript)}`);
     }
 
     const optionalSections = sections.join("\n\n");
 
-    const noteText = `
-        Subject: ${subject}
-        Direction: ${callLog.direction}
-        Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}
-        End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}
+    // Build the note left-aligned (no leading indentation). The previous template literal
+    // indented every line by 8 spaces, which polluted the stored note and made getCallLog's
+    // label parsing (and the on-screen format) fragile.
+    const headerLines = [
+        `Subject: ${subject}`,
+        `Direction: ${callLog.direction}`,
+        `Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`,
+        `End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`,
+    ];
+    const noteText = optionalSections
+        ? `${headerLines.join("\n")}\n\n${optionalSections}`
+        : headerLines.join("\n");
 
-        ${optionalSections}
-        `;
-
-    let addNoteRes;
-    let logType = "note";
-    let createCallLogUrl;
-
-    if (!jobs || jobs.length === 0) {
-
-        createCallLogUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}/notes`;
-        addNoteRes = await serviceTitanApiClient.post(
-            createCallLogUrl,
-            { text: noteText },
-            {
-                headers: {
-                    Authorization: `Bearer ${auth}`,
-                    "ST-App-Key": stAppKey,
-                    "Content-Type": "application/json"
-                },
-                _operation: 'createCallLog'
-            }
-        );
-
-    } else {
-
-        const latestJob = jobs.reduce((max, job) => job.id > max.id ? job : max);
-
-        createCallLogUrl = `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${latestJob.id}`;
-        addNoteRes = await serviceTitanApiClient.patch(
-            createCallLogUrl,
-            { summary: noteText },
-            {
-                headers: {
-                    Authorization: `Bearer ${auth}`,
-                    "ST-App-Key": stAppKey,
-                    "Content-Type": "application/json"
-                },
-                _operation: 'createCallLog'
-            }
-        );
-
-        logType = "job";
-    }
+    // Always log to the customer note. Previously, when a job existed this PATCHed the job's
+    // `summary` with the call log — OVERWRITING business data — and attached to an arbitrary
+    // "latest job by max id". A call belongs to the customer, so a customer note is the
+    // non-destructive home and keeps create/update/get/delete on one consistent path.
+    // (If call logs ON the job are wanted, the correct mechanism is Jobs_CreateNote job notes,
+    //  not the summary — a separate enhancement.)
+    const logType = "note";
+    const createCallLogUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}/notes`;
+    const addNoteRes = await serviceTitanApiClient.post(
+        createCallLogUrl,
+        { text: noteText },
+        {
+            headers: {
+                Authorization: `Bearer ${auth}`,
+                "ST-App-Key": stAppKey,
+                "Content-Type": "application/json"
+            },
+            _operation: 'createCallLog'
+        }
+    );
 
     const logId = `${addNoteRes.data.id}_${logType}`;
     apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, contactId: contactInfo.id, apiEndpoint: createCallLogUrl });
@@ -578,6 +595,13 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     let endTime = "";
     let result = "";
     let duration = "";
+    // Existing optional fields parsed from the old body so an update preserves them when
+    // the caller doesn't re-supply them (a recording-sync / disposition update otherwise
+    // wiped the note, recording, AI note and transcript).
+    let oldNote = "";
+    let oldRecording = "";
+    let oldAiNote = "";
+    let oldTranscript = "";
 
     // ---------------- FETCH OLD DATA ----------------
     let body = "";
@@ -626,52 +650,64 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         startTime = normalized.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
         endTime = normalized.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
         result = normalized.match(/^\s*Result:\s*(.*)$/m)?.[1]?.trim() || "";
-        duration = normalized.match(/^\s*Duration:\s*(.*)$/m)?.[1]?.trim() || "";
+        duration = normalized.match(/^\s*Duration:\s*(.*)$/m)?.[1]?.replace(/\s*sec$/i, '').trim() || "";
+        // Multi-line fields end at the next "Label:" line; single-line ones at the next newline.
+        oldNote = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
+        oldAiNote = normalized.match(/AI Note:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
+        oldTranscript = normalized.match(/Transcript:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
+        oldRecording = normalized.match(/Recording:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || "";
     }
 
     // ---------------- BUILD OPTIONAL SECTIONS ----------------
 
     let sections = [];
 
-    if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
-        sections.push(`Agent Notes:\n${note}`);
-    }
+    // Merge: prefer the incoming value, else keep what the original log already had.
+    const effNote = note || oldNote;
+    const effRecording = recordingLink || oldRecording;
+    const effAiNote = aiNote || oldAiNote;
+    const effTranscript = transcript || oldTranscript;
 
-    if (recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) {
-        sections.push(`Recording:\n${recordingLink}`);
+    if (effNote && (user.userSettings?.addCallLogNote?.value ?? true)) {
+        sections.push(`Agent Notes:\n${sanitizeNoteText(effNote)}`);
     }
-
-    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-        sections.push(`AI Note:\n${aiNote}`);
-    }
-
-    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-        sections.push(`Transcript:\n${transcript}`);
-    }
-    if (user.userSettings?.addCallLogResult?.value ?? true) {
+    if (result && (user.userSettings?.addCallLogResult?.value ?? true)) {
         sections.push(`Result:\n${result}`);
     }
-
-    if (user.userSettings?.addCallLogDuration?.value ?? true) {
+    if (duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
         sections.push(`Duration:\n${duration} sec`);
+    }
+    if (effRecording && (user.userSettings?.addCallLogRecording?.value ?? true)) {
+        sections.push(`Recording:\n${effRecording}`);
+    }
+    if (effAiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+        sections.push(`AI Note:\n${sanitizeNoteText(effAiNote)}`);
+    }
+    if (effTranscript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+        sections.push(`Transcript:\n${sanitizeNoteText(effTranscript)}`);
     }
 
     if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
         subjectToUse = subject.trim();
     }
+    // Never leave the subject blank (matches the create-side fallback).
+    if (!subjectToUse) {
+        subjectToUse = direction ? `${direction} Call` : "Call";
+    }
 
     const optionalSections = sections.join("\n\n");
 
-    // ---------------- FINAL STRUCTURED NOTE ----------------
+    // ---------------- FINAL STRUCTURED NOTE (left-aligned, no indentation) ----------------
 
-    const noteText = `
-        Subject: ${subjectToUse}
-        Direction: ${direction}
-        Start Time: ${startTime}
-        End Time: ${endTime}
-
-        ${optionalSections}
-        `.trim();
+    const headerLines = [
+        `Subject: ${subjectToUse}`,
+        `Direction: ${direction}`,
+        `Start Time: ${startTime}`,
+        `End Time: ${endTime}`,
+    ];
+    const noteText = optionalSections
+        ? `${headerLines.join("\n")}\n\n${optionalSections}`
+        : headerLines.join("\n");
 
     let newLogId;
 
@@ -679,6 +715,10 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     if (logType === "note") {
 
+        // ServiceTitan customer notes have no in-place update endpoint, so an edit is a
+        // create-then-delete: post the replacement note, then delete the original so we don't
+        // leave a duplicate. Order matters — create first so a delete failure never loses the
+        // edited content (worst case is a leftover duplicate, not data loss).
         const addNoteRes = await serviceTitanApiClient.post(
             `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
             { text: noteText },
@@ -693,6 +733,20 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         );
 
         newLogId = `${addNoteRes.data.id}_note`;
+
+        if (realId && String(addNoteRes.data.id) !== String(realId)) {
+            try {
+                await serviceTitanApiClient.delete(
+                    `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes/${realId}`,
+                    {
+                        headers: { Authorization: `Bearer ${auth}`, "ST-App-Key": stAppKey },
+                        _operation: 'updateCallLog'
+                    }
+                );
+            } catch (e) {
+                console.warn('[ServiceTitan][updateCallLog] could not delete the old note — a duplicate may remain', { oldNoteId: realId, status: e?.response?.status, message: e?.message });
+            }
+        }
     }
 
     // ---------------- UPDATE JOB ----------------

@@ -69,54 +69,66 @@ function describeGraphqlOperation(query) {
   return `${kind} ${fieldMatch ? fieldMatch[1] : 'unknown'}`;
 }
 
-async function mondayRequest(accessToken, query, variables = {}) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Monday's "monolith" backend intermittently returns INTERNAL_SERVER_ERROR (status_code
+// 500) as a GraphQL error on otherwise-valid queries (commonly items_page_by_column_values).
+// These are transient, so a short retry usually succeeds instead of degrading to "no match".
+function hasTransientMondayError(errors) {
+  return Array.isArray(errors) && errors.some((e) => {
+    const code = e?.extensions?.code;
+    const status = e?.extensions?.status_code;
+    return code === 'INTERNAL_SERVER_ERROR' || (typeof status === 'number' && status >= 500);
+  });
+}
+
+async function mondayRequest(accessToken, query, variables = {}, { maxAttempts = 2 } = {}) {
   const reqId = ++mondayApiCallCounter;
   const op = describeGraphqlOperation(query);
-  const startedAt = Date.now();
-  console.log('[Monday][api] →', { reqId, op, variables: stringifyForLog(variables, 600) });
-  try {
-    const res = await mondayApiClient.post(
-      MONDAY_API_URL,
-      { query, variables },
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
+  let lastBody = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const startedAt = Date.now();
+    console.log(attempt === 1 ? '[Monday][api] →' : '[Monday][api] ↻ retry', { reqId, op, attempt, ...(attempt === 1 ? { variables: stringifyForLog(variables, 600) } : {}) });
+    try {
+      const res = await mondayApiClient.post(
+        MONDAY_API_URL,
+        { query, variables },
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          }
         }
+      );
+      const ms = Date.now() - startedAt;
+      const body = res.data;
+      lastBody = body;
+      // Monday returns GraphQL errors with HTTP 200, so they bypass the axios
+      // interceptor — surface them explicitly here.
+      if (body?.errors?.length) {
+        console.error('[Monday][api] ✗ GraphQL error', { reqId, op, ms, attempt, errors: stringifyForLog(body.errors, 1000) });
+        if (hasTransientMondayError(body.errors) && attempt < maxAttempts) {
+          await sleep(400 * attempt);
+          continue;
+        }
+      } else {
+        console.log('[Monday][api] ←', { reqId, op, ms, dataKeys: body?.data ? Object.keys(body.data) : [] });
       }
-    );
-    const ms = Date.now() - startedAt;
-    const body = res.data;
-    // Monday returns GraphQL errors with HTTP 200, so they bypass the axios
-    // interceptor — surface them explicitly here.
-    if (body?.errors?.length) {
-      console.error('[Monday][api] ✗ GraphQL error', {
-        reqId,
-        op,
-        ms,
-        errors: stringifyForLog(body.errors, 1000)
-      });
-    } else {
-      console.log('[Monday][api] ←', {
-        reqId,
-        op,
-        ms,
-        dataKeys: body?.data ? Object.keys(body.data) : []
-      });
+      return body;
+    } catch (err) {
+      const ms = Date.now() - startedAt;
+      const status = err?.response?.status || null;
+      console.error('[Monday][api] ✗ HTTP error', { reqId, op, ms, attempt, status, message: err?.message || '', responseBody: stringifyForLog(err?.response?.data, 1000) });
+      // Retry transient transport failures (5xx, timeout, network) too.
+      const transient = !status || status >= 500 || err?.code === 'ECONNABORTED';
+      if (transient && attempt < maxAttempts) {
+        await sleep(400 * attempt);
+        continue;
+      }
+      throw err;
     }
-    return body;
-  } catch (err) {
-    const ms = Date.now() - startedAt;
-    console.error('[Monday][api] ✗ HTTP error', {
-      reqId,
-      op,
-      ms,
-      status: err?.response?.status || null,
-      message: err?.message || '',
-      responseBody: stringifyForLog(err?.response?.data, 1000)
-    });
-    throw err;
   }
+  return lastBody;
 }
 
 // Throw a descriptive error when a GraphQL response carried errors but the caller
@@ -288,18 +300,9 @@ function generatePhoneFormats(e164Number) {
 
   // US/Canada numbers: +1XXXXXXXXXX → 11 digits starting with 1
   if (digits.length === 11 && digits.startsWith('1')) {
-    const d = digits.slice(1) // 10 significant digits
-    return [
-      e164Number,                                             // +16232011860
-      digits,                                                 // 16232011860
-      d,                                                      // 6232011860
-      `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`,    // (623) 201-1860
-      `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`,      // 623-201-1860
-      `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6)}`,      // 623.201.1860
-      `+1 (${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`, // +1 (623) 201-1860
-      `+1-${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`,   // +1-623-201-1860
-      `(${d.slice(0,3)})${d.slice(3,6)}-${d.slice(6)}`,     // (623)201-1860
-    ].filter((v, i, arr) => arr.indexOf(v) === i) // deduplicate
+    // Monday's phone column matched on "16232011816" (country code + digits, no symbols).
+    // Use that single format so every lookup — match OR no-match — is exactly one query.
+    return [digits] // 16232011816
   }
 
   // International numbers — include library-formatted variants (e.g. "+62 320 11860")
@@ -580,53 +583,64 @@ function parseMondayCallLogBody(body = '') {
 }
 
 async function searchBoardByPhone({ accessToken, boardId, phoneColumnId, phone }) {
-  // Monday's items_page_by_column_values matches an item if the column equals ANY value
-  // in column_values, so all phone formats go in ONE request rather than 9 concurrent
-  // ones. This is the single biggest latency/throttling win for the existence check:
-  // one round-trip, bounded by the client timeout, instead of waiting on the slowest of
-  // nine parallel GraphQL calls (which under Monday's complexity limits caused timeouts).
+  // Try formats in priority order (Monday's "+1 623 201 1816" first) and STOP at the
+  // first format that matches — best case is a single query. Each request is bounded by
+  // the client timeout and try/caught, so a slow/failed format is skipped, not fatal.
   const phoneFallbacks = generatePhoneFormats(phone)
-  if (!phoneFallbacks.length) return []
-  try {
-    const res = await mondayRequest(
-      accessToken,
-      `
-      query ($values: [String!]) {
-        items_page_by_column_values(
-          board_id: ${boardId},
-          columns: [{ column_id: "${phoneColumnId}", column_values: $values }]
-        ) {
-          items { id name }
+  for (const searchValue of phoneFallbacks) {
+    try {
+      const res = await mondayRequest(
+        accessToken,
+        `
+        query ($value: String!) {
+          items_page_by_column_values(
+            board_id: ${boardId},
+            columns: [{ column_id: "${phoneColumnId}", column_values: [$value] }]
+          ) {
+            items { id name }
+          }
         }
+        `,
+        { value: searchValue }
+      )
+      if (res?.errors?.length) {
+        console.warn('[Monday] searchBoardByPhone error on board', boardId, res.errors[0].message)
+        continue
       }
-      `,
-      { values: phoneFallbacks }
-    )
-    if (res?.errors?.length) {
-      console.warn('[Monday] searchBoardByPhone error on board', boardId, res.errors[0].message)
-      return []
+      const items = res?.data?.items_page_by_column_values?.items || []
+      if (items.length > 0) {
+        console.log('[Monday] findContact: matched', items.length, 'contact(s) on board', boardId, 'via format', searchValue)
+        return items
+      }
+    } catch (e) {
+      console.warn('[Monday] searchBoardByPhone request failed on board', boardId, 'format', searchValue, e.message)
     }
-    const items = res?.data?.items_page_by_column_values?.items || []
-    // Dedupe defensively (an item matching multiple formats is returned once).
-    const byId = new Map()
-    for (const item of items) byId.set(item.id, item)
-    const merged = [...byId.values()]
-    if (merged.length > 0) {
-      console.log('[Monday] findContact: matched', merged.length, 'contact(s) on board', boardId)
-    }
-    return merged
-  } catch (e) {
-    console.warn('[Monday] searchBoardByPhone request failed on board', boardId, e.message)
-    return []
   }
+  return []
 }
 
-async function findContact({ phoneNumber, accessToken, authHeader, user }) {
+async function findContact({ phoneNumber, accessToken, authHeader, user, isExtension }) {
   const licenseError = await validateLicenseOrFail(user, 'findContact');
   if (licenseError) return licenseError;
 
+  // Replicate ServiceTitan: skip the CRM search (and all its API calls) for extension-context
+  // lookups. By the time the user clicks "Log", the extension already knows whether the
+  // contact exists from the earlier match, so re-searching here is redundant — return empty
+  // and let the extension drive the create-contact / log flow.
+  if (isExtension === 'true' || isExtension === true) {
+    return { successful: false, matchedContactInfo: [] };
+  }
+
   const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-  const boardId = await getBoardId({ user, accessToken: resolvedAccessToken })
+  let boardId = null
+  try {
+    boardId = await getBoardId({ user, accessToken: resolvedAccessToken })
+  } catch (e) {
+    // A board-resolution failure (e.g. a slow discovery query hitting the request
+    // timeout) should not surface as a hard error — tell the user to retry.
+    console.warn('[Monday] findContact: board resolution failed', e.message)
+    return { successful: false, returnMessage: { messageType: 'warning', message: 'Monday is taking too long to respond. Please try again.', ttl: 3000 } }
+  }
   if (!boardId) {
     return { successful: false, returnMessage: { messageType: 'error', message: 'No Monday board with a Phone column was found. Add a Phone column to your board and try again.', ttl: 3000 } }
   }
@@ -678,7 +692,16 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
   }
 
   const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-  const boardId = await getBoardId({ user, accessToken: resolvedAccessToken })
+  // Board resolution must not throw out of this function — if it does (e.g. a slow
+  // board-discovery query hitting the request timeout), the framework surfaces it as
+  // "Contact search by name failed". Degrade to an empty result instead.
+  let boardId = null
+  try {
+    boardId = await getBoardId({ user, accessToken: resolvedAccessToken })
+  } catch (e) {
+    console.warn('[Monday] findContactWithName: board resolution failed', e.message)
+    return { successful: true, matchedContactInfo: [] }
+  }
   if (!boardId) {
     return { successful: true, matchedContactInfo: [] }
   }
@@ -815,7 +838,12 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-  const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user });
+  // Log directly against the contact passed in — like ServiceTitan/ServiceNow — instead of
+  // re-querying Monday for the board. create_update only needs the item id (contactInfo.id),
+  // so no board lookup ("search") is needed on the main path. The board id is carried on the
+  // contact (smuggled via `type`); it's only needed for an optional recording upload, which
+  // resolves it lazily below. This keeps logging working even if board discovery is slow/down.
+  const boardId = String(contactInfo?.boardId || contactInfo?.type || '') || null;
   // Fall back to a generated subject when no custom subject is supplied — matches every
   // other connector (clio/insightly/netsuite) and avoids the blank "Subject:" line.
   const defaultSubject = `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo?.name || 'contact'}`
@@ -880,7 +908,11 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   console.log('[Monday][createCallLog] created update', { updateId, itemId: Number(contactInfo.id), boardId })
 
   // ---- Recording Upload ----
+  // Only here is the board id actually needed. Use the one carried on the contact; resolve
+  // it lazily (one query) only if it wasn't provided, so the call log itself never blocks on
+  // board discovery.
   if (callLog?.recording?.downloadUrl) {
+    const uploadBoardId = boardId || await resolveBoardId({ accessToken: resolvedAccessToken, user })
     const fileName = `Call-${Date.now()}.mp3`
     const s3Key = fileName
     const s3Url = await downloadAudioFile(
@@ -894,7 +926,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
       accessToken: resolvedAccessToken,
       itemId: Number(contactInfo.id),
       fileName,
-      boardId
+      boardId: uploadBoardId
     })
   }
 
@@ -1111,13 +1143,17 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
   )
 
   if (res?.errors?.length || !res?.data?.updates?.length) {
+    // The stored update may have been deleted, or the id predates this connector. Treat
+    // it as "not found" (a warning, not a hard error) so the update flow recreates the
+    // update instead of surfacing an alarming "Failed to fetch call log" to the user.
+    if (res?.errors?.length) {
+      console.warn('[Monday][getCallLog] updates query returned errors', { callLogId, error: res.errors[0]?.message })
+    } else {
+      console.log('[Monday][getCallLog] no update found for id', { callLogId })
+    }
     return {
       callLogInfo: {},
-      returnMessage: {
-        messageType: 'error',
-        message: 'Failed to fetch call log',
-        ttl: 3000
-      }
+      returnMessage: { messageType: 'warning', message: 'Call log not found', ttl: 3000 }
     }
   }
 
