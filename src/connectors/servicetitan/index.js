@@ -12,6 +12,10 @@ const qs = require('qs');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = sequelize ? initModels(sequelize) : null;
+const licenseHelper = require('../shared/license');
+const apiLog = require('../shared/apiLogger');
+
+const serviceTitanApiClient = axios.create();
 
 // Env-driven so the same connector works in integration and production (the token URL is
 // already env-driven via SERVICETITAN_ACCESS_TOKEN_URI). Defaults to the integration/sandbox
@@ -19,11 +23,6 @@ const models = sequelize ? initModels(sequelize) : null;
 // SERVICETITAN_JPM_URL to the api.servicetitan.io equivalents (and matching prod creds).
 const SERVICE_TITAN_JPM_URL = process.env.SERVICETITAN_JPM_URL || "https://api-integration.servicetitan.io/jpm/v2/tenant"
 const SERVICE_TITAN_CRM_URL = process.env.SERVICETITAN_CRM_URL || "https://api-integration.servicetitan.io/crm/v2/tenant"
-
-const serviceTitanApiClient = axios.create();
-
-const licenseHelper = require('../shared/license');
-const apiLog = require('../shared/apiLogger');
 
 function stringifyForLog(value, maxLength = 1200) {
     try {
@@ -52,7 +51,8 @@ function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}`).toString('base64');
 }
 
-async function getUserInfo({ additionalInfo }) {
+async function getUserInfo({ hostname, additionalInfo }) {
+    console.log("Additional Info: ", additionalInfo)
     // RC identity arrives via the manifest's rcAdditionalSubmission (auto-pulled from RC
     // cached data — no user prompt, no framework change). ServiceTitan API auth is
     // app-level (client_credentials); the email field has been removed.
@@ -99,6 +99,60 @@ async function getUserInfo({ additionalInfo }) {
     });
 
     apiLog.logStart('ServiceTitan', 'getUserInfo', { userId, tenantId, rcAccountId });
+
+    if (models && models.companies && models.customer && rcAccountId) {
+        try {
+            const company = await models.companies.findOne({ 
+                where: { rcAccountId: String(rcAccountId), tenantId: String(tenantId), status: true }, 
+                raw: true 
+            });
+            if (!company) {
+                return {
+                    successful: false,
+                    returnMessage: {
+                        messageType: 'error',
+                        message: 'No active subscription found for this account. Please contact Gate6 support.',
+                        ttl: 5000
+                    }
+                };
+            }
+
+            const existingCustomer = await models.customer.findOne({
+                where: { companyId: company.id, sysId: String(userId) },
+                raw: true
+            });
+
+            if (!existingCustomer) {
+                const currentSeatCount = await models.customer.count({
+                    where: { companyId: company.id }
+                });
+
+                const maxSeats = Number(company.maxAllowedUsers);
+                if (Number.isFinite(maxSeats) && maxSeats >= 0 && currentSeatCount >= maxSeats) {
+                    return {
+                        successful: false,
+                        returnMessage: {
+                            messageType: 'error',
+                            message: `License seat limit reached (${maxSeats} of ${maxSeats} in use). Contact your admin.`,
+                            ttl: 5000
+                        }
+                    };
+                }
+
+                await models.customer.create({
+                    sysId: String(userId),
+                    companyId: company.id,
+                    email: rcUserEmail || '',
+                    firstname: rcUserName || 'ServiceTitan User',
+                    platform: 'gate6.servicetitan',
+                    hostname,
+                    rcAccountId
+                });
+            }
+        } catch (err) {
+            console.error('Error enforcing customer seat limits:', err);
+        }
+    }
 
     try {
         const accessToken = await generateServiceTitanToken(clientId, clientSecret);
@@ -185,7 +239,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
     if (phoneNumberObj.valid) {
         phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
     }
-    const findContactUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}`;
+    const findContactUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}&active=true`;
     const personInfo = await serviceTitanApiClient.get(
         findContactUrl,
         {
@@ -197,9 +251,34 @@ async function findContact({ user, phoneNumber, isExtension }) {
         });
 
     if (personInfo.data && personInfo.data.data) {
+        const seenIds = new Set();
         for (let rawPersonInfo of personInfo.data.data) {
+            if (seenIds.has(rawPersonInfo.id)) continue;
+            seenIds.add(rawPersonInfo.id);
+            
             rawPersonInfo['phoneNumber'] = phoneNumber;
-            matchedContactInfo.push(formatContact(rawPersonInfo));
+            const contact = formatContact(rawPersonInfo);
+
+            // Fetch active/scheduled jobs for this customer and attach them as dropdown
+            // options — the RC extension reads additionalInfo to populate contactDependent
+            // selection fields (same pattern as ServiceNow's state/type/account fields).
+            let jobOptions = [{ const: 'none', title: 'None (Log to Customer Note)' }];
+            try {
+                const jobs = await fetchJobs({ user, params: { customerId: contact.id } });
+                const activeJobs = jobs.map(job => ({
+                    const: String(job.id),
+                    title: `[#${job.jobNumber || job.id}] ${job.type?.name || job.jobTypeName || 'Job'}${job.status ? ' \u2013 ' + job.status : ''}`
+                }));
+                jobOptions.push(...activeJobs);
+            } catch (err) {
+                console.warn('[ServiceTitan] findContact: failed to fetch jobs for customer', contact.id, err.message);
+            }
+
+            contact.additionalInfo = { 
+                associatedJobs: jobOptions
+            };
+
+            matchedContactInfo.push(contact);
         }
     }
 
@@ -209,7 +288,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
         const deleted = await AccountDataModel.destroy({
           where: {
             rcAccountId: user.rcAccountId,
-            platformName: 'servicetitan',
+            platformName: 'gate6.servicetitan',
             dataKey: `contact-${phoneNumber}`
           }
         });
@@ -251,7 +330,7 @@ async function findContactWithName({ user, name }) {
     apiLog.logStart('ServiceTitan', 'findContactWithName', { name });
 
     try {
-        const findContactWithNameUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?name=${name}`;
+        const findContactWithNameUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?name=${name}&active=true`;
         const personInfo = await serviceTitanApiClient.get(
             findContactWithNameUrl,
             {
@@ -264,10 +343,34 @@ async function findContactWithName({ user, name }) {
         );
 
         if (personInfo.data && personInfo.data.data) {
+            const seenIds = new Set();
             for (let rawPersonInfo of personInfo.data.data) {
+                if (seenIds.has(rawPersonInfo.id)) continue;
+                seenIds.add(rawPersonInfo.id);
+
                 const phone = rawPersonInfo.phones?.find(p => p.type === 'Primary')?.phone ?? '';
                 rawPersonInfo['phoneNumber'] = phone;
-                matchedContactInfo.push(formatContact(rawPersonInfo));
+                const contact = formatContact(rawPersonInfo);
+
+                // Fetch active/scheduled jobs for this customer
+                let jobOptions = [{ const: 'none', title: 'None (Log to Customer Note)' }];
+                try {
+                    const jobs = await fetchJobs({ user, params: { customerId: contact.id } });
+                    const activeJobs = jobs.map(job => ({
+                        const: String(job.id),
+                        title: `[#${job.jobNumber || job.id}] ${job.type?.name || job.jobTypeName || 'Job'}${job.status ? ' \u2013 ' + job.status : ''}`
+                    }));
+                    jobOptions.push(...activeJobs);
+                    console.log("Jobs count : ", activeJobs.length)
+                } catch (err) {
+                    console.warn('[ServiceTitan] findContactWithName: failed to fetch jobs for customer', contact.id, err.message);
+                }
+
+                contact.additionalInfo = { 
+                    associatedJobs: jobOptions
+                };
+
+                matchedContactInfo.push(contact);
             }
         }
         apiLog.logSuccess('ServiceTitan', 'findContactWithName', { name, matchedCount: matchedContactInfo.length, apiEndpoint: findContactWithNameUrl });
@@ -425,21 +528,64 @@ async function fetchJobs({ user, params = {} }) {
         const tenantId = user.dataValues.platformAdditionalInfo.tenant;
         const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
-        const fetchJobsUrl = `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`;
-        const resp = await serviceTitanApiClient.get(
-            fetchJobsUrl,
-            {
-                headers: {
-                    'Authorization': `Bearer ${auth}`,
-                    'ST-App-Key': stAppKey
-                },
-                _operation: 'fetchJobs'
-            }
-        );
+        // ServiceTitan API does not support comma-separated jobStatus. 
+        // We must fetch each active status individually and merge them.
+        const activeStatuses = ['Scheduled', 'Dispatched', 'InProgress'];
+        
+        const jobPromises = activeStatuses.map(status => {
+            const fetchJobsUrl = `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs?pageSize=10&jobStatus=${status}&customerId=${params?.customerId}&active=true`;
+            return serviceTitanApiClient.get(
+                fetchJobsUrl,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${auth}`,
+                        'ST-App-Key': stAppKey
+                    },
+                    _operation: 'fetchJobs'
+                }
+            ).catch(err => {
+                console.warn(`Failed to fetch ${status} jobs:`, err.message);
+                return { data: { data: [] } }; // Fallback for failed status
+            });
+        });
 
-        // ServiceTitan responses typically put results under `data` key
-        const jobs = resp.data?.data || [];
-        apiLog.logSuccess('ServiceTitan', 'fetchJobs', { customerId: params?.customerId, count: jobs.length, apiEndpoint: fetchJobsUrl });
+        const responses = await Promise.all(jobPromises);
+        let jobs = [];
+        responses.forEach(resp => {
+            if (resp.data && resp.data.data) {
+                jobs = jobs.concat(resp.data.data);
+            }
+        });
+
+        // Fetch the human-readable job type names for the retrieved jobs
+        const jobTypeIds = [...new Set(jobs.filter(j => j.jobTypeId).map(j => j.jobTypeId))];
+        const jobTypePromises = jobTypeIds.map(typeId => {
+            const fetchJobTypeUrl = `${SERVICE_TITAN_JPM_URL}/${tenantId}/job-types/${typeId}`;
+            return serviceTitanApiClient.get(
+                fetchJobTypeUrl,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${auth}`,
+                        'ST-App-Key': stAppKey
+                    },
+                    _operation: 'fetchJobs'
+                }
+            ).then(res => ({ id: typeId, name: res.data?.name || res.data?.data?.name }))
+             .catch(err => {
+                 console.warn(`Failed to fetch job type ${typeId}:`, err.message);
+                 return { id: typeId, name: 'Job' };
+             });
+        });
+
+        const jobTypes = await Promise.all(jobTypePromises);
+        const jobTypeMap = {};
+        jobTypes.forEach(jt => { jobTypeMap[jt.id] = jt.name; });
+
+        jobs.forEach(job => {
+            job.jobTypeName = jobTypeMap[job.jobTypeId] || 'Job';
+        });
+
+        apiLog.logSuccess('ServiceTitan', 'fetchJobs', { customerId: params?.customerId, count: jobs.length, apiEndpoint: `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs` });
         return jobs;
     } catch (err) {
         console.error('fetchJobs error:', err?.response?.data, err?.response, err);
@@ -475,7 +621,8 @@ function sanitizeNoteText(text) {
     return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript }) {
+async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript, additionalSubmission }) {
+    console.log("Additional Submission: ", additionalSubmission)
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
@@ -500,68 +647,105 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
         sections.push(`Agent Notes:\n${sanitizeNoteText(note)}`);
     }
 
-    if (contactInfo?.phone && (user.userSettings?.addCallLogContactNumber?.value ?? true)) {
-        sections.push(`Contact Number:\n${contactInfo.phone}`);
-    }
-
-    if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
-        sections.push(`Result:\n${callLog.result}`);
-    }
-
-    if (callLog?.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
-        sections.push(`Duration:\n${callLog.duration} sec`);
-    }
-
     if (callLog?.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) {
         sections.push(`Recording:\n${callLog.recording.link}`);
     }
 
-    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-        sections.push(`AI Note:\n${sanitizeNoteText(aiNote)}`);
-    }
-
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-        sections.push(`Transcript:\n${sanitizeNoteText(transcript)}`);
+        sections.push(`AI transcript:\n${sanitizeNoteText(transcript)}`);
+    }
+    
+    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+        sections.push(`AI Note :\n${sanitizeNoteText(aiNote)}`);
     }
 
     const optionalSections = sections.join("\n\n");
 
-    // Build the note left-aligned (no leading indentation). The previous template literal
-    // indented every line by 8 spaces, which polluted the stored note and made getCallLog's
-    // label parsing (and the on-screen format) fragile.
-    const headerLines = [
-        `Subject: ${subject}`,
-        `Direction: ${callLog.direction}`,
-        `Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`,
-        `End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`,
-    ];
-    const noteText = optionalSections
-        ? `${headerLines.join("\n")}\n\n${optionalSections}`
-        : headerLines.join("\n");
+    const headerLines = [];
+    if (subject) headerLines.push(`Subject: ${subject}`);
+    if (callLog.direction) headerLines.push(`Direction: ${callLog.direction}`);
+    
+    if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
+        headerLines.push(`Result: ${callLog.result}`);
+    }
 
-    // Always log to the customer note. Previously, when a job existed this PATCHed the job's
-    // `summary` with the call log — OVERWRITING business data — and attached to an arbitrary
-    // "latest job by max id". A call belongs to the customer, so a customer note is the
-    // non-destructive home and keeps create/update/get/delete on one consistent path.
-    // (If call logs ON the job are wanted, the correct mechanism is Jobs_CreateNote job notes,
-    //  not the summary — a separate enhancement.)
-    const logType = "note";
-    const createCallLogUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}/notes`;
-    const addNoteRes = await serviceTitanApiClient.post(
-        createCallLogUrl,
-        { text: noteText },
-        {
-            headers: {
-                Authorization: `Bearer ${auth}`,
-                "ST-App-Key": stAppKey,
-                "Content-Type": "application/json"
-            },
-            _operation: 'createCallLog'
+    if (callLog?.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+        headerLines.push(`Duration: ${callLog.duration} sec`);
+    }
+
+    if (callLog.sessionId && (user.userSettings?.addCallSessionId?.value ?? true)) {
+        headerLines.push(`Call Session ID: ${callLog.sessionId}`);
+    }
+
+    const rcUserName = additionalSubmission?.rcUserName;
+    if (rcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) {
+        headerLines.push(`RingCentral Username: ${rcUserName}`);
+    }
+
+    const rcPhone = callLog.extensionNumber || (callLog.direction === 'Inbound' ? callLog.to?.phoneNumber : callLog.from?.phoneNumber) || additionalSubmission?.rcPhoneNumber;
+    if (rcPhone && (user.userSettings?.addRingCentralNumber?.value ?? true)) {
+        headerLines.push(`RingCentral Phone Number: ${rcPhone}`);
+    }
+    
+    const contactPhone = contactInfo?.phoneNumber || contactInfo?.phone;
+    if (contactPhone && (user.userSettings?.addCallLogContactNumber?.value ?? true)) {
+        headerLines.push(`Contact Number: ${contactPhone}`);
+    }
+
+    const footerLines = [];
+    if (callLog.startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
+        footerLines.push(`Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`);
+        if (callLog.duration) {
+            footerLines.push(`End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`);
         }
-    );
+    }
 
-    const logId = `${addNoteRes.data.id}_${logType}`;
-    apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, contactId: contactInfo.id, apiEndpoint: createCallLogUrl });
+    let noteText = headerLines.join("\n");
+    if (optionalSections) noteText += `\n\n${optionalSections}`;
+    if (footerLines.length > 0) noteText += `\n\n${footerLines.join("\n")}`;
+
+    // If the user selected a job from the dropdown, post the note to the job notes endpoint.
+    // Otherwise fall back to the customer-level note (the non-destructive default).
+    const selectedJobId = additionalSubmission?.associatedJobs;
+
+    let logId;
+
+    if (selectedJobId && selectedJobId !== 'none') {
+        // Post to job notes: POST /jpm/v2/tenant/{tenantId}/jobs/{jobId}/notes
+        const jobNoteUrl = `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${selectedJobId}/notes`;
+        const jobNoteRes = await serviceTitanApiClient.post(
+            jobNoteUrl,
+            { text: noteText },
+            {
+                headers: {
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey,
+                    "Content-Type": "application/json"
+                },
+                _operation: 'createCallLog'
+            }
+        );
+        // Encode as {noteId}_{jobId}_jobnote so update/get know this is a job note
+        logId = `${jobNoteRes.data.id}_${selectedJobId}_jobnote`;
+        apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, jobId: selectedJobId, apiEndpoint: jobNoteUrl });
+    } else {
+        // Default: customer-level note
+        const createCallLogUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}/notes`;
+        const addNoteRes = await serviceTitanApiClient.post(
+            createCallLogUrl,
+            { text: noteText },
+            {
+                headers: {
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey,
+                    "Content-Type": "application/json"
+                },
+                _operation: 'createCallLog'
+            }
+        );
+        logId = `${addNoteRes.data.id}_note`;
+        apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, contactId: contactInfo.id, apiEndpoint: createCallLogUrl });
+    }
 
     return {
         logId,
@@ -587,12 +771,23 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     const contactId = existingCallLog.contactId;
 
-    let [realId, logType] = existingCallLog.thirdPartyLogId.split("_");
-    logType = logType || "note";
+    let [noteId, jobId, logType] = existingCallLog.thirdPartyLogId.split("_");
+    // Legacy logIds were: {realId}_{note|job}  — 2 parts.
+    // New job-note logIds are: {noteId}_{jobId}_jobnote — 3 parts.
+    // Normalise: if only 2 parts, treat the second as logType and jobId is empty.
+    if (!logType) {
+        logType = jobId || 'note';
+        jobId = null;
+    }
+    const realId = noteId;
 
     let direction = "";
     let startTime = "";
     let endTime = "";
+    let callSessionId = "";
+    let rcUsername = "";
+    let rcPhone = "";
+    let contactPhone = "";
     let result = "";
     let duration = "";
     // Existing optional fields parsed from the old body so an update preserves them when
@@ -605,7 +800,27 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     // ---------------- FETCH OLD DATA ----------------
     let body = "";
-    if (logType === "note") {
+    if (logType === "jobnote") {
+        // Fetch the job note text
+        try {
+            const jobNoteListRes = await serviceTitanApiClient.get(
+                `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${jobId}/notes`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${auth}`,
+                        "ST-App-Key": stAppKey
+                    },
+                    _operation: 'updateCallLog'
+                }
+            );
+            const targetNote = (jobNoteListRes.data?.data || []).find(n => n.id == realId);
+            if (targetNote) {
+                body = targetNote.text || "";
+            }
+        } catch (e) {
+            console.warn('[ServiceTitan][updateCallLog] could not fetch job note', { realId, jobId, error: e?.message });
+        }
+    } else if (logType === "note") {
 
         const getLogRes = await serviceTitanApiClient.get(
             `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
@@ -624,6 +839,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
             body = targetLog.text || "";
         }
     } else {
+        // Legacy job-summary logType ("job")
         const jobRes = await serviceTitanApiClient.get(
             `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,
             {
@@ -649,12 +865,16 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         direction = normalized.match(/^\s*Direction:\s*(.*)$/m)?.[1]?.trim() || "";
         startTime = normalized.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
         endTime = normalized.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
+        callSessionId = normalized.match(/^\s*Call Session ID:\s*(.*)$/m)?.[1]?.trim() || "";
+        rcUsername = normalized.match(/^\s*RingCentral Username:\s*(.*)$/m)?.[1]?.trim() || "";
+        rcPhone = normalized.match(/^\s*RingCentral Phone Number:\s*(.*)$/m)?.[1]?.trim() || "";
+        contactPhone = normalized.match(/^\s*Contact Number:\s*(.*)$/m)?.[1]?.trim() || "";
         result = normalized.match(/^\s*Result:\s*(.*)$/m)?.[1]?.trim() || "";
         duration = normalized.match(/^\s*Duration:\s*(.*)$/m)?.[1]?.replace(/\s*sec$/i, '').trim() || "";
         // Multi-line fields end at the next "Label:" line; single-line ones at the next newline.
         oldNote = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
-        oldAiNote = normalized.match(/AI Note:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
-        oldTranscript = normalized.match(/Transcript:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
+        oldAiNote = normalized.match(/AI Note\s*:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/i)?.[1]?.trim() || "";
+        oldTranscript = normalized.match(/(?:AI transcript|Transcript):\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/i)?.[1]?.trim() || "";
         oldRecording = normalized.match(/Recording:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || "";
     }
 
@@ -671,20 +891,14 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     if (effNote && (user.userSettings?.addCallLogNote?.value ?? true)) {
         sections.push(`Agent Notes:\n${sanitizeNoteText(effNote)}`);
     }
-    if (result && (user.userSettings?.addCallLogResult?.value ?? true)) {
-        sections.push(`Result:\n${result}`);
-    }
-    if (duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
-        sections.push(`Duration:\n${duration} sec`);
-    }
     if (effRecording && (user.userSettings?.addCallLogRecording?.value ?? true)) {
         sections.push(`Recording:\n${effRecording}`);
     }
-    if (effAiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-        sections.push(`AI Note:\n${sanitizeNoteText(effAiNote)}`);
-    }
     if (effTranscript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-        sections.push(`Transcript:\n${sanitizeNoteText(effTranscript)}`);
+        sections.push(`AI transcript:\n${sanitizeNoteText(effTranscript)}`);
+    }
+    if (effAiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+        sections.push(`AI Note :\n${sanitizeNoteText(effAiNote)}`);
     }
 
     if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
@@ -695,25 +909,79 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         subjectToUse = direction ? `${direction} Call` : "Call";
     }
 
-    const optionalSections = sections.join("\n\n");
-
     // ---------------- FINAL STRUCTURED NOTE (left-aligned, no indentation) ----------------
 
-    const headerLines = [
-        `Subject: ${subjectToUse}`,
-        `Direction: ${direction}`,
-        `Start Time: ${startTime}`,
-        `End Time: ${endTime}`,
-    ];
-    const noteText = optionalSections
-        ? `${headerLines.join("\n")}\n\n${optionalSections}`
-        : headerLines.join("\n");
+    const headerLines = [];
+    if (subjectToUse) headerLines.push(`Subject: ${subjectToUse}`);
+    if (direction) headerLines.push(`Direction: ${direction}`);
+    
+    if (result && (user.userSettings?.addCallLogResult?.value ?? true)) {
+        headerLines.push(`Result: ${result}`);
+    }
+    if (duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+        headerLines.push(`Duration: ${duration} sec`);
+    }
+    if (callSessionId && (user.userSettings?.addCallSessionId?.value ?? true)) {
+        headerLines.push(`Call Session ID: ${callSessionId}`);
+    }
+    if (rcUsername && (user.userSettings?.addRingCentralUserName?.value ?? true)) {
+        headerLines.push(`RingCentral Username: ${rcUsername}`);
+    }
+    if (rcPhone && (user.userSettings?.addRingCentralNumber?.value ?? true)) {
+        headerLines.push(`RingCentral Phone Number: ${rcPhone}`);
+    }
+    if (contactPhone && (user.userSettings?.addCallLogContactNumber?.value ?? true)) {
+        headerLines.push(`Contact Number: ${contactPhone}`);
+    }
+
+    const footerLines = [];
+    if (startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
+        footerLines.push(`Start Time: ${startTime}`);
+    }
+    if (endTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
+        footerLines.push(`End Time: ${endTime}`);
+    }
+
+    const optionalSections = sections.join("\n\n");
+    let noteText = headerLines.join("\n");
+    if (optionalSections) noteText += `\n\n${optionalSections}`;
+    if (footerLines.length > 0) noteText += `\n\n${footerLines.join("\n")}`;
 
     let newLogId;
 
     // ---------------- UPDATE NOTE ----------------
 
-    if (logType === "note") {
+    if (logType === "jobnote") {
+        // Job note: create a new note on the job, delete the old one (same create-then-delete
+        // pattern as customer notes since there is no in-place update endpoint).
+        const jobNoteAddRes = await serviceTitanApiClient.post(
+            `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${jobId}/notes`,
+            { text: noteText },
+            {
+                headers: {
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey,
+                    "Content-Type": "application/json"
+                },
+                _operation: 'updateCallLog'
+            }
+        );
+        newLogId = `${jobNoteAddRes.data.id}_${jobId}_jobnote`;
+
+        if (realId && String(jobNoteAddRes.data.id) !== String(realId)) {
+            try {
+                await serviceTitanApiClient.delete(
+                    `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${jobId}/notes/${realId}`,
+                    {
+                        headers: { Authorization: `Bearer ${auth}`, "ST-App-Key": stAppKey },
+                        _operation: 'updateCallLog'
+                    }
+                );
+            } catch (e) {
+                console.warn('[ServiceTitan][updateCallLog] could not delete old job note — a duplicate may remain', { oldNoteId: realId, jobId, status: e?.response?.status, message: e?.message });
+            }
+        }
+    } else if (logType === "note") {
 
         // ServiceTitan customer notes have no in-place update endpoint, so an edit is a
         // create-then-delete: post the replacement note, then delete the original so we don't
@@ -1024,7 +1292,16 @@ async function getCallLog({ user, callLogId }) {
 
     apiLog.logStart('ServiceTitan', 'getCallLog', { logId: callLogId });
 
-    const [realId, logType = "note"] = callLogId.split("_");
+    // Parse logId: supports both 2-part legacy ({id}_note or {id}_job)
+    // and 3-part job-note ({noteId}_{jobId}_jobnote).
+    const parts = callLogId.split("_");
+    let realId, jobId, logType;
+    if (parts.length >= 3) {
+        [realId, jobId, logType] = parts;
+    } else {
+        [realId, logType = "note"] = parts;
+        jobId = null;
+    }
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -1036,8 +1313,48 @@ async function getCallLog({ user, callLogId }) {
 
     try {
 
-        // ---------------- JOB LOG ----------------
-        if (logType === "job") {
+        // ---------------- JOB NOTE LOG (selected job from dropdown) ----------------
+        if (logType === "jobnote") {
+
+            try {
+                const jobNoteListRes = await serviceTitanApiClient.get(
+                    `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${jobId}/notes`,
+                    {
+                        headers: {
+                            Authorization: `Bearer ${auth}`,
+                            "ST-App-Key": stAppKey
+                        },
+                        _operation: 'getCallLog'
+                    }
+                );
+
+                const targetNote = (jobNoteListRes.data?.data || []).find(n => n.id == realId);
+
+                if (targetNote) {
+                    const body = targetNote.text || "";
+                    const normalized = body.replace(/\r\n/g, '\n');
+
+                    const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
+                    subject = subjectMatch ? subjectMatch[1].trim() : '';
+
+                    if (!subject || subject.toLowerCase().startsWith('direction:')) {
+                        subject = '';
+                    }
+
+                    const agentMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n[A-Za-z][^\n]*:|$)/);
+                    if (agentMatch) {
+                        note = agentMatch[1].trim();
+                    }
+
+                    full_data = body;
+                }
+            } catch (e) {
+                console.warn('[ServiceTitan][getCallLog] could not fetch job note', { realId, jobId, error: e?.message });
+            }
+        }
+
+        // ---------------- LEGACY JOB SUMMARY LOG ----------------
+        else if (logType === "job") {
 
             const jobRes = await serviceTitanApiClient.get(
                  `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,

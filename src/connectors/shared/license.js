@@ -47,37 +47,30 @@ async function computeLicenseStatus({ models, userId }) {
   // Seat enforcement only when we have an rcAccountId to count seats per tenant. Legacy
   // accounts (no rcAccountId) keep the prior status-only behaviour — no seat caps.
   const maxSeats = Number(company.maxAllowedUsers);
-  if (user.rcAccountId && Number.isFinite(maxSeats) && maxSeats > 0) {
-    const activeUsers = await UserModel.findAll({
-      where: {
-        rcAccountId: user.rcAccountId,
-        platform: user.platform,
-        accessToken: { [Op.ne]: '' }
-      },
-      order: [['createdAt', 'ASC']],
-      attributes: ['id'],
-      raw: true
+  if (user.rcAccountId && Number.isFinite(maxSeats) && maxSeats >= 0) {
+    const activeCustomers = await models.customer.findAll({
+        where: { companyId: company.id },
+        order: [['updatedAt', 'ASC']],
+        attributes: ['sysId'],
+        raw: true
     });
-    const seatIndex = activeUsers.findIndex(u => u.id === userId);
-    // Two cases:
-    //   - Already an active seat-holder (seatIndex >= 0): must sit within the first
-    //     `maxSeats` by createdAt, otherwise they're beyond the purchased allotment.
-    //   - Not yet counted (seatIndex === -1): a user connecting for the first time (their
-    //     accessToken isn't persisted at check time). Allow them to claim a seat as long
-    //     as there's room — they become seat #activeUsers.length. Deny only when full.
+    console.log("activeCustomers", activeCustomers.length)
+    
+    const seatIndex = activeCustomers.findIndex(c => c.sysId === userId);
     const overLimit = seatIndex === -1
-      ? activeUsers.length >= maxSeats
-      : seatIndex >= maxSeats;
+        ? activeCustomers.length >= maxSeats
+        : seatIndex >= maxSeats;
+        
     if (overLimit) {
-      console.warn('[license] seat limit reached', {
-        userId, platform: user.platform, rcAccountId: user.rcAccountId,
-        usedSeats: activeUsers.length, maxSeats, seatIndex
-      });
-      return {
-        isLicenseValid: false,
-        licenseStatus: 'Inactive',
-        licenseStatusDescription: `License seat limit reached (${maxSeats} of ${maxSeats} in use). Contact your admin.`
-      };
+        console.warn('[license] seat limit reached', {
+            userId, platform: user.platform, rcAccountId: user.rcAccountId,
+            usedSeats: activeCustomers.length, maxSeats, seatIndex
+        });
+        return {
+            isLicenseValid: false,
+            licenseStatus: 'Inactive',
+            licenseStatusDescription: `License seat limit reached (${maxSeats} of ${maxSeats} in use). Contact your admin.`
+        };
     }
   }
 
