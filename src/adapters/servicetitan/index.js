@@ -1,5 +1,8 @@
 /* eslint-disable no-param-reassign */
 const axios = require('axios');
+const apiLog = require('../shared/apiLogger');
+const serviceTitanApiClient = axios.create();
+apiLog.installErrorInterceptor(serviceTitanApiClient, 'ServiceTitan');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const jwt = require('@app-connect/core/lib/jwt');
@@ -8,7 +11,7 @@ const { CallLogModel } = require('@app-connect/core/models/callLogModel');
 const { messageLogModel } = require('@app-connect/core/models/messageLogModel');
 const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
 const qs = require('qs');
-const bcrypt = require('bcrypt');
+// const bcrypt = require('bcrypt');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
 const models = initModels(sequelize);
@@ -21,13 +24,28 @@ function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}`).toString('base64');
 }
 
+
+async function getCompanyFromUser(user) {
+    const sysId = user.id || user.dataValues?.id;
+    if (!sysId) throw new Error('User ID not found in session');
+    
+    const customer = await models.customer.findOne({ where: { sysId } });
+    if (!customer) throw new Error('Customer not found for user: ' + sysId);
+    
+    const company = await models.companies.findOne({ where: { id: customer.companyId } });
+    if (!company) throw new Error('Company not found for customer: ' + customer.sysId);
+    
+    return company;
+}
+
 async function getUserInfo(authHeader) {
-  const { hostname, additionalInfo } = authHeader;
-  const email = additionalInfo?.email;
+  apiLog.logStart('ServiceTitan', 'getUserInfo', { rcAccountId: authHeader.rcAccountId, rcExtensionId: authHeader.rcExtensionId });
+  const { hostname, additionalInfo, rcAccountId, rcExtensionId } = authHeader;
+  const email = additionalInfo?.email || additionalInfo?.username;
 
   try {
     const company = await models.companies.findOne({
-      where: { hostname },
+      where: rcAccountId ? { hashedRcAccountId: rcAccountId, hostname } : { hostname },
       include: [{ model: models.customer, as: 'customers', required: false }],
       raw: false,
       logging: false
@@ -95,6 +113,25 @@ async function getUserInfo(authHeader) {
 
     // Check existing user
     let customer = customers.find(c => c.email === email);
+    
+    if (customer) {
+        const linkedExtensionId = customer.platformAdditionalInfo?.rcExtensionId;
+        if (linkedExtensionId && rcExtensionId && linkedExtensionId !== rcExtensionId) {
+            return {
+                successful: false,
+                platformUserInfo: { id: "", name: "", timezoneName: "", timezoneOffset: "", platformAdditionalInfo: {} },
+                returnMessage: {
+                    messageType: 'error',
+                    message: 'This Email account is already linked to another RingCentral user.',
+                    ttl: 5000
+                }
+            };
+        } else if (!linkedExtensionId && rcExtensionId) {
+            const updatedPlatformInfo = { ...customer.platformAdditionalInfo, rcExtensionId };
+            await customer.update({ platformAdditionalInfo: updatedPlatformInfo });
+        }
+    }
+
     // Generate ServiceTitan token
     const accessToken = await generateServiceTitanToken(clientId, clientSecret);
     // Create user if not exists
@@ -125,11 +162,8 @@ async function getUserInfo(authHeader) {
         accessToken: accessToken,
         tokenExpiry: Date.now() + ((900 - 60) * 1000),
         platformAdditionalInfo: {
-          client_id: clientId,
-          client_secret: clientSecret,
-          st_app_key: stAppKey,
-          tenant: tenantId,
-          expiresAt: Date.now() + ((900 - 60) * 1000) // 15 min - 1 min buffer
+          rcExtensionId,
+          expiresAt: Date.now() + ((900 - 60) * 1000)
         },
         status: true,
         createdAt: new Date(),
@@ -145,11 +179,8 @@ async function getUserInfo(authHeader) {
         email,
         overridingApiKey: accessToken,
         platformAdditionalInfo: {
-          client_id: clientId,
-          client_secret: clientSecret,
-          st_app_key: stAppKey,
-          tenant: tenantId,
-          expiresAt: Date.now() + ((900 - 60) * 1000) // 15 min - 1 min buffer
+          rcExtensionId,
+          expiresAt: Date.now() + ((900 - 60) * 1000)
         }
       },
       returnMessage: {
@@ -158,6 +189,7 @@ async function getUserInfo(authHeader) {
         ttl: 3000
       }
     };
+    apiLog.logSuccess('ServiceTitan', 'getUserInfo', { rcAccountId: authHeader.rcAccountId, rcExtensionId: authHeader.rcExtensionId });
 
   } catch (err) {
     console.error('AUTO ST LOGIN ERROR:', err?.response?.data || err.message);
@@ -183,7 +215,7 @@ async function generateServiceTitanToken(clientId, clientSecret) {
         client_secret: clientSecret
     };
 
-    const authRes = await axios.post(
+    const authRes = await serviceTitanApiClient.post(
         tokenUrl,
         qs.stringify(tokenPayload),
         { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
@@ -206,8 +238,11 @@ async function unAuthorize({ user }) {
 }
 
 async function findContact({ user, phoneNumber, isExtension }) {
+    apiLog.logStart('ServiceTitan', 'findContact', { phoneNumber, isExtension });
     const auth = await getRefreshedAuthToken(user);
-    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
+    const company = await getCompanyFromUser(user);
+    const tenantId = company.tenantId;
+    const stAppKey = company.apiKey;
     if (isExtension === 'true') {
         return {
             successful: false,
@@ -221,12 +256,12 @@ async function findContact({ user, phoneNumber, isExtension }) {
     if (phoneNumberObj.valid) {
         phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
     }
-    const personInfo = await axios.get(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}`,
+    const personInfo = await serviceTitanApiClient.get(
+        `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}`,
         {
             headers: {
                 'Authorization': `Bearer ${auth}`,
-                'ST-App-Key': user.dataValues.platformAdditionalInfo.st_app_key
+                'ST-App-Key': stAppKey
             }
         });
 
@@ -241,6 +276,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
         name: 'Create new contact...',
         isNewContact: true
     });
+    apiLog.logSuccess('ServiceTitan', 'findContact', { matchedCount: matchedContactInfo.length });
     return {
         successful: true,
         matchedContactInfo
@@ -248,9 +284,11 @@ async function findContact({ user, phoneNumber, isExtension }) {
 }
 
 async function findContactWithName({ user, name }) {
+    apiLog.logStart('ServiceTitan', 'findContactWithName', { name });
     const auth = await getRefreshedAuthToken(user);
-    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
-    const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+    const company = await getCompanyFromUser(user);
+    const tenantId = company.tenantId;
+    const stAppKey = company.apiKey;
 
     const matchedContactInfo = [];
 
@@ -263,8 +301,8 @@ async function findContactWithName({ user, name }) {
     }
 
     try {
-        const personInfo = await axios.get(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers?name=${name}`,
+        const personInfo = await serviceTitanApiClient.get(
+            `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers?name=${name}`,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
@@ -280,10 +318,11 @@ async function findContactWithName({ user, name }) {
                 matchedContactInfo.push(formatContact(rawPersonInfo));
             }
         }
-        return {
-            successful: true,
-            matchedContactInfo
-        };
+        apiLog.logSuccess('ServiceTitan', 'findContact', { matchedCount: matchedContactInfo.length });
+    return {
+        successful: true,
+        matchedContactInfo
+    };
     } catch (err) {
         console.error('Error finding contact by name:', err.message);
         return {
@@ -295,9 +334,11 @@ async function findContactWithName({ user, name }) {
 }
 
 async function createContact({ user, phoneNumber, newContactName }) {
+    apiLog.logStart('ServiceTitan', 'createContact', { phoneNumber, newContactName });
     const auth = await getRefreshedAuthToken(user);
-    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
-    const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+    const company = await getCompanyFromUser(user);
+    const tenantId = company.tenantId;
+    const stAppKey = company.apiKey;
 
     const cleanedPhone = phoneNumber.replace(' ', '+');
     const phoneNumberObj = parsePhoneNumber(cleanedPhone);
@@ -345,8 +386,8 @@ async function createContact({ user, phoneNumber, newContactName }) {
             ],
         };
 
-        const response = await axios.post(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers`,
+        const response = await serviceTitanApiClient.post(
+            `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers`,
             payload,
             {
                 headers: {
@@ -359,6 +400,7 @@ async function createContact({ user, phoneNumber, newContactName }) {
 
         const createdContact = response.data;
 
+        apiLog.logSuccess('ServiceTitan', 'createContact', { contactId: createdContact.id });
         return {
             contactInfo: {
                 id: createdContact.id,
@@ -385,12 +427,13 @@ async function createContact({ user, phoneNumber, newContactName }) {
 
 async function getUserList({ user, authHeader }) {
     const auth = await getRefreshedAuthToken(user);
-    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
-    const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+    const company = await getCompanyFromUser(user);
+    const tenantId = company.tenantId;
+    const stAppKey = company.apiKey;
 
     try {
-        const userListResp = await axios.get(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers`,
+        const userListResp = await serviceTitanApiClient.get(
+            `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers`,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
@@ -414,11 +457,12 @@ async function getUserList({ user, authHeader }) {
 async function fetchJobs({ user, params = {} }) {
     try {
         const auth = await getRefreshedAuthToken(user);
-        const tenantId = user.dataValues.platformAdditionalInfo.tenant;
-        const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+        const company = await getCompanyFromUser(user);
+    const tenantId = company.tenantId;
+    const stAppKey = company.apiKey;
 
-        const resp = await axios.get(
-            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`,
+        const resp = await serviceTitanApiClient.get(
+            `${process.env.SERVICE_TITAN_JPM_URI}/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`,
             {
                 headers: {
                     'Authorization': `Bearer ${auth}`,
@@ -445,10 +489,12 @@ function stripHtml(html = '') {
 
 
 async function createCallLog({ user, contactInfo, callLog, note, additionalSubmission, aiNote, transcript, composedLogDetails, hashedAccountId }) {
+    apiLog.logStart('ServiceTitan', 'createCallLog', { contactId: contactInfo?.id, direction: callLog?.direction, duration: callLog?.duration });
 
     const auth = await getRefreshedAuthToken(user);
-    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
-    const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+    const company = await getCompanyFromUser(user);
+    const tenantId = company.tenantId;
+    const stAppKey = company.apiKey;
 
     // Fetch jobs of this customer
     const jobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
@@ -493,8 +539,8 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
     // ============================================
     if (!jobs || jobs.length === 0) {
 
-        addNoteRes = await axios.post(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+        addNoteRes = await serviceTitanApiClient.post(
+            `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers/${contactId}/notes`,
             noteBody,
             {
                 headers: {
@@ -520,8 +566,8 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
             summary: description
         };
 
-        addNoteRes = await axios.patch(
-            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${latestJob.id}`,
+        addNoteRes = await serviceTitanApiClient.patch(
+            `${process.env.SERVICE_TITAN_JPM_URI}/${tenantId}/jobs/${latestJob.id}`,
             updateBody,
             {
                 headers: {
@@ -534,6 +580,7 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
         logType = 'job';
     }
 
+    apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId: `${addNoteRes.data.id}_${logType}` });
     return {
         logId: `${addNoteRes.data.id}_${logType}`,
         returnMessage: {
@@ -559,9 +606,11 @@ function upsertCallRecording({ body, recordingLink }) {
 }
 
 async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript, additionalSubmission, composedLogDetails, existingCallLogDetails, hashedAccountId }) {
+    apiLog.logStart('ServiceTitan', 'updateCallLog', { logId: existingCallLog?.thirdPartyLogId, contactId: existingCallLog?.contactId });
     const auth = await getRefreshedAuthToken(user);
-    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
-    const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+    const company = await getCompanyFromUser(user);
+    const tenantId = company.tenantId;
+    const stAppKey = company.apiKey;
 
     let description = composedLogDetails;
     console.log("update description", description)
@@ -594,8 +643,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             text: `${description}\n\n` + logTime
         }
 
-        const addNoteRes = await axios.post(
-            `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+        const addNoteRes = await serviceTitanApiClient.post(
+            `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers/${contactId}/notes`,
             postBody,
             {
                 headers: {
@@ -626,8 +675,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
 
         const updateBody = { summary: description };
 
-        await axios.patch(
-            `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${realId}`,
+        await serviceTitanApiClient.patch(
+            `${process.env.SERVICE_TITAN_JPM_URI}/${tenantId}/jobs/${realId}`,
             updateBody,
             {
                 headers: {
@@ -653,6 +702,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         }
     }
 
+    apiLog.logSuccess('ServiceTitan', 'updateCallLog', { logId: newLogId });
     return {
         logId: newLogId,
         updatedNote: description,
@@ -679,9 +729,11 @@ async function upsertCallDisposition({ user, existingCallLog, authHeader, dispos
 }
 
 async function createMessageLog({ user, contactInfo, authHeader, message, additionalSubmission, recordingLink, faxDocLink }) {
+    apiLog.logStart('ServiceTitan', 'createMessageLog', { contactId: contactInfo?.id, direction: message?.direction });
     const auth = await getRefreshedAuthToken(user);
-    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
-    const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+    const company = await getCompanyFromUser(user);
+    const tenantId = company.tenantId;
+    const stAppKey = company.apiKey;
 
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
     let subject = '';
@@ -711,8 +763,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         })
     });
 
-    const addLogRes = await axios.post(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+    const addLogRes = await serviceTitanApiClient.post(
+        `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers/${contactId}/notes`,
         postBody,
         {
             headers: {
@@ -722,6 +774,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
             }
         });
 
+    apiLog.logSuccess('ServiceTitan', 'createMessageLog', { logId: addLogRes.data.id });
     return {
         logId: addLogRes.data.id,
         returnMessage: {
@@ -733,9 +786,11 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 }
 
 async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader }) {
+    apiLog.logStart('ServiceTitan', 'updateMessageLog', { contactId: contactInfo?.id, logId: existingMessageLog?.thirdPartyLogId, direction: message?.direction });
     const auth = await getRefreshedAuthToken(user);
-    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
-    const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+    const company = await getCompanyFromUser(user);
+    const tenantId = company.tenantId;
+    const stAppKey = company.apiKey;
 
     let subject = '';
     let description = '';
@@ -764,8 +819,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         })
     });
 
-    const addLogRes = await axios.post(
-        `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+    const addLogRes = await serviceTitanApiClient.post(
+        `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers/${contactId}/notes`,
         postBody,
         {
             headers: {
@@ -788,6 +843,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         await messageLogID_db.save();
     }
 
+    apiLog.logSuccess('ServiceTitan', 'createMessageLog', { logId: addLogRes.data.id });
     return {
         logId: addLogRes.data.id,
         returnMessage: {
@@ -799,11 +855,13 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 }
 
 async function getCallLog({ user, callLogId, authHeader }) {
+    apiLog.logStart('ServiceTitan', 'getCallLog', { logId: callLogId });
     const [realId, logType = 'note'] = callLogId.split('_');
 
     const auth = await getRefreshedAuthToken(user);
-    const tenantId = user.dataValues.platformAdditionalInfo.tenant;
-    const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
+    const company = await getCompanyFromUser(user);
+    const tenantId = company.tenantId;
+    const stAppKey = company.apiKey;
 
     let subject = '';
     let note = '';
@@ -811,8 +869,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
 
     try {
         if (logType === 'job') {
-            const jobRes = await axios.get(
-                `https://api-integration.servicetitan.io/jpm/v2/tenant/${tenantId}/jobs/${realId}`,
+            const jobRes = await serviceTitanApiClient.get(
+                `${process.env.SERVICE_TITAN_JPM_URI}/${tenantId}/jobs/${realId}`,
                 {
                     headers: { 'Authorization': `Bearer ${auth}`, 'ST-App-Key': stAppKey },
                 }
@@ -850,8 +908,8 @@ async function getCallLog({ user, callLogId, authHeader }) {
             }
 
             const { contactId } = existingCallLogDetails.dataValues;
-            const getLogRes = await axios.get(
-                `https://api-integration.servicetitan.io/crm/v2/tenant/${tenantId}/customers/${contactId}/notes`,
+            const getLogRes = await serviceTitanApiClient.get(
+                `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers/${contactId}/notes`,
                 {
                     headers: { 'Authorization': `Bearer ${auth}`, 'ST-App-Key': stAppKey },
                 }
@@ -890,6 +948,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
         console.error(`Failed to get call log for ${callLogId}:`, error?.response?.data || error.message);
     }
 
+    apiLog.logSuccess('ServiceTitan', 'getCallLog', { logId: callLogId, logType });
     return {
         callLogInfo: {
             subject,
@@ -912,7 +971,10 @@ function formatContact(rawContactInfo) {
 
 async function getRefreshedAuthToken(user) {
     const { platformAdditionalInfo } = user.dataValues;
-    const { client_id, client_secret, expiresAt } = platformAdditionalInfo;
+    const { expiresAt } = platformAdditionalInfo || {};
+    const company = await getCompanyFromUser(user);
+    const client_id = company.clientId;
+    const client_secret = company.clientSecret;
 
     if (Date.now() < expiresAt) {
         return user.dataValues.accessToken;
@@ -925,7 +987,7 @@ async function getRefreshedAuthToken(user) {
         client_secret: client_secret
     };
 
-    const authResponse = await axios.post(
+    const authResponse = await serviceTitanApiClient.post(
         tokenUrl,
         qs.stringify(data),
         {

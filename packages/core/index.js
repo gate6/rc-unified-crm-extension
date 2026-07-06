@@ -687,13 +687,15 @@ function createCoreRouter() {
             const apiKey = req.body.apiKey;
             const hostname = req.body.hostname;
             const additionalInfo = req.body.additionalInfo;
+            const rcAccountId = req.body.rcAccountId || hashedAccountId;
+            const rcExtensionId = req.body.rcExtensionId || hashedExtensionId;
             if (!platform) {
                 throw 'Missing platform name';
             }
             if (!apiKey) {
                 throw 'Missing api key';
             }
-            const { userInfo, returnMessage } = await authCore.onApiKeyLogin({ platform, hostname, apiKey, additionalInfo });
+            const { userInfo, returnMessage } = await authCore.onApiKeyLogin({ platform, hostname, apiKey, additionalInfo, rcAccountId, rcExtensionId });
             if (userInfo) {
                 const jwtToken = jwt.generateJwt({
                     id: userInfo.id.toString(),

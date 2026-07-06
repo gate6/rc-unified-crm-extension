@@ -55,10 +55,10 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, callbackUri, apiU
     }
 }
 
-async function onApiKeyLogin({ platform, hostname, apiKey, additionalInfo }) {
+async function onApiKeyLogin({ platform, hostname, apiKey, additionalInfo, rcAccountId, rcExtensionId }) {
     const platformModule = adapterRegistry.getAdapter(platform);
     const basicAuth = platformModule.getBasicAuth({ apiKey });
-    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader: `Basic ${basicAuth}`, hostname, additionalInfo, apiKey });
+    const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader: `Basic ${basicAuth}`, hostname, additionalInfo, apiKey, rcAccountId, rcExtensionId });
     if (successful) {
         let userInfo = await saveUserInfo({
             platformUserInfo,
