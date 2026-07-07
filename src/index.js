@@ -29,6 +29,7 @@ adapterRegistry.registerAdapter('insightly', insightly);
 adapterRegistry.registerAdapter('netsuite', netsuite);
 adapterRegistry.registerAdapter('pipedrive', pipedrive);
 adapterRegistry.registerAdapter('redtail', redtail);
+adapterRegistry.registerAdapter('servicetitan-sewerninjas', servicetitan, require('./adapters/servicetitan-sewerninjas/manifest.json'));
 adapterRegistry.registerAdapter('servicetitan', servicetitan, require('./adapters/servicetitan/manifest.json'));
 adapterRegistry.registerAdapter('servicenow', servicenow, require('./adapters/servicenow/manifest.json'));
 adapterRegistry.registerAdapter('servicenow-dev226973', servicenow, require('./adapters/servicenow-dev226973/manifest.json'));
