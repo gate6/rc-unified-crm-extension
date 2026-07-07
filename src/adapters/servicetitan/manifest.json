@@ -9,7 +9,7 @@
     },
     "platforms": {
         "servicetitan": {
-            "logoUrl": "https://developer.servicetitan.io/content/st-logo-main-2.png",
+            "logoUrl": "https://d3s2jrpr5wf2k0.cloudfront.net/connector-icons/servicetitan.png",
             "documentationUrl": "https://developer.servicetitan.io/docs/welcome/",
             "releaseNotesUrl": "https://developer.servicetitan.io/release-notes/",
             "getSupportUrl": "https://community.ringcentral.com/topic/new?fid=22",
@@ -30,7 +30,7 @@
                     "page": {
                         "title": "Service Titan",
                         "content": [
-                             {
+                            {
                                 "const": "description",
                                 "description": "Please enter your Service Titan CRM credentials below",
                                 "type": "string",
@@ -123,36 +123,10 @@
             ],
             "page": {
                 "callLog": {
-                    "additionalFields": [
-                        {
-                            "const": "associatedDeal",
-                            "title": "Deals",
-                            "type": "selection",
-                            "contactDependent": true
-                        },
-                        {
-                            "const": "address",
-                            "title": "Address",
-                            "type": "inputField",
-                            "contactDependent": false
-                        }
-                    ]
+                    "additionalFields": []
                 },
                 "messageLog": {
-                    "additionalFields": [
-                        {
-                            "const": "associatedDeal",
-                            "title": "Deals",
-                            "type": "selection",
-                            "contactDependent": true
-                        },
-                        {
-                            "const": "address",
-                            "title": "Address",
-                            "type": "inputField",
-                            "contactDependent": false
-                        }
-                    ]
+                    "additionalFields": []
                 }
             },
             "rcAdditionalSubmission": [

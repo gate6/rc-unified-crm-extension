@@ -71,6 +71,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(100),
       allowNull: true
     },
+    hashedRcAccountId: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
     contactTable: {
       type: DataTypes.ENUM('user', 'contact'),
       allowNull: false,
