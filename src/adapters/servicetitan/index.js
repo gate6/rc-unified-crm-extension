@@ -458,8 +458,8 @@ async function fetchJobs({ user, params = {} }) {
     try {
         const auth = await getRefreshedAuthToken(user);
         const company = await getCompanyFromUser(user);
-    const tenantId = company.tenantId;
-    const stAppKey = company.apiKey;
+        const tenantId = company.tenantId;
+        const stAppKey = company.apiKey;
 
         const resp = await serviceTitanApiClient.get(
             `${process.env.SERVICE_TITAN_JPM_URI}/${tenantId}/jobs?pageSize=1&jobStatus=Scheduled&customerId=${params?.customerId}`,
@@ -479,12 +479,20 @@ async function fetchJobs({ user, params = {} }) {
     }
 }
 
-function stripHtml(html = '') {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/?[^>]+(>|$)/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .trim();
+const HEADER_MARK = '\u0001'; // sentinel for converted header lines; stripped at end
+function sanitizeNoteText(text) {
+    if (!text) return '';
+    let s = String(text).replace(/\r\n/g, '\n');
+    s = s.replace(/^[ \t]*\*\*(.+?)\*\*[ \t]*$/gm, (_, h) => {
+        const t = h.trim().replace(/:+$/, '');
+        return (t.length <= 30 && t.split(/\s+/).length <= 4) ? `${HEADER_MARK}${t}:` : t;
+    });
+    s = s.replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1').replace(/^[ \t]*#{1,6}[ \t]*/gm, '');
+    s = s.replace(/[ \t]+$/gm, '');
+    s = s.replace(new RegExp(`${HEADER_MARK}([^\\n]*)\\n\\s*\\n`, 'g'), `${HEADER_MARK}$1\n`);
+    s = s.replace(new RegExp(`([^\\n])\\n${HEADER_MARK}`, 'g'), `$1\n\n${HEADER_MARK}`);
+    s = s.replace(new RegExp(HEADER_MARK, 'g'), '');
+    return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 
@@ -499,37 +507,80 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
     // Fetch jobs of this customer
     const jobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
 
-    const subject = callLog.customSubject
-        ?? `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+    const defaultSubject = `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo.name}`;
+    const subject =
+        (user.userSettings?.addCallLogSubject?.value ?? true)
+            ? (callLog?.customSubject?.trim() || defaultSubject)
+            : "";
 
-    let description = composedLogDetails;
-    console.log("description", description)
+    let sections = [];
 
-    description = stripHtml(description)
+    if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
+        sections.push(`Agent Notes:\n${sanitizeNoteText(note)}`);
+    }
 
-    // if (note) description += `<li><b>Subject</b><br>${subject}</li>`;
-    if (note) description += `Agent Notes ${note}\n`;
-    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
-        description += `AI Note ${aiNote}\n`;
-    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
-        description += `\nTranscript ${transcript}\n`;
-    if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { description = upsertCallRecording({ body: description, recordingLink: callLog.recording.link }); }
+    if (callLog?.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) {
+        sections.push(`Recording:\n${callLog.recording.link}`);
+    }
+
+    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+        sections.push(`AI transcript:\n${sanitizeNoteText(transcript)}`);
+    }
+    
+    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+        sections.push(`AI Note :\n${sanitizeNoteText(aiNote)}`);
+    }
+
+    const optionalSections = sections.join("\n\n");
+
+    const headerLines = [];
+    if (subject) headerLines.push(`Subject: ${subject}`);
+    if (callLog.direction) headerLines.push(`Direction: ${callLog.direction}`);
+    
+    if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
+        headerLines.push(`Result: ${callLog.result}`);
+    }
+
+    if (callLog?.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+        headerLines.push(`Duration: ${callLog.duration} sec`);
+    }
+
+    if (callLog.sessionId && (user.userSettings?.addCallSessionId?.value ?? true)) {
+        headerLines.push(`Call Session ID: ${callLog.sessionId}`);
+    }
+
+    const rcUserName = additionalSubmission?.rcUserName;
+    if (rcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) {
+        headerLines.push(`RingCentral Username: ${rcUserName}`);
+    }
+
+    const rcPhone = callLog.extensionNumber || (callLog.direction === 'Inbound' ? callLog.to?.phoneNumber : callLog.from?.phoneNumber) || additionalSubmission?.rcPhoneNumber;
+    if (rcPhone && (user.userSettings?.addRingCentralNumber?.value ?? true)) {
+        headerLines.push(`RingCentral Phone Number: ${rcPhone}`);
+    }
+    
+    const contactPhone = contactInfo?.phoneNumber || contactInfo?.phone;
+    if (contactPhone && (user.userSettings?.addCallLogContactNumber?.value ?? true)) {
+        headerLines.push(`Contact Number: ${contactPhone}`);
+    }
+
+    const footerLines = [];
+    if (callLog.startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
+        footerLines.push(`Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`);
+        if (callLog.duration) {
+            footerLines.push(`End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`);
+        }
+    }
+
+    let noteText = headerLines.join("\n");
+    if (optionalSections) noteText += `\n\n${optionalSections}`;
+    if (footerLines.length > 0) noteText += `\n\n${footerLines.join("\n")}`;
 
     const contactId = contactInfo.id;
 
-    const logTime = (callLog?.startTime && callLog?.duration) ? `start time: ${moment(callLog.startTime).utc().toISOString()} \nend time: ${moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()}` : ''
-
     const noteBody = {
-        text: `${subject}\n\n` + `${description}\n\n` + logTime
-    }
-    // const noteBody = {
-    //     text: JSON.stringify({
-    //         subject,
-    //         description,
-    //         start_date: moment(callLog.startTime).utc().toISOString(),
-    //         end_date: moment(callLog.startTime).utc().add(callLog.duration, 'seconds').toISOString()
-    //     })
-    // }
+        text: noteText
+    };
 
     let addNoteRes;
     let logType = 'note';
@@ -561,9 +612,9 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
             job.id > max.id ? job : max
         );
 
-        // Update summary with full description UI se bheja hua
+        // Update summary with plain text note
         const updateBody = {
-            summary: description
+            summary: noteText
         };
 
         addNoteRes = await serviceTitanApiClient.patch(
@@ -595,15 +646,6 @@ async function createCallLog({ user, contactInfo, callLog, note, additionalSubmi
     };
 }
 
-function upsertCallRecording({ body, recordingLink }) {
-    const recordingLinkRegex = RegExp('- Call recording link: (.+?)\n');
-    if (!!recordingLink && recordingLinkRegex.test(body)) {
-        body = body.replace(recordingLinkRegex, `- Call recording link: ${recordingLink}\n`);
-    } else if (!!recordingLink) {
-        body += `- Call recording link: ${recordingLink}\n`;
-    }
-    return body;
-}
 
 async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, subject, note, startTime, duration, result, aiNote, transcript, additionalSubmission, composedLogDetails, existingCallLogDetails, hashedAccountId }) {
     apiLog.logStart('ServiceTitan', 'updateCallLog', { logId: existingCallLog?.thirdPartyLogId, contactId: existingCallLog?.contactId });
@@ -612,36 +654,153 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const tenantId = company.tenantId;
     const stAppKey = company.apiKey;
 
-    let description = composedLogDetails;
-    console.log("update description", description)
-    console.log("existingCallLog", existingCallLog)
-    console.log("existingCallLogDetails", existingCallLogDetails)
-
-    description = stripHtml(description)
-
-    // if (note) description += `\n\nSubject</b><br>${subject}`;
-    if (note) description += `Agent Notes ${note}\n`;
-    if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
-        description += `AI Note ${aiNote}\n`;
-    if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
-        description += `\nTranscript ${transcript}\n`;
-     if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { description = upsertCallRecording({ body: description, recordingLink: decodeURIComponent(recordingLink) }); }
-
     const contactId = existingCallLog.contactId;
 
     let [realId, logType] = existingCallLog.thirdPartyLogId.split('_');
     logType = logType || 'note'; // fallback
+
+    // ---------------- FETCH OLD DATA ----------------
+    let body = "";
+    if (logType === "note") {
+        try {
+            const getLogRes = await serviceTitanApiClient.get(
+                `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers/${contactId}/notes`,
+                { headers: { 'Authorization': `Bearer ${auth}`, 'ST-App-Key': stAppKey } }
+            );
+            const targetLog = getLogRes.data.data.find(log => log.id == realId);
+            if (targetLog) body = targetLog.text || "";
+        } catch(e) {
+            console.warn('[ServiceTitan][updateCallLog] could not fetch note', { realId, error: e?.message });
+        }
+    } else {
+        try {
+            const jobRes = await serviceTitanApiClient.get(
+                `${process.env.SERVICE_TITAN_JPM_URI}/${tenantId}/jobs/${realId}`,
+                { headers: { 'Authorization': `Bearer ${auth}`, 'ST-App-Key': stAppKey } }
+            );
+            body = jobRes.data?.summary || "";
+        } catch(e) {
+            console.warn('[ServiceTitan][updateCallLog] could not fetch job summary', { realId, error: e?.message });
+        }
+    }
+
+    let subjectToUse = "";
+    let direction = "";
+    let oldStartTime = "";
+    let oldEndTime = "";
+    let callSessionId = "";
+    let rcUsername = "";
+    let rcPhone = "";
+    let contactPhone = "";
+    let oldResult = "";
+    let oldDuration = "";
+    let oldNote = "";
+    let oldRecording = "";
+    let oldAiNote = "";
+    let oldTranscript = "";
+
+    if (body) {
+        const normalized = body.replace(/\r\n/g, '\n');
+        const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/)
+        const extractedSubject = subjectMatch?.[1]?.trim();
+
+        if (extractedSubject && !extractedSubject.toLowerCase().startsWith('direction:')) {
+            subjectToUse = extractedSubject;
+        }
+        direction = normalized.match(/^\s*Direction:\s*(.*)$/m)?.[1]?.trim() || "";
+        oldStartTime = normalized.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
+        oldEndTime = normalized.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
+        callSessionId = normalized.match(/^\s*Call Session ID:\s*(.*)$/m)?.[1]?.trim() || "";
+        rcUsername = normalized.match(/^\s*RingCentral Username:\s*(.*)$/m)?.[1]?.trim() || "";
+        rcPhone = normalized.match(/^\s*RingCentral Phone Number:\s*(.*)$/m)?.[1]?.trim() || "";
+        contactPhone = normalized.match(/^\s*Contact Number:\s*(.*)$/m)?.[1]?.trim() || "";
+        oldResult = normalized.match(/^\s*Result:\s*(.*)$/m)?.[1]?.trim() || "";
+        oldDuration = normalized.match(/^\s*Duration:\s*(.*)$/m)?.[1]?.replace(/\s*sec$/i, '').trim() || "";
+        oldNote = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
+        oldAiNote = normalized.match(/AI Note\s*:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/i)?.[1]?.trim() || "";
+        oldTranscript = normalized.match(/(?:AI transcript|Transcript):\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/i)?.[1]?.trim() || "";
+        oldRecording = normalized.match(/Recording:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || "";
+    }
+
+    // ---------------- BUILD OPTIONAL SECTIONS ----------------
+
+    let sections = [];
+
+    const effNote = note || oldNote;
+    const effRecording = (recordingLink ? decodeURIComponent(recordingLink) : null) || oldRecording;
+    const effAiNote = aiNote || oldAiNote;
+    const effTranscript = transcript || oldTranscript;
+    const effResult = result || oldResult;
+    const effDuration = duration || oldDuration;
+    const effStartTime = startTime ? moment(startTime).format("YYYY-MM-DD HH:mm:ss") : oldStartTime;
+    const effEndTime = (startTime && duration) ? moment(startTime).add(duration, "seconds").format("YYYY-MM-DD HH:mm:ss") : oldEndTime;
+
+    if (effNote && (user.userSettings?.addCallLogNote?.value ?? true)) {
+        sections.push(`Agent Notes:\n${sanitizeNoteText(effNote)}`);
+    }
+    if (effRecording && (user.userSettings?.addCallLogRecording?.value ?? true)) {
+        sections.push(`Recording:\n${effRecording}`);
+    }
+    if (effTranscript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
+        sections.push(`AI transcript:\n${sanitizeNoteText(effTranscript)}`);
+    }
+    if (effAiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
+        sections.push(`AI Note :\n${sanitizeNoteText(effAiNote)}`);
+    }
+
+    if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
+        subjectToUse = subject.trim();
+    }
+    if (!subjectToUse) {
+        subjectToUse = direction ? `${direction} Call` : "Call";
+    }
+
+    // ---------------- FINAL STRUCTURED NOTE ----------------
+
+    const headerLines = [];
+    if (subjectToUse) headerLines.push(`Subject: ${subjectToUse}`);
+    if (direction) headerLines.push(`Direction: ${direction}`);
+    
+    if (effResult && (user.userSettings?.addCallLogResult?.value ?? true)) {
+        headerLines.push(`Result: ${effResult}`);
+    }
+    if (effDuration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+        headerLines.push(`Duration: ${effDuration} sec`);
+    }
+    if (callSessionId && (user.userSettings?.addCallSessionId?.value ?? true)) {
+        headerLines.push(`Call Session ID: ${callSessionId}`);
+    }
+    if (rcUsername && (user.userSettings?.addRingCentralUserName?.value ?? true)) {
+        headerLines.push(`RingCentral Username: ${rcUsername}`);
+    }
+    if (rcPhone && (user.userSettings?.addRingCentralNumber?.value ?? true)) {
+        headerLines.push(`RingCentral Phone Number: ${rcPhone}`);
+    }
+    if (contactPhone && (user.userSettings?.addCallLogContactNumber?.value ?? true)) {
+        headerLines.push(`Contact Number: ${contactPhone}`);
+    }
+
+    const footerLines = [];
+    if (effStartTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
+        footerLines.push(`Start Time: ${effStartTime}`);
+    }
+    if (effEndTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
+        footerLines.push(`End Time: ${effEndTime}`);
+    }
+
+    const optionalSections = sections.join("\n\n");
+    let noteText = headerLines.join("\n");
+    if (optionalSections) noteText += `\n\n${optionalSections}`;
+    if (footerLines.length > 0) noteText += `\n\n${footerLines.join("\n")}`;
 
     let newLogId;
 
     // --------------------------- NOTE UPDATE --------------------------
     if (logType === 'note') {
 
-        const logTime = (startTime && duration) ? `start time: ${moment(startTime).utc().toISOString()} \nend time: ${moment(startTime).utc().add(duration, 'seconds').toISOString()}` : ''
-
         const postBody = {
-            text: `${description}\n\n` + logTime
-        }
+            text: noteText
+        };
 
         const addNoteRes = await serviceTitanApiClient.post(
             `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers/${contactId}/notes`,
@@ -673,7 +832,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // --------------------------- JOB UPDATE --------------------------
     else {
 
-        const updateBody = { summary: description };
+        const updateBody = { summary: noteText };
 
         await serviceTitanApiClient.patch(
             `${process.env.SERVICE_TITAN_JPM_URI}/${tenantId}/jobs/${realId}`,
@@ -705,7 +864,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     apiLog.logSuccess('ServiceTitan', 'updateCallLog', { logId: newLogId });
     return {
         logId: newLogId,
-        updatedNote: description,
+        updatedNote: noteText,
         returnMessage: {
             message: 'Call log updated',
             messageType: 'success',
@@ -736,32 +895,47 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const stAppKey = company.apiKey;
 
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
-    let subject = '';
-    let description = '';
-    switch (messageType) {
-        case 'SMS':
-            subject = `SMS conversation with ${contactInfo.name}`;
-            description = `SMS from ${message.direction === 'Inbound' ? contactInfo.name : 'user'}: ${message.subject}`;
-            break;
-        case 'Voicemail':
-            subject = `Voicemail from ${contactInfo.name}`;
-            description = `Voicemail recording link: ${recordingLink}\n`;
-            break;
-        case 'Fax':
-            subject = `Fax from ${contactInfo.name}`;
-            description = `Fax document link: ${faxDocLink}`;
-            break;
+
+    let noteText = "";
+
+    if (messageType === "SMS") {
+
+        const direction =
+            message.direction === "Inbound"
+                ? contactInfo.name
+                : "Agent";
+
+        const line =
+            `[${moment(message.creationTime).format("YYYY-MM-DD HH:mm:ss")}] ${direction}: ${message.subject}`;
+
+        noteText = `
+Conversation:
+${line}
+`.trim();
+
+    } else if (messageType === "Voicemail") {
+
+        noteText = `
+Voicemail from ${contactInfo.name}
+
+Recording:
+${recordingLink}
+`.trim();
+
+    } else if (messageType === "Fax") {
+
+        noteText = `
+Fax from ${contactInfo.name}
+
+Document:
+${faxDocLink}
+`.trim();
     }
 
     const contactId = contactInfo.id;
-    let postBody = JSON.stringify({
-        "text": JSON.stringify({
-            start_date: moment(message.creationTime).utc().toISOString(),
-            end_date: moment(message.creationTime).utc().toISOString(),
-            subject,
-            description,
-        })
-    });
+    const postBody = {
+        text: noteText
+    };
 
     const addLogRes = await serviceTitanApiClient.post(
         `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers/${contactId}/notes`,
@@ -785,39 +959,107 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     };
 }
 
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, authHeader, recordingLink, faxDocLink }) {
     apiLog.logStart('ServiceTitan', 'updateMessageLog', { contactId: contactInfo?.id, logId: existingMessageLog?.thirdPartyLogId, direction: message?.direction });
     const auth = await getRefreshedAuthToken(user);
     const company = await getCompanyFromUser(user);
     const tenantId = company.tenantId;
     const stAppKey = company.apiKey;
 
-    let subject = '';
-    let description = '';
-    switch (messageType) {
-        case 'SMS':
-            subject = `SMS conversation with ${contactInfo.name}`;
-            description = `SMS from ${message.direction === 'Inbound' ? contactInfo.name : 'user'}: ${message.subject}`;
-            break;
-        case 'Voicemail':
-            subject = `Voicemail from ${contactInfo.name}`;
-            description = `Voicemail recording link: ${recordingLink}`;
-            break;
-        case 'Fax':
-            subject = `Fax from ${contactInfo.name}`;
-            description = `Fax document link: ${faxDocLink}`;
-            break;
+    const contactId = contactInfo.id;
+    const noteId = existingMessageLog.thirdPartyLogId;
+
+    const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
+
+    let noteText = "";
+
+    // ---------------- SMS CASE ----------------
+    if (messageType === "SMS") {
+
+        const getLogRes = await serviceTitanApiClient.get(
+            `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers/${contactId}/notes`,
+            {
+                headers: {
+                    Authorization: `Bearer ${auth}`,
+                    "ST-App-Key": stAppKey
+                }
+            }
+        );
+
+        const targetLog = getLogRes.data.data.find(log => log.id == noteId);
+
+        let previousConversation = "";
+
+        if (targetLog?.text) {
+            const match = targetLog.text.match(/Conversation:\s*([\s\S]*)/);
+            if (match) {
+                previousConversation = match[1].trim();
+            }
+        }
+
+        const direction =
+            message.direction === "Inbound"
+                ? contactInfo.name
+                : "Agent";
+
+        const newLine =
+            `[${moment(message.creationTime).format("YYYY-MM-DD HH:mm:ss")}] ${direction}: ${message.subject}`;
+
+        const updatedConversation =
+            previousConversation
+                ? `${previousConversation}\n${newLine}`
+                : newLine;
+
+        const MAX_NOTE_SIZE = 30000;
+
+        if (updatedConversation.length > MAX_NOTE_SIZE) {
+
+            const lines = previousConversation.trim().split("\n");
+            const lastMessage = lines[lines.length - 1] || "";
+
+            const newThreadConversation =
+                `${lastMessage}\n${newLine}`;
+
+            noteText = `
+Conversation:
+${newThreadConversation}
+`.trim();
+
+        } else {
+
+            noteText = `
+Conversation:
+${updatedConversation}
+`.trim();
+        }
+
     }
 
-    const contactId = contactInfo.id;
-    let postBody = JSON.stringify({
-        "text": JSON.stringify({
-            subject,
-            description,
-            start_date: moment(message.creationTime).utc().toISOString(),
-            end_date: moment(message.creationTime).utc().toISOString(),
-        })
-    });
+    // ---------------- VOICEMAIL CASE ----------------
+    else if (messageType === "Voicemail") {
+
+        noteText = `
+Voicemail from ${contactInfo.name}
+
+Recording:
+${recordingLink}
+`.trim();
+    }
+
+    // ---------------- FAX CASE ----------------
+    else if (messageType === "Fax") {
+
+        noteText = `
+Fax from ${contactInfo.name}
+
+Document:
+${faxDocLink}
+`.trim();
+    }
+
+    const postBody = {
+        text: noteText
+    };
 
     const addLogRes = await serviceTitanApiClient.post(
         `${process.env.SERVICE_TITAN_CRM_URI}/${tenantId}/customers/${contactId}/notes`,
@@ -880,19 +1122,15 @@ async function getCallLog({ user, callLogId, authHeader }) {
             if (jobData) {
                 const summary = jobData.summary || '';
 
-                const subjectMarker = '<b>Subject</b><br>';
-                const subjectIndex = summary.indexOf(subjectMarker);
-                const agentNotesMarker = '<b>Agent Notes</b><br>';
-                const notesIndex = summary.indexOf(agentNotesMarker);
-                if (subjectIndex !== -1) {
-                    const subjectSection = summary.substring(subjectIndex + subjectMarker.length);
-                    const subjectSectionIndex = subjectSection.indexOf('\n\n<b>');
-                    subject = (subjectSectionIndex !== -1 ? subjectSection.substring(0, subjectSectionIndex) : subjectSection).trim();
-                }
-                if (notesIndex !== -1) {
-                    const notesSection = summary.substring(notesIndex + agentNotesMarker.length);
-                    const nextSectionIndex = notesSection.indexOf('\n\n<b>');
-                    note = (nextSectionIndex !== -1 ? notesSection.substring(0, nextSectionIndex) : notesSection).trim();
+                const normalized = summary.replace(/\r\n/g, '\n');
+                const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
+                subject = subjectMatch ? subjectMatch[1].trim() : '';
+
+                const notesMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/);
+                if (notesMatch) {
+                    note = notesMatch[1].trim();
+                } else if (!normalized.match(/Start Time:/)) {
+                    note = summary;
                 }
 
                 full_data = { subject, description: summary };
@@ -920,23 +1158,28 @@ async function getCallLog({ user, callLogId, authHeader }) {
                 const targetLog = logData.data.find(log => log.id == realId);
                 if (targetLog) {
                     try {
-                        let parsedText = targetLog.text;
-                        try { parsedText = JSON.parse(targetLog.text); } catch {}
-                        subject = parsedText.subject || '';
-                        const description = parsedText.description || '';
+                        let body = targetLog.text || '';
+                        
+                        let parsedText = null;
+                        try { parsedText = JSON.parse(body); } catch {}
+                        
+                        if (parsedText && typeof parsedText === 'object') {
+                            body = parsedText.description || parsedText.text || body;
+                            subject = parsedText.subject || '';
+                        }
+                        
+                        const normalized = body.replace(/\r\n/g, '\n');
+                        const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
+                        if (subjectMatch) subject = subjectMatch[1].trim();
 
-                        const agentNotesMarker = '<b>Agent Notes</b><br>';
-                        const notesIndex = description.indexOf(agentNotesMarker);
-
-                        if (notesIndex !== -1) {
-                            const notesSection = description.substring(notesIndex + agentNotesMarker.length);
-                            const nextSectionIndex = notesSection.indexOf('\n\n<b>');
-                            note = (nextSectionIndex !== -1 ? notesSection.substring(0, nextSectionIndex) : notesSection).trim();
-                        } else {
-                            note = description;
+                        const notesMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/);
+                        if (notesMatch) {
+                            note = notesMatch[1].trim();
+                        } else if (!normalized.match(/Start Time:/)) {
+                            note = body;
                         }
 
-                        full_data = parsedText;
+                        full_data = parsedText || { subject, description: body };
                     } catch (err) {
                         console.error('Error parsing note text:', err);
                         note = targetLog.text;
