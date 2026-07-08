@@ -67,9 +67,9 @@
                     "videoLink": "https://youtu.be/pQgdsAR1UCI"
                 }
             },
-            "contactPageUrl": "https://integration.servicetitan.com/#/customer/{contactId}",
-            "logPageUrl": "https://integration.servicetitan.com/#/customer/{contactId}",
-            "callPopUrl": "https://integration.servicetitan.com/#/customer/{contactId}",
+            "contactPageUrl": "https://go.servicetitan.com/#/customer/{contactId}",
+            "logPageUrl": "https://go.servicetitan.com/#/customer/{contactId}",
+            "callPopUrl": "https://go.servicetitan.com/#/customer/{contactId}",
             "settings": [
                 {
                     "id": "callLogDetails",
