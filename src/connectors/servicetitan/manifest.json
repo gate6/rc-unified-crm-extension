@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://unpicaresque-rob-supersilently.ngrok-free.dev",
+    "serverUrl": "https://rc-crmapi.test.gate6.com",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6",
@@ -17,6 +17,7 @@
             "urlIdentifier": "servicetitan.com",
             "name": "servicetitan",
             "logFormat": "text/html",
+            "useLicense": true,
             "embedUrls": [
                 "https://*.servicetitan.com/*"
             ],
@@ -31,60 +32,63 @@
                         "title": "Service Titan",
                         "content": [
                             {
+                                "const": "description",
+                                "description": "ServiceTitan connects using credentials configured by your admin. Click Connect to continue.",
+                                "type": "string",
                                 "uiSchema": {
+                                    "ui:field": "typography",
                                     "ui:variant": "body2",
-                                    "ui:align": "left",
-                                    "ui:field": "typography"
-                                },
-                                "description": "Admin setup: enter your ServiceTitan API credentials below. Stored once and shared across your organization. Find them at developer.servicetitan.io.",
+                                    "ui:align": "center"
+                                }
+                            },
+                            {
                                 "const": "adminSetupNote",
-                                "type": "string"
+                                "description": "Admin setup: Enter your ServiceTitan API credentials below. These are stored once and shared across all users in your organization. Find them at developer.servicetitan.io under your app settings.",
+                                "type": "string",
+                                "uiSchema": {
+                                    "ui:field": "typography",
+                                    "ui:variant": "body2",
+                                    "ui:align": "left"
+                                }
                             },
                             {
                                 "const": "clientId",
-                                "hidden": true,
-                                "managed": true,
                                 "title": "Client ID",
                                 "type": "string",
                                 "required": true,
-                                "managedScope": "account"
+                                "managed": true,
+                                "managedScope": "account",
+                                "hidden": true
                             },
                             {
                                 "const": "clientSecret",
-                                "hidden": true,
-                                "managed": true,
                                 "title": "Client Secret",
                                 "type": "string",
                                 "required": true,
-                                "managedScope": "account"
+                                "managed": true,
+                                "managedScope": "account",
+                                "hidden": true
                             },
                             {
                                 "const": "tenantId",
-                                "hidden": true,
-                                "managed": true,
                                 "title": "Tenant ID",
                                 "type": "string",
                                 "required": true,
-                                "managedScope": "account"
+                                "managed": true,
+                                "managedScope": "account",
+                                "hidden": true
                             },
                             {
                                 "const": "appKey",
-                                "hidden": true,
-                                "managed": true,
                                 "title": "App Key",
                                 "type": "string",
                                 "required": true,
-                                "managedScope": "account"
+                                "managed": true,
+                                "managedScope": "account",
+                                "hidden": true
                             }
                         ]
                     }
-                },
-                "oauth": {
-                    "redirectUri": "https://apps.ringcentral.com/integration/ringcentral-embeddable/latest/redirect.html",
-                    "authUrl": "",
-                    "clientId": "",
-                    "customState": "",
-                    "scope": ""
                 }
             },
             "canOpenLogPage": false,
@@ -184,6 +188,22 @@
                 {
                     "id": "departmentName",
                     "path": "cachedData.extensionInfo.contact.department"
+                },
+                {
+                    "id": "rcAccountId",
+                    "path": "cachedData.extensionInfo.account.id"
+                },
+                {
+                    "id": "rcExtensionId",
+                    "path": "cachedData.extensionInfo.id"
+                },
+                {
+                    "id": "rcUserName",
+                    "path": "cachedData.extensionInfo.name"
+                },
+                {
+                    "id": "rcUserEmail",
+                    "path": "cachedData.extensionInfo.contact.email"
                 }
             ]
         }
