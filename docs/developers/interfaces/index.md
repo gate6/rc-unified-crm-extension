@@ -1,12 +1,84 @@
 # Connector Interface Contract
 
-Connector interfaces are CommonJS functions exported by a connector module, usually from `src/connectors/<platform>/index.js` in a full server or `src/connectors/myCRM.js` in the template. The runtime loads a connector through `connectorRegistry.registerConnector(platform, connector)` and then calls the exported functions from the core handlers.
+Each connector exposes an API that the App Connect server communicates with. Each endpoint or interface corresponds to a specific capability within App Connect, and is responsible for fulfilling that capability within the context of the CRM being connected to.
 
-The core registry only enforces `createCallLog` and `updateCallLog` at registration time. In practice, a usable connector normally implements auth, user lookup, contact lookup, call logging, and the optional features it advertises in the manifest.
+Not all interfaces are required. The tables below indicate which are core requirements and which are optional or feature-specific.
 
-## Connector Shapes
+## Authentication
 
-App Connect currently supports three connector shapes:
+These interfaces manage the connection lifecycle between App Connect and the target CRM.
+
+| Interface                           | Description                                                                          |
+|-------------------------------------|--------------------------------------------------------------------------------------|
+| [`getAuthType`](getAuthType.md)     | Returns the auth method used by this connector (`oauth` or `apiKey`).                |
+| [`getOauthInfo`](getOauthInfo.md)   | Returns OAuth credentials and token endpoint details needed to initiate the OAuth flow. |
+| [`getBasicAuth`](getBasicAuth.md)   | Returns credentials for Basic Auth. Used only by connectors with `apiKey` auth type. |
+| [`getUserInfo`](getUserInfo.md)     | Fetches and returns the authenticated user's profile from the CRM after login.       |
+| [`refreshUserInfo`](refreshUserInfo.md) | Refreshes CRM-side information for an already connected user.                    |
+| [`unAuthorize`](unAuthorize.md)     | Logs a user out of the CRM, invalidates credentials, and cleans up any stored session data. |
+
+## Call logging
+
+These interfaces handle the creation and management of call log records in the CRM.
+
+| Interface                                           | Description                                                                                             |
+|-----------------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| [`findContact`](findContact.md)                     | Finds one or more contacts in the CRM by phone number. Powers call-pop and call logging.                |
+| [`findContactWithName`](findContactWithName.md)     | Finds one or more contacts by name. Used when a user searches for a contact manually.                   |
+| [`createContact`](createContact.md)                 | Creates a placeholder contact when no matching contact is found for a phone number.                     |
+| [`createCallLog`](createCallLog.md)                 | Creates a new call log record in the CRM associated with a contact.                                     |
+| [`updateCallLog`](updateCallLog.md)                 | Updates an existing call log record, e.g. to add notes after a call ends.                               |
+| [`getCallLog`](getCallLog.md)                       | Fetches the current state of a call log from the CRM, in case the user edited it directly.              |
+| [`getLogFormatType`](getLogFormatType.md)           | Returns the preferred format for composing call log detail content.                                     |
+| [`upsertCallDisposition`](upsertCallDisposition.md) | Creates or updates the call disposition associated with a log entry.                                    |
+
+## SMS logging
+
+These interfaces handle the creation and management of SMS conversation records in the CRM.
+
+| Interface                                         | Description                                                               |
+|---------------------------------------------------|---------------------------------------------------------------------------|
+| [`createMessageLog`](createMessageLog.md)         | Creates a new SMS conversation log record in the CRM.                     |
+| [`updateMessageLog`](updateMessageLog.md)         | Updates an existing SMS message log, e.g. to append new messages.        |
+
+## Server-side logging
+
+These interfaces support App Connect's server-side logging service, which logs calls automatically without user interaction.
+
+| Interface                                 | Description                                                                               |
+|-------------------------------------------|-------------------------------------------------------------------------------------------|
+| [`getLicenseStatus`](getLicenseStatus.md) | Returns the license status for a given CRM user, used to gate server-side logging access. |
+| [`getUserList`](getUserList.md)           | Returns the list of CRM users for admin-managed user mapping in server-side logging.      |
+
+## Appointments
+
+These interfaces power App Connect's built-in appointment scheduling panel. Implement them if the target CRM supports calendar or appointment management.
+
+| Interface                                         | Description                                                                          |
+|---------------------------------------------------|--------------------------------------------------------------------------------------|
+| [`listAppointments`](listAppointments.md)         | Retrieves upcoming appointments from the CRM for display in the appointments panel.  |
+| [`createAppointment`](createAppointment.md)       | Creates a new appointment in the CRM.                                                |
+| [`updateAppointment`](updateAppointment.md)       | Updates an existing appointment in the CRM.                                          |
+| [`refreshAppointment`](refreshAppointment.md)     | Fetches the latest state of a single appointment.                                    |
+| [`cancelAppointment`](cancelAppointment.md)       | Cancels or deletes an appointment in the CRM.                                        |
+| [`confirmAppointment`](confirmAppointment.md)     | Marks an appointment as confirmed (implement only if the CRM supports this status).  |
+
+## Lifecycle hooks
+
+Lifecycle hooks allow connectors to intercept and customize key framework operations. Unlike standard interfaces, lifecycle hooks are optional and connector-specific — implement only the ones your CRM requires.
+
+| Hook                                                                | Description                                                                                         |
+|---------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
+| [`authValidation`](authValidation.md)                               | Validates session tokens before each request. Refresh the session if expired.                       |
+| [`checkAndRefreshAccessToken`](checkAndRefreshAccessToken.md)       | Checks whether the OAuth access token is expired and refreshes it if necessary.                     |
+| [`getOverridingOAuthOption`](getOverridingOAuthOption.md)           | Overrides token-exchange request parameters for CRMs with non-standard OAuth flows.                 |
+| [`getServerLoggingSettings`](getServerLoggingSettings.md)           | Retrieves the server-side logging configuration for the current user's organization.                |
+| [`updateServerLoggingSettings`](updateServerLoggingSettings.md)     | Persists updated server-side logging settings for the current user's organization.                  |
+| [`postSaveUserInfo`](postSaveUserInfo.md)                           | Called after a user authenticates; use it for CRM-specific post-login setup.                        |
+
+## Connector shapes
+
+App Connect supports three connector shapes:
 
 | Shape | Where it is defined | When to use it |
 | --- | --- | --- |
@@ -14,68 +86,19 @@ App Connect currently supports three connector shapes:
 | Interface-only connector | Individual functions registered with `connectorRegistry.registerConnectorInterface()` | Use when a platform is assembled from separately registered methods. Registered interface functions are composed over the base connector without mutating it. |
 | Proxy connector | Declarative `proxyConfig` stored in the Developer Console | Use when REST calls and response mappings are enough. If no platform connector is registered and the `proxy` connector exists, the registry falls back to proxy mode. |
 
-## Common Runtime Inputs
+## Common runtime inputs
 
-Most methods receive one object argument. The exact fields vary by flow, but these are common:
+Most interface methods receive one object argument. The exact fields vary by flow, but these are common across most interfaces:
 
 | Field | Meaning |
 | --- | --- |
 | `user` | Persisted App Connect user model for the connected CRM user. Includes `id`, `platform`, `hostname`, `accessToken`, `refreshToken`, `tokenExpiry`, `timezoneName`, `timezoneOffset`, `rcAccountId`, `platformAdditionalInfo`, and `userSettings` when available. |
 | `authHeader` | Authorization header already prepared by core. OAuth connectors receive `Bearer <accessToken>` after refresh. API-key connectors receive `Basic <value returned by getBasicAuth()>`. |
 | `proxyConfig` | Proxy connector configuration when the user connected through proxy mode. Code connectors can ignore it unless they deliberately support proxy-backed behavior. |
-| `returnMessage` | Optional UI message returned by a connector method. See [Returning messages](../errors.md). |
-| `extraDataTracking` | Optional analytics/tracing object returned by a connector method. The runtime passes it through where supported. |
 
-## Required For Most Connectors
+## Return messages
 
-| Interface | Purpose |
-| --- | --- |
-| [`getAuthType`](getAuthType.md) | Returns `oauth` or `apiKey`. |
-| [`getOauthInfo`](getOauthInfo.md) | Supplies OAuth token exchange details. Required when `getAuthType()` returns `oauth`, unless admin-managed OAuth resolves credentials first. |
-| [`getBasicAuth`](getBasicAuth.md) | Builds the Basic auth credential from the stored API key. Required when `getAuthType()` returns `apiKey`. |
-| [`getUserInfo`](getUserInfo.md) | Validates credentials and returns stable CRM user identity data. |
-| [`findContact`](findContact.md) | Looks up contacts by phone number. |
-| [`createCallLog`](createCallLog.md) | Creates a CRM activity for a RingCentral call. Required by the registry. |
-| [`updateCallLog`](updateCallLog.md) | Updates an existing CRM call activity. Required by the registry. |
-
-## Feature Interfaces
-
-| Interface | Purpose |
-| --- | --- |
-| [`getCallLog`](getCallLog.md) | Loads existing CRM log details before edit/update flows. |
-| [`createContact`](createContact.md) | Creates a contact when the user or auto-logging rules choose that path. |
-| [`findContactWithName`](findContactWithName.md) | Supports manual CRM contact search by name. |
-| [`createMessageLog`](createMessageLog.md) | Creates CRM logs for SMS, fax, voicemail, MMS, and shared SMS conversations. |
-| [`updateMessageLog`](updateMessageLog.md) | Updates existing message logs in the same conversation/day or shared SMS thread. |
-| [`upsertCallDisposition`](upsertCallDisposition.md) | Saves disposition or related-entity selections after a call log exists. |
-| [`getUserList`](getUserList.md) | Returns CRM users for server-side logging user mapping. |
-| [`getLicenseStatus`](getLicenseStatus.md) | Returns connector-specific entitlement status. |
-| [`getLogFormatType`](getLogFormatType.md) | Tells core whether to compose call and message log bodies as plain text, HTML, or Markdown. |
-| [`unAuthorize`](unAuthorize.md) | Revokes or clears stored CRM credentials. |
-
-## Optional Hooks Without Dedicated Pages
-
-The runtime also checks for these connector methods:
-
-| Hook | Called from | Contract |
-| --- | --- | --- |
-| `authValidation({ user })` | `/authValidation` | Return `{ successful, returnMessage, status }`. Used to verify an existing OAuth session. |
-| `checkAndRefreshAccessToken(oauthApp, user, tokenLockTimeout)` | OAuth refresh helper | Override the shared token-refresh flow when the CRM needs custom behavior. |
-| `getOverridingOAuthOption({ code })` | OAuth callback | Return extra options for the token exchange when the CRM requires non-standard OAuth parameters. |
-| `postSaveUserInfo({ userInfo, oauthApp })` or `postSaveUserInfo({ userInfo })` | After successful login | Return the user info object that should be sent back to the client. |
-| `getServerLoggingSettings({ user })` | Admin server-side logging settings | Return connector-specific server-side logging settings. |
-| `updateServerLoggingSettings({ user, additionalFieldValues, oauthApp })` | Admin server-side logging settings | Return `{ successful, returnMessage }`. |
-| `onUpdateUserSettings({ user, userSettings, updatedSettings })` | User settings save | Return `{ successful, returnMessage }`; core persists `updatedSettings` only when `successful` is true. |
-| `listAppointments({ user, authHeader, range, mineOnly, forceSync, proxyConfig })` | Appointments feature | Return `{ appointments, returnMessage }`. |
-| `createAppointment({ user, authHeader, payload, proxyConfig })` | Appointments feature | Return `{ appointmentId, appointment, returnMessage }`. |
-| `updateAppointment({ user, authHeader, appointmentId, patchBody, proxyConfig })` | Appointments feature | Return `{ appointment, returnMessage }`. |
-| `refreshAppointment({ user, authHeader, appointmentId, proxyConfig })` | Appointments feature | Return `{ appointment, returnMessage }`. |
-| `confirmAppointment({ user, authHeader, appointmentId, proxyConfig })` | Appointments feature | Return `{ appointment, returnMessage }`. |
-| `cancelAppointment({ user, authHeader, appointmentId, proxyConfig })` | Appointments feature | Return `{ appointment, returnMessage }`. |
-
-## Return Messages
-
-Most interfaces may return:
+Most interfaces may return an optional `returnMessage` to surface feedback in the App Connect UI:
 
 ```js
 return {
@@ -87,4 +110,4 @@ return {
 };
 ```
 
-Use `success`, `warning`, or `error` for `messageType`. Some older code uses `danger`; prefer `error` for new connector code.
+Use `success`, `warning`, or `error` for `messageType`. Some older connectors use `danger`; prefer `error` for new connector code.
