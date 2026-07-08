@@ -24,14 +24,6 @@ const serviceTitanApiClient = axios.create();
 const SERVICE_TITAN_JPM_URL = process.env.SERVICETITAN_JPM_URL || "https://api-integration.servicetitan.io/jpm/v2/tenant"
 const SERVICE_TITAN_CRM_URL = process.env.SERVICETITAN_CRM_URL || "https://api-integration.servicetitan.io/crm/v2/tenant"
 
-function stringifyForLog(value, maxLength = 1200) {
-    try {
-        const str = typeof value === 'string' ? value : JSON.stringify(value);
-        return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
-    } catch (error) {
-        return String(value);
-    }
-}
 
 apiLog.installErrorInterceptor(serviceTitanApiClient, 'ServiceTitan');
 
@@ -52,7 +44,6 @@ function getBasicAuth({ apiKey }) {
 }
 
 async function getUserInfo({ hostname, additionalInfo }) {
-    console.log("Additional Info: ", additionalInfo)
     // RC identity arrives via the manifest's rcAdditionalSubmission (auto-pulled from RC
     // cached data — no user prompt, no framework change). ServiceTitan API auth is
     // app-level (client_credentials); the email field has been removed.
@@ -188,7 +179,7 @@ async function getUserInfo({ hostname, additionalInfo }) {
 
 // Helper function to generate ServiceTitan token
 async function generateServiceTitanToken(clientId, clientSecret) {
-    const tokenUrl = process.env.SERVICETITAN_ACCESS_TOKEN_URI;
+    const tokenUrl = process.env.SERVICE_TITAN_ACCESS_TOKEN_URI;
     const tokenPayload = {
         grant_type: "client_credentials",
         client_id: clientId,
@@ -361,7 +352,6 @@ async function findContactWithName({ user, name }) {
                         title: `[#${job.jobNumber || job.id}] ${job.type?.name || job.jobTypeName || 'Job'}${job.status ? ' \u2013 ' + job.status : ''}`
                     }));
                     jobOptions.push(...activeJobs);
-                    console.log("Jobs count : ", activeJobs.length)
                 } catch (err) {
                     console.warn('[ServiceTitan] findContactWithName: failed to fetch jobs for customer', contact.id, err.message);
                 }
@@ -622,7 +612,6 @@ function sanitizeNoteText(text) {
 }
 
 async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript, additionalSubmission }) {
-    console.log("Additional Submission: ", additionalSubmission)
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
@@ -704,9 +693,40 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     if (optionalSections) noteText += `\n\n${optionalSections}`;
     if (footerLines.length > 0) noteText += `\n\n${footerLines.join("\n")}`;
 
-    // If the user selected a job from the dropdown, post the note to the job notes endpoint.
-    // Otherwise fall back to the customer-level note (the non-destructive default).
-    const selectedJobId = additionalSubmission?.associatedJobs;
+    // Determine which job to attach the note to.
+    // Priority: 1) User's explicit dropdown selection (additionalSubmission)
+    //           2) User settings default (serviceTitanInboundCallJobId / serviceTitanOutboundCallJobId)
+    //           3) 'none' → customer-level note
+    let selectedJobId = additionalSubmission?.associatedJobs;
+
+    // If no job was selected (e.g. auto call logging with no cached selection),
+    // fall back to the user's configured default job ID from settings.
+    if (!selectedJobId || selectedJobId === 'none') {
+        const isInbound = callLog?.direction === 'Inbound';
+        const settingKey = isInbound ? 'serviceTitanInboundCallJobId' : 'serviceTitanOutboundCallJobId';
+        const defaultJobId = user.userSettings?.[settingKey]?.value;
+        if (defaultJobId && defaultJobId.trim() !== '') {
+            console.log(`[ServiceTitan][createCallLog] Using default job ID from settings (${settingKey}):`, defaultJobId);
+            selectedJobId = defaultJobId.trim();
+        } else {
+            selectedJobId = 'none';
+        }
+    }
+
+    // Validate the selected job against live data to prevent posting to a stale/invalid job.
+    if (selectedJobId && selectedJobId !== 'none') {
+        try {
+            const activeJobs = await fetchJobs({ user, params: { customerId: contactInfo.id } });
+            const jobStillActive = activeJobs.some(j => String(j.id) === String(selectedJobId));
+            if (!jobStillActive) {
+                console.log(`[ServiceTitan][createCallLog] Job ${selectedJobId} is not active for customer ${contactInfo.id} — falling back to customer note`);
+                selectedJobId = 'none';
+            }
+        } catch (err) {
+            console.warn('[ServiceTitan][createCallLog] Failed to validate job, falling back to customer note:', err.message);
+            selectedJobId = 'none';
+        }
+    }
 
     let logId;
 
@@ -725,8 +745,10 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
                 _operation: 'createCallLog'
             }
         );
-        // Encode as {noteId}_{jobId}_jobnote so update/get know this is a job note
-        logId = `${jobNoteRes.data.id}_${selectedJobId}_jobnote`;
+        // ServiceTitan job notes API does NOT return a note ID in the create response.
+        // Use the call session ID as a content-based identifier instead.
+        const csid = callLog.sessionId || callLog.telephonySessionId || `ts-${Date.now()}`;
+        logId = `csid-${csid}_${selectedJobId}_jobnote`;
         apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, jobId: selectedJobId, apiEndpoint: jobNoteUrl });
     } else {
         // Default: customer-level note
@@ -759,7 +781,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 }
 
 
-async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNote, transcript, subject }) {
+async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNote, transcript, subject, duration: incomingDuration, startTime: incomingStartTime, result: incomingResult, additionalSubmission }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
@@ -773,13 +795,17 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     let [noteId, jobId, logType] = existingCallLog.thirdPartyLogId.split("_");
     // Legacy logIds were: {realId}_{note|job}  — 2 parts.
-    // New job-note logIds are: {noteId}_{jobId}_jobnote — 3 parts.
+    // New job-note logIds are: csid-{sessionId}_{jobId}_jobnote — 3 parts.
     // Normalise: if only 2 parts, treat the second as logType and jobId is empty.
     if (!logType) {
         logType = jobId || 'note';
         jobId = null;
     }
     const realId = noteId;
+    // Session-based IDs: job notes don't have native IDs from ServiceTitan API
+    const isSessionBased = realId.startsWith('csid-');
+    const sessionIdFromLog = isSessionBased ? realId.replace('csid-', '') : null;
+    console.log(`[ServiceTitan][updateCallLog] Parsed logId: thirdPartyLogId="${existingCallLog.thirdPartyLogId}" → noteId="${realId}", jobId="${jobId}", logType="${logType}", isSessionBased=${isSessionBased}`);
 
     let direction = "";
     let startTime = "";
@@ -801,7 +827,8 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     // ---------------- FETCH OLD DATA ----------------
     let body = "";
     if (logType === "jobnote") {
-        // Fetch the job note text
+        // Fetch the job note text — ServiceTitan job notes have no native IDs,
+        // so we match by Call Session ID embedded in the note text.
         try {
             const jobNoteListRes = await serviceTitanApiClient.get(
                 `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${jobId}/notes`,
@@ -813,12 +840,35 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
                     _operation: 'updateCallLog'
                 }
             );
-            const targetNote = (jobNoteListRes.data?.data || []).find(n => n.id == realId);
-            if (targetNote) {
-                body = targetNote.text || "";
+            // ServiceTitan may return notes as { data: [...] } or { data: { data: [...] } }
+            const notes = Array.isArray(jobNoteListRes.data?.data)
+                ? jobNoteListRes.data.data
+                : Array.isArray(jobNoteListRes.data)
+                    ? jobNoteListRes.data
+                    : [];
+            console.log(`[ServiceTitan][updateCallLog] Fetched ${notes.length} job notes for job ${jobId}`);
+
+            if (isSessionBased && sessionIdFromLog) {
+                // Content-based matching: find note containing the Call Session ID
+                const targetNote = notes.find(n => {
+                    const text = n.text || n.note || '';
+                    return text.includes(`Call Session ID: ${sessionIdFromLog}`);
+                });
+                if (targetNote) {
+                    body = targetNote.text || targetNote.note || "";
+                    console.log(`[ServiceTitan][updateCallLog] Found job note by session ID ${sessionIdFromLog}, body length: ${body.length}`);
+                } else {
+                    console.warn(`[ServiceTitan][updateCallLog] No note found containing session ID ${sessionIdFromLog} in ${notes.length} notes`);
+                }
+            } else {
+                // Legacy ID-based matching fallback
+                const targetNote = notes.find(n => String(n.id) === String(realId));
+                if (targetNote) {
+                    body = targetNote.text || targetNote.note || "";
+                }
             }
         } catch (e) {
-            console.warn('[ServiceTitan][updateCallLog] could not fetch job note', { realId, jobId, error: e?.message });
+            console.warn('[ServiceTitan][updateCallLog] could not fetch job notes', { realId, jobId, error: e?.message });
         }
     } else if (logType === "note") {
 
@@ -876,6 +926,22 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         oldAiNote = normalized.match(/AI Note\s*:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/i)?.[1]?.trim() || "";
         oldTranscript = normalized.match(/(?:AI transcript|Transcript):\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/i)?.[1]?.trim() || "";
         oldRecording = normalized.match(/Recording:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || "";
+    }
+
+    // Override parsed values with fresh data from the framework when available.
+    // The initial createCallLog fires with 1-sec duration; the later updateCallLog
+    // call from the framework carries the finalized call metadata.
+    if (incomingDuration != null) {
+        duration = String(incomingDuration);
+    }
+    if (incomingResult) {
+        result = incomingResult;
+    }
+    if (incomingStartTime) {
+        startTime = moment(incomingStartTime).format("YYYY-MM-DD HH:mm:ss");
+        if (incomingDuration != null) {
+            endTime = moment(incomingStartTime).add(incomingDuration, "seconds").format("YYYY-MM-DD HH:mm:ss");
+        }
     }
 
     // ---------------- BUILD OPTIONAL SECTIONS ----------------
@@ -952,9 +1018,10 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     // ---------------- UPDATE NOTE ----------------
 
     if (logType === "jobnote") {
-        // Job note: create a new note on the job, delete the old one (same create-then-delete
-        // pattern as customer notes since there is no in-place update endpoint).
-        const jobNoteAddRes = await serviceTitanApiClient.post(
+        // Job note: create a new note on the job. ServiceTitan job notes have no native
+        // IDs, so we can't delete the old one by ID. We keep the session-based logId so
+        // subsequent updates can still find the latest note by session ID in the text.
+        await serviceTitanApiClient.post(
             `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${jobId}/notes`,
             { text: noteText },
             {
@@ -966,21 +1033,11 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
                 _operation: 'updateCallLog'
             }
         );
-        newLogId = `${jobNoteAddRes.data.id}_${jobId}_jobnote`;
-
-        if (realId && String(jobNoteAddRes.data.id) !== String(realId)) {
-            try {
-                await serviceTitanApiClient.delete(
-                    `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${jobId}/notes/${realId}`,
-                    {
-                        headers: { Authorization: `Bearer ${auth}`, "ST-App-Key": stAppKey },
-                        _operation: 'updateCallLog'
-                    }
-                );
-            } catch (e) {
-                console.warn('[ServiceTitan][updateCallLog] could not delete old job note — a duplicate may remain', { oldNoteId: realId, jobId, status: e?.response?.status, message: e?.message });
-            }
-        }
+        // Preserve the session-based logId so the next update can find the note by content
+        newLogId = isSessionBased
+            ? `csid-${sessionIdFromLog}_${jobId}_jobnote`
+            : `${realId}_${jobId}_jobnote`;
+        console.log(`[ServiceTitan][updateCallLog] Created updated job note, logId: ${newLogId}`);
     } else if (logType === "note") {
 
         // ServiceTitan customer notes have no in-place update endpoint, so an edit is a
@@ -1303,6 +1360,9 @@ async function getCallLog({ user, callLogId }) {
         jobId = null;
     }
 
+    const isSessionBased = realId.startsWith('csid-');
+    const sessionIdFromLog = isSessionBased ? realId.replace('csid-', '') : null;
+
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
@@ -1328,10 +1388,25 @@ async function getCallLog({ user, callLogId }) {
                     }
                 );
 
-                const targetNote = (jobNoteListRes.data?.data || []).find(n => n.id == realId);
+                const notes = Array.isArray(jobNoteListRes.data?.data)
+                    ? jobNoteListRes.data.data
+                    : Array.isArray(jobNoteListRes.data)
+                        ? jobNoteListRes.data
+                        : [];
+
+                let targetNote;
+                if (isSessionBased && sessionIdFromLog) {
+                    // Content-based matching by Call Session ID
+                    targetNote = notes.find(n => {
+                        const text = n.text || n.note || '';
+                        return text.includes(`Call Session ID: ${sessionIdFromLog}`);
+                    });
+                } else {
+                    targetNote = notes.find(n => n.id == realId);
+                }
 
                 if (targetNote) {
-                    const body = targetNote.text || "";
+                    const body = targetNote.text || targetNote.note || "";
                     const normalized = body.replace(/\r\n/g, '\n');
 
                     const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
@@ -1482,7 +1557,7 @@ async function getRefreshedAuthToken(user) {
         return user.dataValues.accessToken;
     }
 
-    const tokenUrl = process.env.SERVICETITAN_ACCESS_TOKEN_URI;
+    const tokenUrl = process.env.SERVICE_TITAN_ACCESS_TOKEN_URI;
     const data = {
         grant_type: 'client_credentials',
         client_id: client_id,

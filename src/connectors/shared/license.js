@@ -54,7 +54,6 @@ async function computeLicenseStatus({ models, userId }) {
         attributes: ['sysId'],
         raw: true
     });
-    console.log("activeCustomers", activeCustomers.length)
     
     const seatIndex = activeCustomers.findIndex(c => c.sysId === userId);
     const overLimit = seatIndex === -1
