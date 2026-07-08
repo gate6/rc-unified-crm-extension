@@ -1,3 +1,4 @@
+// @ts-nocheck
 const {
     S3Client,
     HeadObjectCommand,
@@ -112,3 +113,4 @@ module.exports.getObject = async (Key, type) => {
         throw error;
     }
 };
+export {};

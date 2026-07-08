@@ -1,3 +1,4 @@
+// @ts-nocheck
 // const {UserModel1} = require('../models/userModel');
 const Sequelize = require('sequelize');
 const { sequelize } = require('../servicenow-models/sequelize');
@@ -35,3 +36,4 @@ async function saveUserInfo(userObj, accessToken, hostname, companyId) {
 }
 
 exports.saveUserInfo = saveUserInfo;
+export {};

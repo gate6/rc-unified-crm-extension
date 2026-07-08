@@ -137,4 +137,4 @@ function main() {
 
 main();
 
-export {};
+export { };

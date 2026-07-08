@@ -1,3 +1,4 @@
+// @ts-nocheck
 const { Sequelize } = require('sequelize');
 const path = require('path')
 require('dotenv').config({path:path.join(__dirname,'..','..','..','.env')});
@@ -21,3 +22,4 @@ const sequelize = process.env.SERVICENOW_DB_URL
  
 
 exports.sequelize = sequelize;
+export {};

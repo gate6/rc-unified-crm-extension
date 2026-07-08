@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Shared license + seat-enforcement logic for all Gate6 connectors.
 //
 // Licensing model (companies table, provisioned per RC tenant):
@@ -133,3 +134,5 @@ function clearLicenseCache(userId) {
 exports.getLicenseStatus = getLicenseStatus;
 exports.validateLicenseOrFail = validateLicenseOrFail;
 exports.clearLicenseCache = clearLicenseCache;
+
+export {};

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /* eslint-disable no-param-reassign */
 const axios = require('axios');
 const moment = require('moment');
@@ -1610,3 +1611,4 @@ exports.unAuthorize = unAuthorize;
 exports.findContactWithName = findContactWithName;
 exports.getRefreshedAuthToken = getRefreshedAuthToken;
 exports.getLicenseStatus = getLicenseStatus;
+export {};

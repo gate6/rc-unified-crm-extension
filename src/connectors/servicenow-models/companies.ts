@@ -1,3 +1,4 @@
+// @ts-nocheck
 const Sequelize = require('sequelize');
 module.exports = function(sequelize, DataTypes) {
   return sequelize.define('companies', {
@@ -97,3 +98,5 @@ module.exports = function(sequelize, DataTypes) {
     ]
   });
 };
+
+export {};

@@ -322,10 +322,19 @@ function getAuthType() {
 }
 
 async function getOauthInfo() {
-  // Credentials are managed via AppConnect admin-managed OAuth.
-  // This fallback is only reached if managed OAuth is not yet configured.
+
+  if (!process.env.MONDAY_CLIENT_ID || !process.env.MONDAY_CLIENT_SECRET) {
+    return {
+      failMessage: 'Monday OAuth credentials are not configured on the server.'
+    };
+  }
+
   return {
-    failMessage: 'Monday OAuth credentials have not been configured. Please ask your admin to set up the connector via the AppConnect admin panel.'
+    clientId: process.env.MONDAY_CLIENT_ID,
+    clientSecret: process.env.MONDAY_CLIENT_SECRET,
+    accessTokenUri: process.env.MONDAY_TOKEN_URI,
+    redirectUri: process.env.REDIRECT_URI,
+    scopes: ['me:read', 'users:read', 'boards:read', 'boards:write', 'updates:write']
   };
 }
 
@@ -1588,6 +1597,10 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, boardId })
 
 
 function getOverridingOAuthOption({ code, oauthInfo }) {
+  console.log('Overriding OAuth options', {
+    code,
+    oauthInfo
+  })
   return {
     query: {
       grant_type: 'authorization_code',
@@ -1618,3 +1631,4 @@ exports.createMessageLog = createMessageLog;
 exports.updateMessageLog = updateMessageLog;
 exports.getUserList = getUserList;
 exports.getLicenseStatus = getLicenseStatus;
+export { };

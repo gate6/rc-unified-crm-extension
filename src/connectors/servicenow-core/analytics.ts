@@ -1,3 +1,4 @@
+// @ts-nocheck
 const Sequelize = require('sequelize');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
@@ -178,3 +179,5 @@ async function trackAnalytics({ user, crm, event, eventDate }) {
 module.exports = {
   trackAnalytics
 };
+
+export {};

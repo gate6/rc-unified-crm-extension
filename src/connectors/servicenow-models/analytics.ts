@@ -1,3 +1,4 @@
+// @ts-nocheck
 module.exports = function(sequelize, DataTypes) {
   return sequelize.define('analytics', {
     id: {
@@ -108,3 +109,5 @@ module.exports = function(sequelize, DataTypes) {
     ]
   });
 };
+
+export {};

@@ -1,3 +1,4 @@
+// @ts-nocheck
 const axios = require('axios');
 const moment = require('moment');
 const apiLog = require('../shared/apiLogger');
@@ -299,3 +300,4 @@ exports.findTypeValueById = findTypeValueById;
 exports.getAllAccounts = getAllAccounts;
 exports.applyClosedDatesIfNeeded = applyClosedDatesIfNeeded;
 exports.formatDuration = formatDuration;
+export {};

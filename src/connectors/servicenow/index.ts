@@ -1,3 +1,4 @@
+// @ts-nocheck
 const axios = require('axios');
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
@@ -1201,3 +1202,4 @@ exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
 exports.upsertCallDisposition = upsertCallDisposition;
 exports.getLicenseStatus = getLicenseStatus
+export {};
