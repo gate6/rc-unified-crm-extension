@@ -924,6 +924,22 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
   }
 }
 
+async function getMondayUserName(user) {
+  if (!user || !user.id || !models || !models.customer) return '';
+  try {
+    const existingCustomer = await models.customer.findOne({
+      where: { sysId: String(user.id) },
+      raw: true
+    });
+    if (existingCustomer) {
+      return [existingCustomer.firstname, existingCustomer.lastname].filter(Boolean).join(' ');
+    }
+  } catch (e) {
+    console.warn('[Monday] Failed to fetch user name from db:', e.message);
+  }
+  return '';
+}
+
 async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, accessToken, authHeader, user }) {
   const licenseError = await validateLicenseOrFail(user, 'createCallLog');
   if (licenseError) return licenseError;
@@ -973,6 +989,13 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   }
   if (callLog?.sessionId && (user.userSettings?.addCallSessionId?.value ?? true)) {
     headerLines.push(`Call Session ID: ${callLog.sessionId}`);
+  }
+  const mondayUserName = await getMondayUserName(user);
+  const agentParty = callLog?.direction === 'Inbound' ? callLog?.to : callLog?.from;
+  const rcNameFromLog = agentParty?.name;
+  const rcUserName = rcNameFromLog || mondayUserName || '';
+  if (rcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) {
+    headerLines.push(`RingCentral Username: ${rcUserName}`);
   }
   // We don't have additionalSubmission in Monday's createCallLog signature yet, but we can extract rcPhone 
   // from callLog if it's there.
@@ -1061,7 +1084,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   }
 }
 
-async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user, subject, duration, startTime }) {
+async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user, subject, duration, startTime, result }) {
   const licenseError = await validateLicenseOrFail(user, 'updateCallLog');
   if (licenseError) return licenseError;
 
@@ -1126,7 +1149,10 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   const effectiveAiNote = aiNote || parsed.aiNote
   const effectiveTranscript = transcript || parsed.transcript
   const effectiveSessionId = parsed.sessionId
-  const effectiveRcUserName = parsed.rcUserName
+  const mondayUserName = await getMondayUserName(user);
+  const agentParty = existingCallLog?.direction === 'Inbound' ? existingCallLog?.to : existingCallLog?.from;
+  const rcNameFromLog = agentParty?.name;
+  const effectiveRcUserName = parsed.rcUserName || rcNameFromLog || mondayUserName || '';
   const effectiveRcPhoneNumber = parsed.rcPhoneNumber
   const effectiveContactNumber = parsed.contactNumber
 
@@ -1161,8 +1187,9 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   if (subjectToUse) headerLines.push(`Subject: ${subjectToUse}`);
   if (parsed.direction) headerLines.push(`Direction: ${parsed.direction}`);
   
-  if (parsed.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
-    headerLines.push(`Result: ${parsed.result}`);
+  const effectiveResult = result || parsed.result;
+  if (effectiveResult && (user.userSettings?.addCallLogResult?.value ?? true)) {
+    headerLines.push(`Result: ${effectiveResult}`);
   }
   if (effectiveDurationLine && (user.userSettings?.addCallLogDuration?.value ?? true)) {
     headerLines.push(`Duration: ${effectiveDurationLine}`);
