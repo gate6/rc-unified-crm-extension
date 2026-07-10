@@ -1,10 +1,12 @@
 var DataTypes = require("sequelize").DataTypes;
 var _admin = require("./admin");
+var _analytics = require("./analytics");
 var _companies = require("./companies");
 var _customer = require("./customer");
 
 function initModels(sequelize) {
   var admin = _admin(sequelize, DataTypes);
+  var analytics = _analytics(sequelize, DataTypes);
   var companies = _companies(sequelize, DataTypes);
   var customer = _customer(sequelize, DataTypes);
 
@@ -13,6 +15,7 @@ function initModels(sequelize) {
 
   return {
     admin,
+    analytics,
     companies,
     customer,
   };

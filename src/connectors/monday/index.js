@@ -5,6 +5,7 @@ const { initModels } = require('../servicenow-models/init-models');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
+const { trackAnalytics } = require('../servicenow-core/analytics');
 const models = sequelize ? initModels(sequelize) : null;
 const FormData = require('form-data')
 const s3Helper = require('../servicenow-core/s3');
@@ -907,6 +908,9 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
   }
 
   console.log('[Monday][createContact] created item', { itemId: created.id, boardId })
+
+  await trackAnalytics({ user, crm: 'Monday', event: 'contactCreated' });
+
   return {
     contactInfo: {
       id: created.id,
@@ -1072,6 +1076,8 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
       boardId: uploadBoardId
     })
   }
+
+  await trackAnalytics({ user, crm: 'Monday', event: 'callLogCreated', eventDate: callLog?.startTime });
 
   return {
     logId: updateId,
@@ -1244,6 +1250,7 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
         { updateId: logId, body }
       )
       if (!updateRes?.errors?.length && updateRes?.data?.edit_update?.id) {
+        await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated', eventDate: startTime });
         return {
           logId: updateRes.data.edit_update.id,
           returnMessage: { message: "Call log updated", messageType: "success", ttl: 2000 }
@@ -1285,6 +1292,8 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   } catch (e) {
     console.warn('[Monday][updateCallLog] failed to repoint thirdPartyLogId', { newLogId, message: e.message })
   }
+
+  await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated', eventDate: startTime });
 
   return {
     logId: newLogId,
@@ -1462,6 +1471,8 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
     })
   }
 
+  await trackAnalytics({ user, crm: 'Monday', event: 'messageLogCreated', eventDate: message?.creationTime });
+
   return {
     logId: updateId,
     contactId: itemId,
@@ -1520,6 +1531,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     )
 
     const newUpdateId = res.data.create_update.id
+
+    await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated', eventDate: message?.creationTime });
 
     return {
       logId: newUpdateId,
@@ -1650,6 +1663,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
       boardId
     })
   }
+
+  await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated', eventDate: message?.creationTime });
 
   return {
     logId: newThreadId,
