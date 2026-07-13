@@ -1,5 +1,36 @@
 # Release notes
 
+## 1.7.37
+
+- New: Custom fields for call pop parameters
+- New: New option for auto log multi match resolver - Earliest created
+- Fix: Shared SMS sending for company main number
+- Fix: Server-side logging call log id inconsistency
+
+## 1.7.35
+
+- New: Can show RingCentral Account Id on support page
+- New: Add hashedExtensionId in plugin calls
+- New: Show notification when having incoming call while minized
+- Fix: User session refresh and validtion issue
+- Fix: Warm-transfer call pop
+- Fix: Refresh manifest for override properties
+
+## 1.7.34
+
+- New: Call pop fallback url when no matched contact
+- Fix: Hostname page input debounce
+- Fix: RingCentral additional info submission during auth
+- Fix: Managed auth, admins can now see hidden fields
+
+## 1.7.33
+
+- New: Developer Console manifest flag to disable Contact Cache
+- New: Interface refreshUserInfo, called when user opens extension
+- New: Async plugin callback
+- New: Developer Console manifest flag to hide plugin config fields
+- Fix: Mark outbound call on answer call pop option deprecated 
+
 ## 1.7.30
 
 - Fix: Shared SMS for sites
@@ -96,7 +127,7 @@
 ## 1.7.9
 
 - Better: Contact match speed optimized
-- Better: Minor improvements on calldown list 
+- Better: Minor improvements on callback list 
 - New: Clio supports Company as new Contact type
 - Fix: Google Sheet and NetSuite warning notifications
 
@@ -104,7 +135,7 @@
 
 - New: Error report feature on support page
 - New: Google Sheets admin now can setup target sheet for all users
-- Better: Calldown list supports better edit feature
+- Better: Callback list supports better edit feature
 - Better: Connctor selection list can be opened back again
 - Fix: Call log record is shown with a wrong number after the call
 
@@ -149,6 +180,20 @@
 ## 1.7.0
 
 Release notes page: https://appconnect.labs.ringcentral.com/2.0/
+
+## 1.6.35
+
+- Fix: Server-side logging call log id inconsistency
+
+## 1.6.34
+
+- New: Can show RingCentral Account Id on support page
+- Fix: User session refresh and validtion issue
+- Fix: Message log can now show error message
+
+## 1.6.33
+
+- Fix: Outboud call failure issue
 
 ## 1.6.32
 

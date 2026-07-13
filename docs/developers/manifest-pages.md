@@ -82,19 +82,54 @@ Message-log fields:
 
 Submitted values are passed to logging interfaces as `additionalSubmission`.
 
+## New-Contact Fields
+
+The `page.newContact.additionalFields` array adds extra fields to the "Create contact" form shown to users when they log a call against an unknown phone number.
+
+Use this to collect CRM-specific data needed at contact creation time — for example, a contact type selector or a company name field.
+
+```json
+{
+  "page": {
+    "newContact": {
+      "additionalFields": [
+        {
+          "const": "contactType",
+          "title": "Contact Type",
+          "type": "selection",
+          "required": true,
+          "includeNoneOption": false
+        },
+        {
+          "const": "company",
+          "title": "Company",
+          "type": "inputField",
+          "required": false
+        }
+      ]
+    }
+  }
+}
+```
+
+The values collected here are passed to the [`createContact`](interfaces/createContact.md) interface as part of the `additionalSubmission` parameter.
+
 ## Additional Field Shape
 
 | Field | Description |
 | --- | --- |
 | `const` | Stable key used in `additionalSubmission` and contact `additionalInfo`. |
 | `title` | User-facing label. |
-| `type` | Common values are `selection`, `inputField`, `string`, and `warning`. |
+| `type` | Input type. Common values are `selection`, `inputField`, `checkbox`, `date`, `string`, and `warning`. |
 | `contactDependent` | When true, options come from the selected contact's `additionalInfo[const]`. |
+| `contactTypeDependent` | When true, options depend on the selected contact type. |
 | `required` | Prevents submission until a value is selected or entered. |
-| `description` | Help text for the field. |
-| `includeNoneOption` | For `selection`, controls whether the client includes an empty option. |
+| `description` | Help text shown beneath the field label to guide the user. |
+| `includeNoneOption` | For `selection` fields, controls whether the client prepends an empty "None" option. Default: false. |
+| `allowCustomValue` | For `selection` fields. When true, the user can type a custom value not in the predefined list. |
 | `options` | Static options for `selection` fields. Each option uses `{ "const": "...", "title": "..." }`. |
-| `defaultSettingId` and `defaultSettingValues` | Pull default values from connector settings. Existing connectors use this for Clio billable status defaults. |
+| `defaultSettingId` | The `const` key of a connector setting whose value is used as this field's default. |
+| `defaultSettingValues` | A map from a parent field value to a default value for this field. Used for conditional defaults. |
 
 ## Contact-Dependent Options
 
@@ -133,6 +168,18 @@ Set `page.useContactSearch` to true and implement [`findContactWithName`](interf
   }
 }
 ```
+
+Set `page.disableContactCache` to true when phone-number contact lookups should refresh server-side account contact data on each online lookup:
+
+```json
+{
+  "page": {
+    "disableContactCache": true
+  }
+}
+```
+
+This does not disable the client's local matched-contact cache. If the client already has a local match and the lookup does not explicitly force a local refresh, it can still use that local match without making an online request.
 
 ## Feedback Page
 

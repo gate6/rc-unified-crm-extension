@@ -68,7 +68,7 @@ Logging to your CRM in real time
      CRM TICKER — animated infinite scroll, logos clickable
      ═══════════════════════════════════════════════════════════ -->
 <div class="ac-v5-ticker-wrap">
-<p class="ac-v5-ticker-label">15+ supported integrations and growing</p>
+<p class="ac-v5-ticker-label">16+ supported integrations and growing</p>
 <div class="ac-v5-ticker-overflow">
 <div class="ac-v5-ticker-track">
 <div class="ac-v5-ticker-pill"><a href="crm/agencyzoom/"><img src="img/crm-logo-agencyzoom.png" alt="AgencyZoom"></a></div>
@@ -84,6 +84,7 @@ Logging to your CRM in real time
 <div class="ac-v5-ticker-pill"><a href="crm/insightly/"><img src="img/crm-logo-insightly.png" alt="Insightly"></a></div>
 <div class="ac-v5-ticker-pill"><a href="crm/redtail/"><img src="img/crm-logo-redtail.png" alt="Redtail"></a></div>
 <div class="ac-v5-ticker-pill"><a href="crm/smokeball/"><img src="img/crm-logo-smokeball.png" alt="Smokeball"></a></div>
+<div class="ac-v5-ticker-pill"><a href="crm/odoo/"><img src="img/crm-logo-odoo.png" alt="Odoo"></a></div>
 <!-- duplicate set for seamless loop -->
 <div class="ac-v5-ticker-pill" aria-hidden="true"><a href="crm/agencyzoom/" tabindex="-1"><img src="img/crm-logo-agencyzoom.png" alt=""></a></div>
 <div class="ac-v5-ticker-pill" aria-hidden="true"><a href="crm/bullhorn/" tabindex="-1"><img src="img/crm-logo-bullhorn.png" alt=""></a></div>
@@ -98,6 +99,7 @@ Logging to your CRM in real time
 <div class="ac-v5-ticker-pill" aria-hidden="true"><a href="crm/insightly/" tabindex="-1"><img src="img/crm-logo-insightly.png" alt=""></a></div>
 <div class="ac-v5-ticker-pill" aria-hidden="true"><a href="crm/redtail/" tabindex="-1"><img src="img/crm-logo-redtail.png" alt=""></a></div>
 <div class="ac-v5-ticker-pill" aria-hidden="true"><a href="crm/smokeball/" tabindex="-1"><img src="img/crm-logo-smokeball.png" alt=""></a></div>
+<div class="ac-v5-ticker-pill" aria-hidden="true"><a href="crm/odoo/" tabindex="-1"><img src="img/crm-logo-odoo.png" alt=""></a></div>
 </div>
 </div>
 </div>
@@ -161,10 +163,10 @@ Logging to your CRM in real time
 </div>
 
 <div class="ac-v5-fc">
-<p class="ac-v5-fc__title">Call-down lists</p>
+<p class="ac-v5-fc__title">Call-back lists</p>
 <hr class="ac-v5-fc__sep">
 <p class="ac-v5-fc__desc">Personal outbound call lists keep reps focused and moving through outreach without losing their place.</p>
-<a href="users/calldown-lists/" class="ac-v5-fc__link">Learn about call lists →</a>
+<a href="users/callback-lists/" class="ac-v5-fc__link">Learn about call lists →</a>
 </div>
 
 <div class="ac-v5-fc">

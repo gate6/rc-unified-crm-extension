@@ -23,7 +23,7 @@ The selected hostname is later available to connector code as `hostname` during 
 
 ## Override Rules
 
-Use `override[]` when parts of the manifest must change under specific conditions:
+Use `override[]` when parts of the manifest must change under specific conditions. The client evaluates each override's trigger condition, and when a match is found it replaces the specified manifest path with the override value.
 
 ```json
 {
@@ -44,13 +44,57 @@ Use `override[]` when parts of the manifest must change under specific condition
 
 Each override object has:
 
+Each override object has these fields:
+
 | Field | Description |
 | --- | --- |
-| `triggerType` | Condition type. Existing manifests use `hostname` and `meta`. |
-| `triggerValue` | Value to match for trigger types that require one. |
+| `triggerType` | Condition type. Supported values are `hostname` and `meta`. |
+| `triggerValue` | Value to match for trigger types that require one. Ignored for `meta`. |
 | `overrideObjects[]` | List of path/value replacements. |
-| `overrideObjects[].path` | Dot path under the platform object or top-level manifest depending on trigger behavior. |
+| `overrideObjects[].path` | Dot-notation path to the manifest property to replace. |
 | `overrideObjects[].value` | Replacement value. |
+
+Two trigger types are supported:
+
+### `hostname`
+
+Triggers the override when the user's CRM hostname matches `triggerValue`. This is the most common trigger type, used to activate region-specific configuration (different auth URLs, API endpoints, etc.) based on which regional server the user is logged in to.
+
+```json
+{
+  "triggerType": "hostname",
+  "triggerValue": "au.app.clio.com",
+  "overrideObjects": [
+    {
+      "path": "auth.oauth.authUrl",
+      "value": "https://au.app.clio.com/oauth/authorize"
+    }
+  ]
+}
+```
+
+### `meta`
+
+Triggers the override unconditionally — it always applies regardless of the user's hostname or any other runtime condition. Use `meta` when you need to set connector-level defaults that should apply globally, such as overriding the connector's `serverUrl` or `author` to point to a specific deployment.
+
+```json
+{
+  "triggerType": "meta",
+  "triggerValue": "",
+  "overrideObjects": [
+    {
+      "path": "serverUrl",
+      "value": "https://custom-deployment.example.com"
+    },
+    {
+      "path": "author",
+      "value": "Acme Corp"
+    }
+  ]
+}
+```
+
+The `triggerValue` field is ignored for `meta` overrides and can be set to an empty string.
 
 Existing bundled connectors also use `triggerType: "meta"` to override deployment metadata such as `serverUrl` and `author`.
 

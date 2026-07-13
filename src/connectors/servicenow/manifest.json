@@ -1,5 +1,5 @@
 {
-    "serverUrl": "https://rc-crmapi.test.gate6.com",
+    "serverUrl": "https://unpicaresque-rob-supersilently.ngrok-free.dev",
     "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
     "author": {
         "name": "Gate6",
@@ -15,7 +15,6 @@
             "urlIdentifier": "*service-now.com*",
             "name": "servicenow",
             "displayName": "servicenow",
-            "useLicense": true,
             "enableExtensionNumberLoggingSetting": true,
             "clickToDialMatchAllNumbers": true,
             "requestConfig": {
@@ -23,21 +22,33 @@
             },
             "auth": {
                 "type": "oauth",
-                "managed": true,
-                "oauth": {
-                    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
-                    "customState": "platform=gate6.servicenow",
-                    "scope": "useraccount",
-                    "adminManaged": {
-                        "enabled": true,
-                        "setupNotes": "Admin setup: register an OAuth app in your ServiceNow instance (System OAuth > Application Registry > Create an OAuth API endpoint for external clients), then enter its credentials here. Use YOUR instance for the URIs: Authorization URI = https://YOUR-INSTANCE.service-now.com/oauth_auth.do | Access Token URI = https://YOUR-INSTANCE.service-now.com/oauth_token.do | Redirect URI = https://ringcentral.github.io/ringcentral-embeddable/redirect.html (also add this as the Redirect URL in your ServiceNow OAuth app) | Scopes = useraccount | Hostname = YOUR-INSTANCE.service-now.com. Stored once and shared across your organization."
+                "apiKey": {
+                    "page": {
+                        "title": "test CRM",
+                        "content": [
+                            {
+                                "const": "apiKey",
+                                "title": "apiKey",
+                                "type": "string",
+                                "required": true
+                            }
+                        ]
                     }
+                },
+                "oauth": {
+                    "authUrl": "https://dev205605.service-now.com/oauth_auth.do",
+                    "clientId": "f9537bfc5f2d4fd1b82efc71949a1717",
+                    "redirectUri": "https://ringcentral.github.io/ringcentral-embeddable/redirect.html",
+                    "customState": "",
+                    "scope": ""
                 }
             },
+            "customState": "",
+            "scope": "",
             "canOpenLogPage": true,
-            "contactPageUrl": "https://{hostname}/now/nav/ui/classic/params/target/sys_user.do?sys_id={contactId}",
-            "logPageUrl": "https://{hostname}/interaction.do?sys_id={logId}",
-            "callPopUrl": "https://{hostname}/interaction_list.do?sysparm_query=opened_for={contactId}",
+            "contactPageUrl": "https://dev205605.service-now.com/now/nav/ui/classic/params/target/sys_user.do?sys_id={contactId}",
+            "logPageUrl": "https://dev205605.service-now.com/interaction.do?sys_id={logId}",
+            "callPopUrl": "https://dev205605.service-now.com/interaction_list.do?sysparm_query=opened_for={contactId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
                     "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
@@ -59,25 +70,25 @@
                         {
                             "id": "serviceNowInboundCallState",
                             "type": "inputField",
-                            "name": "Default value for inbound calls",
+                            "name": "Default action for inbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowOutboundCallState",
                             "type": "inputField",
-                            "name": "Default value for outbound calls",
+                            "name": "Default action for outbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowMessageState",
                             "type": "inputField",
-                            "name": "Default value for SMS",
+                            "name": "Default action for SMS",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowVoicemailState",
                             "type": "inputField",
-                            "name": "Default value for voicemails",
+                            "name": "Default action for voicemails",
                             "placeholder": "Enter action value"
                         }
                     ]
@@ -96,25 +107,25 @@
                         {
                             "id": "serviceNowInboundCallType",
                             "type": "inputField",
-                            "name": "Default value for inbound calls",
+                            "name": "Default action for inbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowOutboundCallType",
                             "type": "inputField",
-                            "name": "Default value for outbound calls",
+                            "name": "Default action for outbound calls",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowMessageType",
                             "type": "inputField",
-                            "name": "Default value for SMS",
+                            "name": "Default action for SMS",
                             "placeholder": "Enter action value"
                         },
                         {
                             "id": "serviceNowVoicemailType",
                             "type": "inputField",
-                            "name": "Default value for voicemails",
+                            "name": "Default action for voicemails",
                             "placeholder": "Enter action value"
                         }
                     ]
@@ -264,5 +275,5 @@
             }
         }
     },
-    "version": "1.6.21"
+    "version": "1.6.17"
 }

@@ -1,6 +1,6 @@
 # Core Routes
 
-This page documents the non-MCP HTTP routes defined in `index.js`.
+This page documents the non-MCP HTTP routes defined in `index.ts`.
 
 ## Route Design Notes
 
@@ -58,6 +58,7 @@ This page documents the non-MCP HTTP routes defined in `index.js`.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/user/preloadSettings` | Loads settings used to bootstrap client-side configuration |
+| `POST` | `/user/refreshInfo` | Refreshes connector-owned CRM user information for the current user |
 | `GET` | `/user/settings` | Returns merged user and admin settings |
 | `POST` | `/user/settings` | Updates per-user settings, with connector hooks when present |
 
@@ -74,7 +75,7 @@ This page documents the non-MCP HTTP routes defined in `index.js`.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/callLog/cacheNote` | Stores a temporary note for server-side call logging |
-| `GET` | `/callLog` | Looks up existing call logs by session id |
+| `GET` | `/callLog` | Looks up existing call logs by session id plus extension identity |
 | `POST` | `/callLog` | Creates a CRM call log and stores the local linkage record |
 | `PATCH` | `/callLog` | Updates an existing CRM call log |
 | `PUT` | `/callDisposition` | Upserts call disposition data through the connector |
@@ -94,7 +95,10 @@ This page documents the non-MCP HTTP routes defined in `index.js`.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/debug/report/url` | Returns a presigned URL for error log upload |
-| `POST` | `/pluginAsyncTask` | Returns async plugin task status and cleans up finished task cache entries |
+| `POST` | `/plugin/async-callback/:taskId` | Receives async plugin completion callbacks for call-log tasks |
+| `POST` | `/plugin/register` | Registers an account-level plugin and stores returned plugin auth data |
+| `DELETE` | `/plugin/unregister` | Removes account-level plugin auth and settings |
+| `GET` | `/plugin/licenseStatus` | Reads license status for an installed plugin |
 
 ## Development-Only Mock Routes
 
