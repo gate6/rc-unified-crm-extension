@@ -48,10 +48,10 @@ async function computeLicenseStatus({ models, userId }) {
   // Seat enforcement only when we have an rcAccountId to count seats per tenant. Legacy
   // accounts (no rcAccountId) keep the prior status-only behaviour — no seat caps.
   const maxSeats = Number(company.maxAllowedUsers);
-  if (user.rcAccountId && Number.isFinite(maxSeats) && maxSeats >= 0) {
+  if (user.rcAccountId && Number.isFinite(maxSeats) && maxSeats > 0) {
     const activeCustomers = await models.customer.findAll({
         where: { companyId: company.id },
-        order: [['updatedAt', 'ASC']],
+        order: [['createdAt', 'ASC']],
         attributes: ['sysId'],
         raw: true
     });

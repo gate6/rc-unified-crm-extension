@@ -30,11 +30,11 @@ const SERVICE_TITAN_CRM_URL = process.env.SERVICETITAN_CRM_URL || "https://api-i
 apiLog.installErrorInterceptor(serviceTitanApiClient, 'ServiceTitan');
 
 async function getLicenseStatus({ userId }) {
-  return licenseHelper.getLicenseStatus({ models, userId });
+    return licenseHelper.getLicenseStatus({ models, userId });
 }
 
 async function validateLicenseOrFail(user) {
-  return licenseHelper.validateLicenseOrFail({ models, user });
+    return licenseHelper.validateLicenseOrFail({ models, user });
 }
 
 function getAuthType() {
@@ -74,7 +74,7 @@ async function getUserInfo({ hostname, additionalInfo }) {
     const emailKey = rcUserEmail ? rcUserEmail.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : '';
     const perUserKey =
         (rcExtensionId && String(rcExtensionId) !== String(rcAccountId)) ? String(rcExtensionId)
-        : (emailKey || (rcExtensionId ? String(rcExtensionId) : ''));
+            : (emailKey || (rcExtensionId ? String(rcExtensionId) : ''));
     const userId = (rcAccountId && perUserKey)
         ? `st-user-${rcAccountId}-${perUserKey}`
         : `st-user-${rcAccountId || 'noacct'}-${perUserKey || 'unknown'}`;
@@ -95,9 +95,9 @@ async function getUserInfo({ hostname, additionalInfo }) {
 
     if (models && models.companies && models.customer && rcAccountId) {
         try {
-            const company = await models.companies.findOne({ 
-                where: { rcAccountId: String(rcAccountId), tenantId: String(tenantId), status: true }, 
-                raw: true 
+            const company = await models.companies.findOne({
+                where: { rcAccountId: String(rcAccountId), tenantId: String(tenantId), status: true },
+                raw: true
             });
             if (!company) {
                 return {
@@ -248,7 +248,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
         for (let rawPersonInfo of personInfo.data.data) {
             if (seenIds.has(rawPersonInfo.id)) continue;
             seenIds.add(rawPersonInfo.id);
-            
+
             rawPersonInfo['phoneNumber'] = phoneNumber;
             const contact = formatContact(rawPersonInfo);
 
@@ -267,7 +267,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
                 console.warn('[ServiceTitan] findContact: failed to fetch jobs for customer', contact.id, err.message);
             }
 
-            contact.additionalInfo = { 
+            contact.additionalInfo = {
                 associatedJobs: jobOptions
             };
 
@@ -277,20 +277,20 @@ async function findContact({ user, phoneNumber, isExtension }) {
 
     // No contacts found in ServiceTitan — delete stale cache entry if it exists
     if (matchedContactInfo.length === 0 && user?.rcAccountId) {
-      try {
-        const deleted = await AccountDataModel.destroy({
-          where: {
-            rcAccountId: user.rcAccountId,
-            platformName: 'gate6.servicetitan',
-            dataKey: `contact-${phoneNumber}`
-          }
-        });
-        if (deleted > 0) {
-          console.log('[ServiceTitan] findContact: deleted stale cache for phone:', phoneNumber);
+        try {
+            const deleted = await AccountDataModel.destroy({
+                where: {
+                    rcAccountId: user.rcAccountId,
+                    platformName: 'gate6.servicetitan',
+                    dataKey: `contact-${phoneNumber}`
+                }
+            });
+            if (deleted > 0) {
+                console.log('[ServiceTitan] findContact: deleted stale cache for phone:', phoneNumber);
+            }
+        } catch (err) {
+            console.warn('[ServiceTitan] findContact: failed to delete stale cache:', err.message);
         }
-      } catch (err) {
-        console.warn('[ServiceTitan] findContact: failed to delete stale cache:', err.message);
-      }
     }
 
     matchedContactInfo.push({
@@ -358,7 +358,7 @@ async function findContactWithName({ user, name }) {
                     console.warn('[ServiceTitan] findContactWithName: failed to fetch jobs for customer', contact.id, err.message);
                 }
 
-                contact.additionalInfo = { 
+                contact.additionalInfo = {
                     associatedJobs: jobOptions
                 };
 
@@ -525,7 +525,7 @@ async function fetchJobs({ user, params = {} }) {
         // ServiceTitan API does not support comma-separated jobStatus. 
         // We must fetch each active status individually and merge them.
         const activeStatuses = ['Scheduled', 'Dispatched', 'InProgress'];
-        
+
         const jobPromises = activeStatuses.map(status => {
             const fetchJobsUrl = `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs?pageSize=10&jobStatus=${status}&customerId=${params?.customerId}&active=true`;
             return serviceTitanApiClient.get(
@@ -565,10 +565,10 @@ async function fetchJobs({ user, params = {} }) {
                     _operation: 'fetchJobs'
                 }
             ).then(res => ({ id: typeId, name: res.data?.name || res.data?.data?.name }))
-             .catch(err => {
-                 console.warn(`Failed to fetch job type ${typeId}:`, err.message);
-                 return { id: typeId, name: 'Job' };
-             });
+                .catch(err => {
+                    console.warn(`Failed to fetch job type ${typeId}:`, err.message);
+                    return { id: typeId, name: 'Job' };
+                });
         });
 
         const jobTypes = await Promise.all(jobTypePromises);
@@ -647,7 +647,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
         sections.push(`AI transcript:\n${sanitizeNoteText(transcript)}`);
     }
-    
+
     if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
         sections.push(`AI Note :\n${sanitizeNoteText(aiNote)}`);
     }
@@ -657,7 +657,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     const headerLines = [];
     if (subject) headerLines.push(`Subject: ${subject}`);
     if (callLog.direction) headerLines.push(`Direction: ${callLog.direction}`);
-    
+
     if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
         headerLines.push(`Result: ${callLog.result}`);
     }
@@ -679,7 +679,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     if (rcPhone && (user.userSettings?.addRingCentralNumber?.value ?? true)) {
         headerLines.push(`RingCentral Phone Number: ${rcPhone}`);
     }
-    
+
     const contactPhone = contactInfo?.phoneNumber || contactInfo?.phone;
     if (contactPhone && (user.userSettings?.addCallLogContactNumber?.value ?? true)) {
         headerLines.push(`Contact Number: ${contactPhone}`);
@@ -811,7 +811,6 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     // Session-based IDs: job notes don't have native IDs from ServiceTitan API
     const isSessionBased = realId.startsWith('csid-');
     const sessionIdFromLog = isSessionBased ? realId.replace('csid-', '') : null;
-    console.log(`[ServiceTitan][updateCallLog] Parsed logId: thirdPartyLogId="${existingCallLog.thirdPartyLogId}" → noteId="${realId}", jobId="${jobId}", logType="${logType}", isSessionBased=${isSessionBased}`);
 
     let direction = "";
     let startTime = "";
@@ -986,7 +985,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     const headerLines = [];
     if (subjectToUse) headerLines.push(`Subject: ${subjectToUse}`);
     if (direction) headerLines.push(`Direction: ${direction}`);
-    
+
     if (result && (user.userSettings?.addCallLogResult?.value ?? true)) {
         headerLines.push(`Result: ${result}`);
     }
@@ -1443,7 +1442,7 @@ async function getCallLog({ user, callLogId }) {
         else if (logType === "job") {
 
             const jobRes = await serviceTitanApiClient.get(
-                 `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,
+                `${SERVICE_TITAN_JPM_URL}/${tenantId}/jobs/${realId}`,
                 {
                     headers: {
                         Authorization: `Bearer ${auth}`,
@@ -1621,4 +1620,4 @@ exports.unAuthorize = unAuthorize;
 exports.findContactWithName = findContactWithName;
 exports.getRefreshedAuthToken = getRefreshedAuthToken;
 exports.getLicenseStatus = getLicenseStatus;
-export {};
+export { };

@@ -457,7 +457,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
             hostname: cleanHostname,
             rcAccountId
           });
-          console.log('[Monday][getUserInfo] customer row created', { sysId: userData.id, companyId: company.id });
+          console.log('[Monday][getUserInfo] customer row created', { firstname: userData.name });
         }
       } catch (err) {
         console.error('[Monday][getUserInfo] error enforcing customer seat limits:', err);

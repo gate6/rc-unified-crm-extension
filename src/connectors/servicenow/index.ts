@@ -34,6 +34,18 @@ function stringifyForLog(value, maxLength = 1200) {
 
 apiLog.installErrorInterceptor(serviceNowApiClient, 'ServiceNow');
 
+// Normalize a hostname to the bare host the companies table stores:
+// strips scheme (http/https), any path/query, port, and trailing slash; lowercased.
+function normalizeHostname(raw) {
+  if (!raw) return raw;
+  let host = String(raw).trim();
+  host = host.replace(/^https?:\/\//i, '');   // drop scheme
+  host = host.split('/')[0];                   // drop path / trailing slash
+  host = host.split('?')[0];                   // drop query
+  host = host.split(':')[0];                   // drop port
+  return host.toLowerCase();
+}
+
 async function getLicenseStatus({ userId }) {
     return licenseHelper.getLicenseStatus({ models, userId });
 }
@@ -135,10 +147,24 @@ async function getUserInfo({ authHeader, hostname, query }) {
 
         if (models && models.companies && models.customer && rcAccountId) {
             try {
-                const company = await models.companies.findOne({
-                    where: { rcAccountId: String(rcAccountId), hostname: String(hostname), status: true },
-                    raw: true
-                });
+                const cleanHostname = normalizeHostname(hostname);
+                let company = null;
+                if (rcAccountId && cleanHostname) {
+                    company = await models.companies.findOne({
+                        where: { rcAccountId: String(rcAccountId), hostname: cleanHostname, status: true },
+                        raw: true
+                    });
+                }
+                if (!company && rcAccountId) { // fixed-hostname / rows without a hostname
+                    company = await models.companies.findOne({
+                        where: { rcAccountId: String(rcAccountId), status: true }, raw: true
+                    });
+                }
+                if (!company && cleanHostname) { // LEGACY rows that predate rcAccountId ← prevents the lockout
+                    company = await models.companies.findOne({
+                        where: { hostname: cleanHostname, status: true }, raw: true
+                    });
+                }
                 if (!company) {
                     return {
                         successful: false,
@@ -326,7 +352,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     const companyData = await models.companies.findOne({
         where: {
-            hostname: hostname
+            hostname: normalizeHostname(hostname)
         }
     });
 
@@ -510,7 +536,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const { userDetailsPath } = await models.companies.findOne({
         where: {
-            hostname: userInfo.hostname
+            hostname: normalizeHostname(userInfo.hostname)
         },
         raw: true
     })
@@ -537,7 +563,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const hostname = userInfo.hostname;
     const companyData = await models.companies.findOne({
         where: {
-            hostname: hostname
+            hostname: normalizeHostname(hostname)
         }
     });
 
@@ -958,7 +984,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
 
     const { userDetailsPath } = await models.companies.findOne({
         where: {
-            hostname: hostname
+            hostname: normalizeHostname(hostname)
         },
         raw: true
     })
@@ -1194,7 +1220,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
 
     const companyData = await models.companies.findOne({
         where: {
-            hostname: hostname
+            hostname: normalizeHostname(hostname)
         }
     });
 
