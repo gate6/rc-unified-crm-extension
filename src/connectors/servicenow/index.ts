@@ -65,13 +65,13 @@ function getBasicAuth({ apiKey }) {
 // CASE: If using OAuth
 
 async function getHostname(hostname) {
-    
+
     const existingUser = await UserModel.findOne({
         where: {
-           hostname: hostname
+            hostname: hostname
         },
-        attributes:['id','hostname'],
-        raw:true
+        attributes: ['id', 'hostname'],
+        raw: true
     });
 
     let instanceId;
@@ -128,6 +128,63 @@ async function getUserInfo({ authHeader, hostname, query }) {
         }
         if (rcAccountId) {
             id = `snow-${rcAccountId}-${id}`;
+        }
+
+        const rcUserEmail = query?.rcUserEmail;
+        const rcUserName = query?.rcUserName;
+
+        if (models && models.companies && models.customer && rcAccountId) {
+            try {
+                const company = await models.companies.findOne({
+                    where: { rcAccountId: String(rcAccountId), hostname: String(hostname), status: true },
+                    raw: true
+                });
+                if (!company) {
+                    return {
+                        successful: false,
+                        returnMessage: {
+                            messageType: 'error',
+                            message: 'No active subscription found for this account. Please contact Gate6 support.',
+                            ttl: 5000
+                        }
+                    };
+                }
+
+                const existingCustomer = await models.customer.findOne({
+                    where: { companyId: company.id, sysId: String(id) },
+                    raw: true
+                });
+
+                if (!existingCustomer) {
+                    const currentSeatCount = await models.customer.count({
+                        where: { companyId: company.id }
+                    });
+
+                    const maxSeats = Number(company.maxAllowedUsers);
+                    if (Number.isFinite(maxSeats) && maxSeats >= 0 && currentSeatCount >= maxSeats) {
+                        return {
+                            successful: false,
+                            returnMessage: {
+                                messageType: 'error',
+                                message: `License seat limit reached (${maxSeats} of ${maxSeats} in use). Contact your admin.`,
+                                ttl: 5000
+                            }
+                        };
+                    }
+
+                    await models.customer.create({
+                        sysId: String(id),
+                        companyId: company.id,
+                        email: rcUserEmail || result.email || '',
+                        firstname: rcUserName || name || 'ServiceNow User',
+                        platform: 'gate6.servicenow',
+                        hostname,
+                        rcAccountId
+                    });
+                }
+            } catch (err) {
+                console.error('Error enforcing customer seat limits:', err);
+            }
         }
 
         apiLog.logSuccess('ServiceNow', 'getUserInfo', { contactId: id, apiEndpoint: userInfoUrl });
@@ -191,12 +248,12 @@ function generateFormatsFromE164(e164Number) {
             e164Number,                                               // +18003534676
             digits,                                                   // 18003534676
             d,                                                        // 8003534676
-            `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`,      // (800) 353-4676
-            `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`,        // 800-353-4676
-            `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6)}`,        // 800.353.4676
-            `+1 (${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`,   // +1 (800) 353-4676
-            `+1-${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`,     // +1-800-353-4676
-            `(${d.slice(0,3)})${d.slice(3,6)}-${d.slice(6)}`,       // (800)353-4676
+            `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`,      // (800) 353-4676
+            `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`,        // 800-353-4676
+            `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`,        // 800.353.4676
+            `+1 (${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`,   // +1 (800) 353-4676
+            `+1-${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`,     // +1-800-353-4676
+            `(${d.slice(0, 3)})${d.slice(3, 6)}-${d.slice(6)}`,       // (800)353-4676
         ];
     }
     return [e164Number, digits];
@@ -293,14 +350,14 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     } catch (err) {
         console.log('sys_choice type lookup failed, continuing without type options:', err.response?.status);
     }
-    
+
 
     // You can use parsePhoneNumber functions to further parse the phone number
     const matchedContactInfo = [];
     const matchedContactIds = new Set();
     const isExtensionBool = isExtension === true || isExtension === 'true';
     const contactTable = (companyData?.contactTable?.trim().toLowerCase() == 'user' || isExtensionBool) ? 'table/sys_user' : 'contact';
-    
+
     const rcDigits = toDigits(phoneNumber);
     const addMatchedContact = (result) => {
         const contactId = (result?.sys_id || '').toString().trim();
@@ -327,7 +384,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         const personInfo = await serviceNowApiClient.get(
             `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}^ORmobile_phoneLIKE${numberToQuery}`,
             {
-                headers: { 'Authorization':  authHeader }, _operation: 'findContact'
+                headers: { 'Authorization': authHeader }, _operation: 'findContact'
             });
 
         if (personInfo.data.result.length > 0) {
@@ -374,20 +431,20 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     // No contacts found in ServiceNow — delete stale cache entry if it exists
     if (matchedContactInfo.length === 0 && user?.rcAccountId) {
-      try {
-        const deleted = await AccountDataModel.destroy({
-          where: {
-            rcAccountId: user.rcAccountId,
-            platformName: 'servicenow',
-            dataKey: `contact-${phoneNumber}`
-          }
-        });
-        if (deleted > 0) {
-          console.log('[ServiceNow] findContact: deleted stale cache for phone:', phoneNumber);
+        try {
+            const deleted = await AccountDataModel.destroy({
+                where: {
+                    rcAccountId: user.rcAccountId,
+                    platformName: 'servicenow',
+                    dataKey: `contact-${phoneNumber}`
+                }
+            });
+            if (deleted > 0) {
+                console.log('[ServiceNow] findContact: deleted stale cache for phone:', phoneNumber);
+            }
+        } catch (err) {
+            console.warn('[ServiceNow] findContact: failed to delete stale cache:', err.message);
         }
-      } catch (err) {
-        console.warn('[ServiceNow] findContact: failed to delete stale cache:', err.message);
-      }
     }
 
     const accounts = await getAllAccounts(hostname, authHeader);
@@ -433,16 +490,25 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     let body = '';
     if (user.userSettings?.addCallLogNote?.value ?? true) { body = upsertCallAgentNote({ body, note }); }
-    if (user.userSettings?.addCallLogContactNumber?.value ?? true) { body = upsertContactPhoneNumber({ body, phoneNumber: contactInfo.phoneNumber, direction: callLog.direction }); }
+    if (user.userSettings?.addCallLogContactNumber?.value ?? true) { body = upsertContactPhoneNumber({ body, phoneNumber: contactInfo.phoneNumber || contactInfo.phone, direction: callLog.direction }); }
     if (user.userSettings?.addCallLogResult?.value ?? true) { body = upsertCallResult({ body, result: callLog.result }); }
     if (user.userSettings?.addCallLogDuration?.value ?? true) { body = upsertCallDuration({ body, duration: callLog.duration }); }
+    if (user.userSettings?.addCallSessionId?.value ?? true) { body = upsertCallSessionId({ body, sessionId: callLog.sessionId }); }
+    const agentParty = callLog?.direction === 'Inbound' ? callLog?.to : callLog?.from;
+    const rcNameFromLog = agentParty?.name;
+    const effectiveRcUserName = rcNameFromLog || '';
+    if (effectiveRcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) { body = upsertRingCentralUserName({ body, rcUserName: effectiveRcUserName }); }
+    const rcPhoneNumberFromLog = agentParty?.phoneNumber;
+    const effectiveRcPhoneNumber = rcPhoneNumberFromLog || callLog?.extensionNumber;
+    if (effectiveRcPhoneNumber && (user.userSettings?.addRingCentralNumber?.value ?? true)) { body = upsertRingCentralNumber({ body, rcPhoneNumber: effectiveRcPhoneNumber }); }
+    if (user.userSettings?.addCallLogDateTime?.value ?? true) { body = upsertCallDateTime({ body, startTime: callLog.startTime, duration: callLog.duration }); }
     if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { body = upsertCallRecording({ body, recordingLink: callLog.recording.link }); }
     if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { body = upsertAiNote({ body, aiNote }); }
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { body = upsertTranscript({ body, transcript }); }
 
     const userInfo = await getHostname(user.dataValues.hostname);
 
-    const { userDetailsPath }  = await models.companies.findOne({
+    const { userDetailsPath } = await models.companies.findOne({
         where: {
             hostname: userInfo.hostname
         },
@@ -476,7 +542,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     });
 
     const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact';
-    
+
     const caller_id = await serviceNowApiClient.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
@@ -546,7 +612,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     }
 
     postBody.opened_for = contactInfo.id;
-    
+
     if (additionalSubmission?.type) {
         const returnedType = await findTypeValueById(hostname, authHeader, additionalSubmission.type);
         postBody.type = returnedType ?? await findTypeValueByName(hostname, authHeader, additionalSubmission.type);
@@ -608,6 +674,9 @@ function upsertCallAgentNote({ body, note }) {
 }
 
 function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
+    if (!!!phoneNumber) {
+        return body;
+    }
     const phoneNumberRegex = RegExp('- Contact Number: (.+?)\n');
     if (phoneNumberRegex.test(body)) {
         body = body.replace(phoneNumberRegex, `- Contact Number: ${phoneNumber}\n`);
@@ -618,6 +687,9 @@ function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
 }
 
 function upsertCallResult({ body, result }) {
+    if (!!!result) {
+        return body;
+    }
     const resultRegex = RegExp('- Result: (.+?)\n');
     if (resultRegex.test(body)) {
         body = body.replace(resultRegex, `- Result: ${result}\n`);
@@ -628,11 +700,77 @@ function upsertCallResult({ body, result }) {
 }
 
 function upsertCallDuration({ body, duration }) {
+    if (duration == null || duration === '') {
+        return body;
+    }
     const durationRegex = RegExp('- Duration: (.+?)\n');
     if (durationRegex.test(body)) {
         body = body.replace(durationRegex, `- Duration: ${secondsToHoursMinutesSeconds(duration)}\n`);
     } else {
         body += `- Duration: ${secondsToHoursMinutesSeconds(duration)}\n`;
+    }
+    return body;
+}
+
+function upsertCallSessionId({ body, sessionId }) {
+    if (!!!sessionId) {
+        return body;
+    }
+    const sessionIdRegex = RegExp('- Call Session ID: (.+?)\n');
+    if (sessionIdRegex.test(body)) {
+        body = body.replace(sessionIdRegex, `- Call Session ID: ${sessionId}\n`);
+    } else {
+        body += `- Call Session ID: ${sessionId}\n`;
+    }
+    return body;
+}
+
+function upsertRingCentralUserName({ body, rcUserName }) {
+    if (!!!rcUserName) {
+        return body;
+    }
+    const rcUserNameRegex = RegExp('- RingCentral Username: (.+?)\n');
+    if (rcUserNameRegex.test(body)) {
+        body = body.replace(rcUserNameRegex, `- RingCentral Username: ${rcUserName}\n`);
+    } else {
+        body += `- RingCentral Username: ${rcUserName}\n`;
+    }
+    return body;
+}
+
+function upsertRingCentralNumber({ body, rcPhoneNumber }) {
+    if (!!!rcPhoneNumber) {
+        return body;
+    }
+    const rcPhoneNumberRegex = RegExp('- RingCentral Phone Number: (.+?)\n');
+    if (rcPhoneNumberRegex.test(body)) {
+        body = body.replace(rcPhoneNumberRegex, `- RingCentral Phone Number: ${rcPhoneNumber}\n`);
+    } else {
+        body += `- RingCentral Phone Number: ${rcPhoneNumber}\n`;
+    }
+    return body;
+}
+
+function upsertCallDateTime({ body, startTime, duration }) {
+    if (!!!startTime) {
+        return body;
+    }
+    const formattedStartTime = moment(startTime).format("YYYY-MM-DD HH:mm:ss");
+    const startTimeRegex = RegExp('- Start Time: (.+?)\n');
+    if (startTimeRegex.test(body)) {
+        body = body.replace(startTimeRegex, `- Start Time: ${formattedStartTime}\n`);
+    } else {
+        body += `- Start Time: ${formattedStartTime}\n`;
+    }
+
+    if (duration != null && duration !== '') {
+        const formattedEndTime = moment(startTime).add(duration, "seconds").format("YYYY-MM-DD HH:mm:ss");
+        const endTimeRegex = RegExp('- End Time: (.+?)\n');
+        if (endTimeRegex.test(body)) {
+            body = body.replace(endTimeRegex, `- End Time: ${formattedEndTime}\n`);
+        } else {
+            body += `- End Time: ${formattedEndTime}\n`;
+        }
     }
     return body;
 }
@@ -692,7 +830,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
         {
             headers: { Authorization: authHeader }, _operation: 'getCallLog'
         });
-    
+
     const latestNote = journalRes.data.result
         .sort((a, b) => new Date(b.sys_created_on) - new Date(a.sys_created_on))[0]?.value || '';
     const agentNoteMatch = latestNote.match(/- Agent note:\s*(.*)/i);
@@ -715,7 +853,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     }
 }
 
-async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, recordingDownloadLink, subject, note, startTime, duration, result, aiNote, transcript }) {
+async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, recordingDownloadLink, subject, note, startTime, duration, result, aiNote, transcript, additionalSubmission }) {
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
@@ -743,11 +881,20 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
         subjectToUse = subject.trim();
     }
-    
+
     let logBody = originalNote;
     if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
     if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
     if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
+    if (existingCallLog?.sessionId && (user.userSettings?.addCallSessionId?.value ?? true)) { logBody = upsertCallSessionId({ body: logBody, sessionId: existingCallLog.sessionId }); }
+    const agentParty = existingCallLog?.direction === 'Inbound' ? existingCallLog?.to : existingCallLog?.from;
+    const rcNameFromLog = agentParty?.name;
+    const effectiveRcUserName = rcNameFromLog || '';
+    if (effectiveRcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) { logBody = upsertRingCentralUserName({ body: logBody, rcUserName: effectiveRcUserName }); }
+    const rcPhoneNumberFromLog = agentParty?.phoneNumber;
+    const effectiveRcPhoneNumber = rcPhoneNumberFromLog || existingCallLog?.extensionNumber;
+    if (effectiveRcPhoneNumber && (user.userSettings?.addRingCentralNumber?.value ?? true)) { logBody = upsertRingCentralNumber({ body: logBody, rcPhoneNumber: effectiveRcPhoneNumber }); }
+    if (!!startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) { logBody = upsertCallDateTime({ body: logBody, startTime, duration }); }
     if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink: decodeURIComponent(recordingLink) }); }
     if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
@@ -809,7 +956,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
-    const { userDetailsPath }  = await models.companies.findOne({
+    const { userDetailsPath } = await models.companies.findOne({
         where: {
             hostname: hostname
         },
@@ -860,7 +1007,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         opened_for: contactInfo.id
     };
 
-    if(message?.startTime){
+    if (message?.startTime) {
         postBody.opened_at = message.startTime;
     }
 
@@ -1000,20 +1147,20 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
             recordingLink
                 ? `Voicemail-${Date.now()}.mp3`
                 : `Fax-${Date.now()}.pdf`;
-                
+
         const s3Key = fileName;
 
         const s3Url = await downloadAudioFile(
-            downloadUrl, 
-            process.env.S3_BUCKET, 
+            downloadUrl,
+            process.env.S3_BUCKET,
             s3Key
         );
 
         await uploadToServiceNow(
-            s3Url, 
-            hostname, 
-            authHeader, 
-            existingLogId, 
+            s3Url,
+            hostname,
+            authHeader,
+            existingLogId,
             fileName
         );
     }
@@ -1068,12 +1215,12 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             postBody.account = selectedAccountId;
         } else {
             const account = await serviceNowApiClient.get(
-            `https://${hostname}/api/now/account?sysparm_limit=1`,
-            { headers: { Authorization: authHeader }, _operation: 'createContact' }
+                `https://${hostname}/api/now/account?sysparm_limit=1`,
+                { headers: { Authorization: authHeader }, _operation: 'createContact' }
             );
             const fallbackAccountId = account?.data?.result?.[0]?.sys_id;
             if (fallbackAccountId) {
-            postBody.account = fallbackAccountId;
+                postBody.account = fallbackAccountId;
             }
         }
 
@@ -1202,4 +1349,4 @@ exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
 exports.upsertCallDisposition = upsertCallDisposition;
 exports.getLicenseStatus = getLicenseStatus
-export {};
+export { };

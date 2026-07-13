@@ -12,6 +12,7 @@ const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel'
 const qs = require('qs');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
+const { trackAnalytics } = require('../servicenow-core/analytics');
 const models = sequelize ? initModels(sequelize) : null;
 const licenseHelper = require('../shared/license');
 const apiLog = require('../shared/apiLogger');
@@ -254,7 +255,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
             // Fetch active/scheduled jobs for this customer and attach them as dropdown
             // options — the RC extension reads additionalInfo to populate contactDependent
             // selection fields (same pattern as ServiceNow's state/type/account fields).
-            let jobOptions = [{ const: 'none', title: 'None (Log to Customer Note)' }];
+            let jobOptions = [{ const: 'none', title: 'None' }];
             try {
                 const jobs = await fetchJobs({ user, params: { customerId: contact.id } });
                 const activeJobs = jobs.map(job => ({
@@ -452,6 +453,8 @@ async function createContact({ user, phoneNumber, newContactName }) {
         const createdContact = response.data;
 
         apiLog.logSuccess('ServiceTitan', 'createContact', { contactId: createdContact.id, apiEndpoint: createContactUrl });
+
+        await trackAnalytics({ user, crm: 'ServiceTitan', event: 'contactCreated' });
 
         return {
             contactInfo: {
@@ -769,6 +772,8 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
         logId = `${addNoteRes.data.id}_note`;
         apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, contactId: contactInfo.id, apiEndpoint: createCallLogUrl });
     }
+
+    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'callLogCreated', eventDate: callLog?.startTime });
 
     return {
         logId,
@@ -1109,6 +1114,8 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     apiLog.logSuccess('ServiceTitan', 'updateCallLog', { logId: newLogId, contactId });
 
+    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'callLogUpdated' });
+
     return {
         logId: newLogId,
         returnMessage: {
@@ -1334,6 +1341,9 @@ ${faxDocLink}
     }
 
     apiLog.logSuccess('ServiceTitan', 'updateMessageLog', { logId: addLogRes.data.id, contactId, apiEndpoint: updateMessageLogUrl });
+
+
+    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogUpdated', eventDate: message?.creationTime });
 
     return {
         logId: addLogRes.data.id,

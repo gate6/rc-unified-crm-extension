@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 const axios = require('axios')
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber')
@@ -5,6 +6,7 @@ const { initModels } = require('../servicenow-models/init-models');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
+const { trackAnalytics } = require('../servicenow-core/analytics');
 const models = sequelize ? initModels(sequelize) : null;
 const FormData = require('form-data')
 const s3Helper = require('../servicenow-core/s3');
@@ -392,6 +394,76 @@ async function getUserInfo({ authHeader, hostname, query }) {
     const cleanHostname = normalizeHostname(hostname);
     console.log('[Monday][getUserInfo] hostname normalized', { rawHostname: hostname, cleanHostname });
 
+    // Company / customer onboarding — mirrors the ServiceTitan pattern so that each
+    // connecting user is registered in the `customer` table with a `companyId` FK.
+    // This is required for the shared license helper's seat-count enforcement to work.
+    if (models && models.companies && models.customer && rcAccountId) {
+      try {
+        // Look up the company row. Try rcAccountId + hostname first for specificity,
+        // then fall back to rcAccountId only (matches the shared license helper's
+        // fallback chain).
+        let company = null;
+        if (cleanHostname) {
+          company = await models.companies.findOne({
+            where: { rcAccountId: String(rcAccountId), hostname: cleanHostname, status: true },
+            raw: true
+          });
+        }
+        if (!company) {
+          company = await models.companies.findOne({
+            where: { rcAccountId: String(rcAccountId), status: true },
+            raw: true
+          });
+        }
+
+        if (!company) {
+          return {
+            successful: false,
+            returnMessage: {
+              messageType: 'error',
+              message: 'No active subscription found for this account. Please contact Gate6 support.',
+              ttl: 5000
+            }
+          };
+        }
+        const existingCustomer = await models.customer.findOne({
+          where: { companyId: company.id, sysId: String(userData.id) },
+          raw: true
+        });
+
+        if (!existingCustomer) {
+          const currentSeatCount = await models.customer.count({
+            where: { companyId: company.id }
+          });
+
+          const maxSeats = Number(company.maxAllowedUsers);
+          if (Number.isFinite(maxSeats) && maxSeats >= 0 && currentSeatCount >= maxSeats) {
+            return {
+              successful: false,
+              returnMessage: {
+                messageType: 'error',
+                message: `License seat limit reached (${maxSeats} of ${maxSeats} in use). Contact your admin.`,
+                ttl: 5000
+              }
+            };
+          }
+
+          await models.customer.create({
+            sysId: String(userData.id),
+            companyId: company.id,
+            email: userData.email || '',
+            firstname: userData.name || 'Monday User',
+            platform: 'gate6.monday',
+            hostname: cleanHostname,
+            rcAccountId
+          });
+          console.log('[Monday][getUserInfo] customer row created', { sysId: userData.id, companyId: company.id });
+        }
+      } catch (err) {
+        console.error('[Monday][getUserInfo] error enforcing customer seat limits:', err);
+      }
+    }
+
     // Discover the connector's single board once, at connect time, and store it so the
     // rest of the system reuses it without re-discovering.
     let boardId = null;
@@ -576,6 +648,11 @@ function parseMondayCallLogBody(body = '') {
     transcript = transcriptMatch[1].trim()
   }
 
+  const sessionId = normalized.match(/Call Session ID:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
+  const rcUserName = normalized.match(/RingCentral Username:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
+  const rcPhoneNumber = normalized.match(/RingCentral Phone Number:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
+  const contactNumber = normalized.match(/Contact Number:\s*(.*?)(?:\n|$)/)?.[1]?.trim() || ''
+
   return {
     subject,
     direction,
@@ -587,6 +664,10 @@ function parseMondayCallLogBody(body = '') {
     agentNote,
     aiNote,
     transcript,
+    sessionId,
+    rcUserName,
+    rcPhoneNumber,
+    contactNumber,
     normalizedBody: normalized
   }
 }
@@ -824,6 +905,9 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
   }
 
   console.log('[Monday][createContact] created item', { itemId: created.id, boardId })
+
+  await trackAnalytics({ user, crm: 'Monday', event: 'contactCreated' });
+
   return {
     contactInfo: {
       id: created.id,
@@ -839,6 +923,22 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
       ttl: 3000
     }
   }
+}
+
+async function getMondayUserName(user) {
+  if (!user || !user.id || !models || !models.customer) return '';
+  try {
+    const existingCustomer = await models.customer.findOne({
+      where: { sysId: String(user.id) },
+      raw: true
+    });
+    if (existingCustomer) {
+      return [existingCustomer.firstname, existingCustomer.lastname].filter(Boolean).join(' ');
+    }
+  } catch (e) {
+    console.warn('[Monday] Failed to fetch user name from db:', e.message);
+  }
+  return '';
 }
 
 async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, accessToken, authHeader, user }) {
@@ -866,12 +966,6 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
     sections.push(`Agent Notes:<br>${note.replace(/\r?\n/g, '<br>')}`)
   }
-  if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
-    sections.push(`Result:<br>${callLog.result}`)
-  }
-  if (callLog?.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
-    sections.push(`Duration:<br>${callLog.duration} sec`)
-  }
   if (callLog?.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) {
     sections.push(`Recording:<br>${callLog.recording.link}`)
   }
@@ -883,16 +977,57 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   }
 
   const optionalSections = sections.join("<br><br>")
-  const lines = [
-    `Subject: ${subject}`,
-    `Direction: ${callLog.direction}`,
-    `Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`,
-    `End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`,
-    "",
-    optionalSections
-  ].filter(Boolean);
 
-  const body = lines.join("<br>");
+  const headerLines = [];
+  if (subject) headerLines.push(`Subject: ${subject}`);
+  if (callLog.direction) headerLines.push(`Direction: ${callLog.direction}`);
+
+  if (callLog?.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
+    headerLines.push(`Result: ${callLog.result}`);
+  }
+  if (callLog?.duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+    headerLines.push(`Duration: ${callLog.duration} sec`);
+  }
+  if (callLog?.sessionId && (user.userSettings?.addCallSessionId?.value ?? true)) {
+    headerLines.push(`Call Session ID: ${callLog.sessionId}`);
+  }
+  const mondayUserName = await getMondayUserName(user);
+  const agentParty = callLog?.direction === 'Inbound' ? callLog?.to : callLog?.from;
+  const rcNameFromLog = agentParty?.name;
+  const rcUserName = rcNameFromLog || mondayUserName || '';
+  if (rcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) {
+    headerLines.push(`RingCentral Username: ${rcUserName}`);
+  }
+  // We don't have additionalSubmission in Monday's createCallLog signature yet, but we can extract rcPhone
+  // from callLog if it's there.
+  const rcPhone = callLog?.extensionNumber || (callLog?.direction === 'Inbound' ? callLog?.to?.phoneNumber : callLog?.from?.phoneNumber);
+  if (rcPhone && (user.userSettings?.addRingCentralNumber?.value ?? true)) {
+    headerLines.push(`RingCentral Phone Number: ${rcPhone}`);
+  }
+  const contactPhone = contactInfo?.phoneNumber || contactInfo?.phone;
+  if (contactPhone && (user.userSettings?.addCallLogContactNumber?.value ?? true)) {
+    headerLines.push(`Contact Number: ${contactPhone}`);
+  }
+
+  const footerLines = [];
+  if (callLog.startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
+    footerLines.push(`Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`);
+    if (callLog.duration) {
+      footerLines.push(`End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`);
+    }
+  }
+
+  const lines = [...headerLines];
+  if (optionalSections) {
+    lines.push("");
+    lines.push(optionalSections);
+  }
+  if (footerLines.length > 0) {
+    lines.push("");
+    lines.push(...footerLines);
+  }
+
+  const body = lines.join("<br>").replace(/^(<br>)+|(<br>)+$/g, '');
 
   const res = await mondayRequest(
     resolvedAccessToken,
@@ -939,6 +1074,8 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     })
   }
 
+  await trackAnalytics({ user, crm: 'Monday', event: 'callLogCreated', eventDate: callLog?.startTime });
+
   return {
     logId: updateId,
     contactId: Number(contactInfo.id),
@@ -950,7 +1087,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   }
 }
 
-async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user, subject, duration, startTime }) {
+async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, transcript, accessToken, authHeader, user, subject, duration, startTime, result }) {
   const licenseError = await validateLicenseOrFail(user, 'updateCallLog');
   if (licenseError) return licenseError;
 
@@ -1014,17 +1151,18 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   const effectiveRecording = recordingLink || parsed.recording
   const effectiveAiNote = aiNote || parsed.aiNote
   const effectiveTranscript = transcript || parsed.transcript
+  const effectiveSessionId = parsed.sessionId
+  const mondayUserName = await getMondayUserName(user);
+  const agentParty = existingCallLog?.direction === 'Inbound' ? existingCallLog?.to : existingCallLog?.from;
+  const rcNameFromLog = agentParty?.name;
+  const effectiveRcUserName = parsed.rcUserName || rcNameFromLog || mondayUserName || '';
+  const effectiveRcPhoneNumber = parsed.rcPhoneNumber
+  const effectiveContactNumber = parsed.contactNumber
 
   let sections = []
 
   if (effectiveNote && (user.userSettings?.addCallLogNote?.value ?? true)) {
     sections.push(`Agent Notes:<br>${effectiveNote.replace(/\r?\n/g, '<br>')}`)
-  }
-  if (parsed.result && (user.userSettings?.addCallLogResult?.value ?? true)) {
-    sections.push(`Result:<br>${parsed.result}`)
-  }
-  if (effectiveDurationLine && (user.userSettings?.addCallLogDuration?.value ?? true)) {
-    sections.push(`Duration:<br>${effectiveDurationLine}`)
   }
   if (effectiveRecording && (user.userSettings?.addCallLogRecording?.value ?? true)) {
     sections.push(`Recording:<br>${effectiveRecording}`)
@@ -1047,16 +1185,52 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   }
 
   const optionalSections = sections.join("<br><br>")
-  const lines = [
-    `Subject: ${subjectToUse}`,
-    `Direction: ${parsed.direction}`,
-    `Start Time: ${startTimeToUse}`,
-    `End Time: ${endTimeToUse}`,
-    "",
-    optionalSections
-  ].filter(Boolean);
 
-  const body = lines.join("<br>");
+  const headerLines = [];
+  if (subjectToUse) headerLines.push(`Subject: ${subjectToUse}`);
+  if (parsed.direction) headerLines.push(`Direction: ${parsed.direction}`);
+
+  const effectiveResult = result || parsed.result;
+  if (effectiveResult && (user.userSettings?.addCallLogResult?.value ?? true)) {
+    headerLines.push(`Result: ${effectiveResult}`);
+  }
+  if (effectiveDurationLine && (user.userSettings?.addCallLogDuration?.value ?? true)) {
+    headerLines.push(`Duration: ${effectiveDurationLine}`);
+  }
+  if (effectiveSessionId && (user.userSettings?.addCallSessionId?.value ?? true)) {
+    headerLines.push(`Call Session ID: ${effectiveSessionId}`);
+  }
+  if (effectiveRcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) {
+    headerLines.push(`RingCentral Username: ${effectiveRcUserName}`);
+  }
+  if (effectiveRcPhoneNumber && (user.userSettings?.addRingCentralNumber?.value ?? true)) {
+    headerLines.push(`RingCentral Phone Number: ${effectiveRcPhoneNumber}`);
+  }
+  if (effectiveContactNumber && (user.userSettings?.addCallLogContactNumber?.value ?? true)) {
+    headerLines.push(`Contact Number: ${effectiveContactNumber}`);
+  }
+
+  const footerLines = [];
+  // For updates, we use the parsed start/end time or the new ones, but we still respect the setting
+  // to include them or not (if they exist).
+  if (startTimeToUse && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
+    footerLines.push(`Start Time: ${startTimeToUse}`);
+  }
+  if (endTimeToUse && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
+    footerLines.push(`End Time: ${endTimeToUse}`);
+  }
+
+  const lines = [...headerLines];
+  if (optionalSections) {
+    lines.push("");
+    lines.push(optionalSections);
+  }
+  if (footerLines.length > 0) {
+    lines.push("");
+    lines.push(...footerLines);
+  }
+
+  const body = lines.join("<br>").replace(/^(<br>)+|(<br>)+$/g, '');
 
   // 2. Edit the existing update if we could read it.
   if (canEditExisting) {
@@ -1073,6 +1247,7 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
         { updateId: logId, body }
       )
       if (!updateRes?.errors?.length && updateRes?.data?.edit_update?.id) {
+        await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated', eventDate: startTime });
         return {
           logId: updateRes.data.edit_update.id,
           returnMessage: { message: "Call log updated", messageType: "success", ttl: 2000 }
@@ -1114,6 +1289,8 @@ async function updateCallLog({ existingCallLog, recordingLink, note, aiNote, tra
   } catch (e) {
     console.warn('[Monday][updateCallLog] failed to repoint thirdPartyLogId', { newLogId, message: e.message })
   }
+
+  await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated', eventDate: startTime });
 
   return {
     logId: newLogId,
@@ -1291,6 +1468,8 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
     })
   }
 
+  await trackAnalytics({ user, crm: 'Monday', event: 'messageLogCreated', eventDate: message?.creationTime });
+
   return {
     logId: updateId,
     contactId: itemId,
@@ -1349,6 +1528,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     )
 
     const newUpdateId = res.data.create_update.id
+
+    await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated', eventDate: message?.creationTime });
 
     return {
       logId: newUpdateId,
@@ -1480,6 +1661,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     })
   }
 
+  await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated', eventDate: message?.creationTime });
+
   return {
     logId: newThreadId,
     returnMessage: {
@@ -1597,10 +1780,6 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, boardId })
 
 
 function getOverridingOAuthOption({ code, oauthInfo }) {
-  console.log('Overriding OAuth options', {
-    code,
-    oauthInfo
-  })
   return {
     query: {
       grant_type: 'authorization_code',
