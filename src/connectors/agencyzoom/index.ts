@@ -116,9 +116,9 @@ async function getRefreshedAuthToken(user) {
 /* ---------------- USER INFO ---------------- */
 
 async function getUserInfo({ hostname, additionalInfo }) {
-  // rcAccountId arrives via the manifest's rcAdditionalSubmission (auto from RC cached
-  // data — no user prompt, no framework change).
-  const { username, password, rcAccountId, } = additionalInfo ?? {};
+  // rcAccountId, rcExtensionId, rcUserName, rcUserEmail arrive via the manifest's
+  // rcAdditionalSubmission (auto from RC cached data — no user prompt, no framework change).
+  const { username, password, rcAccountId, rcExtensionId, rcUserName, rcUserEmail } = additionalInfo ?? {};
 
   if (!hostname || !username || !password) {
     return {
@@ -128,16 +128,32 @@ async function getUserInfo({ hostname, additionalInfo }) {
     };
   }
 
-  // Tenant-scope the id so the same AgencyZoom username under different RC accounts
-  // never collides (AgencyZoom uses one fixed URL for all tenants). The username is the
-  // per-user key (no RC extension id needed here); sanitize it the same way ServiceTitan
-  // sanitizes its email key — AZ usernames are often emails, so the raw value can carry
-  // '@'/'.'/spaces and produce an unstable id.
-  if (!rcAccountId) {
-    console.warn('[AgencyZoom][getUserInfo] missing rcAccountId — falling back to non-tenant-scoped id');
-  }
-  const userKey = String(username).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const userId = rcAccountId ? `az-user-${rcAccountId}-${userKey}` : `az-user-${userKey}`;
+  // Per-user uniqueness (mirrors ServiceTitan): the extension id is preferred, but only
+  // when it's genuinely distinct from the account id — observed RC cached data can surface
+  // the same number for both (extensionInfo.id == account.id), which would collapse every
+  // user onto one record/seat. In that case (or when the extension id is missing) we key
+  // on the email, which is reliably per-user. The sanitized AZ username is the final
+  // fallback since it is always present.
+  const emailKey = rcUserEmail ? rcUserEmail.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : '';
+  const usernameKey = String(username).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const perUserKey =
+    (rcExtensionId && String(rcExtensionId) !== String(rcAccountId)) ? String(rcExtensionId)
+      : (emailKey || usernameKey || (rcExtensionId ? String(rcExtensionId) : ''));
+  const userId = (rcAccountId && perUserKey)
+    ? `az-user-${rcAccountId}-${perUserKey}`
+    : `az-user-${rcAccountId || 'noacct'}-${perUserKey || 'unknown'}`;
+  const displayName = rcUserName || rcUserEmail || username || 'AgencyZoom User';
+
+  // Always log the resolved RC identity (no secrets) so the per-user key can be verified.
+  console.log('[AgencyZoom][getUserInfo] RC identity', {
+    additionalInfoKeys: Object.keys(additionalInfo ?? {}),
+    rcAccountId,
+    rcExtensionId,
+    extIdSameAsAccount: !!(rcExtensionId && String(rcExtensionId) === String(rcAccountId)),
+    hasRcUserName: !!rcUserName,
+    hasRcUserEmail: !!rcUserEmail,
+    userId
+  });
 
   apiLog.logStart('AgencyZoom', 'getUserInfo', { userId, username, rcAccountId });
 
@@ -189,8 +205,8 @@ async function getUserInfo({ hostname, additionalInfo }) {
           await models.customer.create({
             sysId: String(userId),
             companyId: company.id,
-            email: username || '',
-            firstname: username || 'AgencyZoom User',
+            email: rcUserEmail || username || '',
+            firstname: displayName,
             platform: 'gate6.agencyzoom',
             hostname,
             rcAccountId
@@ -207,7 +223,7 @@ async function getUserInfo({ hostname, additionalInfo }) {
       successful: true,
       platformUserInfo: {
         id: userId,
-        name: username,
+        name: displayName,
         email: username,
         overridingApiKey: token,
         platformAdditionalInfo: {
