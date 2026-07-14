@@ -343,6 +343,7 @@ async function getOauthInfo() {
 async function getUserInfo({ authHeader, hostname, query }) {
   // OAuth callback already provides `query` with rcAccountId — no framework change needed.
   const rcAccountId = query?.rcAccountId;
+  console.log("Rc AccountId", rcAccountId)
   try {
     const accessToken = authHeader.replace('Bearer ', '');
     if (!accessToken) {
@@ -722,16 +723,20 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
   }
 
   const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-  let boardId = null
+  // Contacts can live on ANY board, so search every accessible CRM board (each active board
+  // with a Phone column), not just the single default board. Each match is tagged with the id
+  // of the board it was found on, so `type`/`contactType` (the {contactType} URL variable)
+  // points the "open contact" / "view call log" links at that contact's actual board.
+  let boards = []
   try {
-    boardId = await getBoardId({ user, accessToken: resolvedAccessToken })
+    boards = await getCrmBoards({ accessToken: resolvedAccessToken, userId: getUserId(user) })
   } catch (e) {
-    // A board-resolution failure (e.g. a slow discovery query hitting the request
-    // timeout) should not surface as a hard error — tell the user to retry.
-    console.warn('[Monday] findContact: board resolution failed', e.message)
+    // A board-discovery failure (e.g. a slow query hitting the request timeout) should not
+    // surface as a hard error — tell the user to retry.
+    console.warn('[Monday] findContact: board discovery failed', e.message)
     return { successful: false, returnMessage: { messageType: 'warning', message: 'Monday is taking too long to respond. Please try again.', ttl: 3000 } }
   }
-  if (!boardId) {
+  if (!boards || boards.length === 0) {
     return { successful: false, returnMessage: { messageType: 'error', message: 'No Monday board with a Phone column was found. Add a Phone column to your board and try again.', ttl: 3000 } }
   }
 
@@ -739,15 +744,17 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
   const matchedContactInfo = []
 
   if (phone) {
-    const phoneColumnId = await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId })
-    if (phoneColumnId) {
-      const items = await searchBoardByPhone({ accessToken: resolvedAccessToken, boardId, phoneColumnId, phone })
-      for (const item of items) {
-        // The extension reads `type` off the contact to build the RC entity's
-        // contactType (contacts/match.js), which feeds the {contactType} URL variable
-        // for both "view call log" and "open contact". Set both names to be safe.
-        matchedContactInfo.push({ id: item.id, name: item.name, phone, type: String(boardId), contactType: String(boardId), boardId })
-      }
+    // Search each board's Phone column in parallel, tagging every match with its board id.
+    const perBoardMatches = await Promise.all(boards.map(async board => {
+      const phoneColumnId = board.phoneColumnId || await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId: board.id })
+      if (!phoneColumnId) return []
+      const items = await searchBoardByPhone({ accessToken: resolvedAccessToken, boardId: board.id, phoneColumnId, phone })
+      // The extension reads `type` off the contact to build the RC entity's contactType
+      // (contacts/match.js), which feeds the {contactType} URL variable. Set both names to be safe.
+      return items.map(item => ({ id: item.id, name: item.name, phone, type: String(board.id), contactType: String(board.id), boardId: board.id }))
+    }))
+    for (const boardMatches of perBoardMatches) {
+      matchedContactInfo.push(...boardMatches)
     }
 
     if (matchedContactInfo.length === 0 && user?.rcAccountId) {

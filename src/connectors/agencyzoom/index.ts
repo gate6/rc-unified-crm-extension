@@ -118,7 +118,7 @@ async function getRefreshedAuthToken(user) {
 async function getUserInfo({ hostname, additionalInfo }) {
   // rcAccountId arrives via the manifest's rcAdditionalSubmission (auto from RC cached
   // data — no user prompt, no framework change).
-  const { username, password, rcAccountId } = additionalInfo ?? {};
+  const { username, password, rcAccountId, } = additionalInfo ?? {};
 
   if (!hostname || !username || !password) {
     return {
@@ -143,6 +143,63 @@ async function getUserInfo({ hostname, additionalInfo }) {
 
   try {
     const token = await authenticate(username, password);
+
+    // License / seat enforcement (mirrors ServiceTitan getUserInfo). Runs after a successful
+    // login so a failed authentication never consumes a seat; a DB error degrades gracefully
+    // (logged, login still allowed) so it can't lock out an otherwise-licensed user.
+    if (models && models.companies && models.customer && rcAccountId) {
+      try {
+        const company = await models.companies.findOne({
+          where: { rcAccountId: String(rcAccountId), status: true },
+          raw: true
+        });
+        if (!company) {
+          return {
+            successful: false,
+            returnMessage: {
+              messageType: 'error',
+              message: 'No active subscription found for this account. Please contact Gate6 support.',
+              ttl: 5000
+            }
+          };
+        }
+
+        const existingCustomer = await models.customer.findOne({
+          where: { companyId: company.id, sysId: String(userId) },
+          raw: true
+        });
+
+        if (!existingCustomer) {
+          const currentSeatCount = await models.customer.count({
+            where: { companyId: company.id }
+          });
+
+          const maxSeats = Number(company.maxAllowedUsers);
+          if (Number.isFinite(maxSeats) && maxSeats >= 0 && currentSeatCount >= maxSeats) {
+            return {
+              successful: false,
+              returnMessage: {
+                messageType: 'error',
+                message: `License seat limit reached (${maxSeats} of ${maxSeats} in use). Contact your admin.`,
+                ttl: 5000
+              }
+            };
+          }
+
+          await models.customer.create({
+            sysId: String(userId),
+            companyId: company.id,
+            email: username || '',
+            firstname: username || 'AgencyZoom User',
+            platform: 'gate6.agencyzoom',
+            hostname,
+            rcAccountId
+          });
+        }
+      } catch (err) {
+        console.error('Error enforcing customer seat limits:', err);
+      }
+    }
 
     apiLog.logSuccess('AgencyZoom', 'getUserInfo', { userId, apiEndpoint: `${AZ_BASE_URL}/auth/login` });
 
@@ -642,7 +699,7 @@ async function getCallLog({ user, callLogId }) {
   let subject = subjectMatch ? subjectMatch[1].trim() : '';
 
   if (!subject || subject.toLowerCase().startsWith('direction:')) {
-      subject = '';
+    subject = '';
   }
 
   let agentNote = "";
@@ -893,4 +950,4 @@ exports.findContactWithName = findContactWithName;
 exports.getLogFormatType = getLogFormatType;
 exports.getRefreshedAuthToken = getRefreshedAuthToken;
 exports.getLicenseStatus = getLicenseStatus
-export {};
+export { };
