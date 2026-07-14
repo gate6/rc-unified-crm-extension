@@ -21,7 +21,10 @@ const servicenow = require('./connectors/servicenow');
 const serviceTitan = require('./connectors/servicetitan');
 const monday = require('./connectors/monday');
 const agencyzoom = require('./connectors/agencyzoom');
-const googleSheetsExtra = require('./connectors/googleSheets/extra.js');
+// No explicit extension: resolves to extra.ts from source (ts-jest) and to extra.js from the
+// compiled build. Hardcoding ".js" broke every test suite that loads this entry, because only
+// extra.ts exists in src/ after the TypeScript migration.
+const googleSheetsExtra = require('./connectors/googleSheets/extra');
 const logger = require('@app-connect/core/lib/logger');
 const adminCore = require('@app-connect/core/handlers/admin');
 const vinsolutions = /** @type {any} */ (require('./connectors/vinsolutions'));
