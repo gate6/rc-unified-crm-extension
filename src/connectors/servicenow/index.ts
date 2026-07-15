@@ -46,6 +46,39 @@ function normalizeHostname(raw) {
   return host.toLowerCase();
 }
 
+// Resolve the companies row for a connection. ServiceNow uses admin-managed OAuth:
+// clientId/clientSecret/authorizationUri/accessTokenUri/hostname all live in the
+// accountData table keyed by rcAccountId (managed-oauth-account), so rcAccountId is
+// the authoritative tenant key. The hostname reaching us is the managed-OAuth one and
+// may not match what the companies row was provisioned with — so lookups are tiered:
+//   1. rcAccountId + hostname — disambiguates accounts with one row per instance
+//   2. rcAccountId only       — rows without a hostname (admin-managed provisioning)
+//   3. hostname only          — LEGACY rows that predate rcAccountId (prevents lockout)
+async function findCompany({ rcAccountId, hostname }) {
+    if (!models?.companies) return null;
+    const cleanHostname = normalizeHostname(hostname);
+    let company = null;
+    if (rcAccountId && cleanHostname) {
+        company = await models.companies.findOne({
+            where: { rcAccountId: String(rcAccountId), hostname: cleanHostname, status: true },
+            raw: true
+        });
+    }
+    if (!company && rcAccountId) {
+        company = await models.companies.findOne({
+            where: { rcAccountId: String(rcAccountId), status: true },
+            raw: true
+        });
+    }
+    if (!company && cleanHostname) {
+        company = await models.companies.findOne({
+            where: { hostname: cleanHostname, status: true },
+            raw: true
+        });
+    }
+    return company;
+}
+
 async function getLicenseStatus({ userId }) {
     return licenseHelper.getLicenseStatus({ models, userId });
 }
@@ -53,18 +86,6 @@ async function getLicenseStatus({ userId }) {
 async function validateLicenseOrFail(user) {
     return licenseHelper.validateLicenseOrFail({ models, user });
 }
-
-//function to generate aplhanumeric string for admin login sysid
-function generateAlphanumericString(length) {
-    const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    let result = '';
-    for (let i = 0; i < length; i++) {
-        const randomIndex = Math.floor(Math.random() * chars.length);
-        result += chars[randomIndex];
-    }
-    return result.toLowerCase();
-}
-
 
 function getAuthType() {
     return 'oauth'; // Return either 'oauth' OR 'apiKey'
@@ -128,9 +149,30 @@ async function getUserInfo({ authHeader, hostname, query }) {
         const timezoneName = result.time_zone ?? '';
         const timezoneOffset = result.time_zone_offset ?? null;
 
-        // Admin sys_id — generate a unique id so admin can also connect
+        const rcUserEmail = query?.rcUserEmail;
+        const rcUserName = query?.rcUserName;
+
+        // Admin sys_id is identical across ALL ServiceNow instances (out-of-box record),
+        // so it can't be used as-is. It must map to a STABLE id — a random one would mint
+        // a new user (and seat) on every login. Same approach as ServiceTitan: key on the
+        // RC identity — rcExtensionId when genuinely distinct from rcAccountId, else the
+        // normalized email — falling back to a per-instance hash (deterministic, never random).
         if (id === '6816f79cc0a8016401c5a33be04be441') {
-            id = generateAlphanumericString(id.length);
+            const rcExtensionId = query?.rcExtensionId;
+            const emailKey = rcUserEmail ? String(rcUserEmail).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : '';
+            const perUserKey =
+                (rcExtensionId && String(rcExtensionId) !== String(rcAccountId)) ? String(rcExtensionId)
+                    : (emailKey || (rcExtensionId ? String(rcExtensionId) : ''));
+            id = perUserKey
+                ? `admin-${perUserKey}`
+                : crypto.createHash('sha256').update(`snow-admin:${normalizeHostname(hostname)}`).digest('hex').slice(0, 32);
+            console.log('[ServiceNow][getUserInfo] admin sys_id remapped to stable id', {
+                hasRcExtensionId: !!rcExtensionId,
+                extIdSameAsAccount: !!(rcExtensionId && String(rcExtensionId) === String(rcAccountId)),
+                hasRcUserEmail: !!rcUserEmail,
+                usedFallbackHash: !perUserKey,
+                id
+            });
         }
 
         // Tenant-scope the id so the same ServiceNow user under different RC accounts
@@ -142,29 +184,12 @@ async function getUserInfo({ authHeader, hostname, query }) {
             id = `snow-${rcAccountId}-${id}`;
         }
 
-        const rcUserEmail = query?.rcUserEmail;
-        const rcUserName = query?.rcUserName;
-
         if (models && models.companies && models.customer && rcAccountId) {
             try {
-                const cleanHostname = normalizeHostname(hostname);
-                let company = null;
-                if (rcAccountId && cleanHostname) {
-                    company = await models.companies.findOne({
-                        where: { rcAccountId: String(rcAccountId), hostname: cleanHostname, status: true },
-                        raw: true
-                    });
-                }
-                if (!company && rcAccountId) { // fixed-hostname / rows without a hostname
-                    company = await models.companies.findOne({
-                        where: { rcAccountId: String(rcAccountId), status: true }, raw: true
-                    });
-                }
-                if (!company && cleanHostname) { // LEGACY rows that predate rcAccountId ← prevents the lockout
-                    company = await models.companies.findOne({
-                        where: { hostname: cleanHostname, status: true }, raw: true
-                    });
-                }
+                // Reaching this point means the core already resolved the managed-OAuth
+                // config from accountData for this rcAccountId (our getOauthInfo only
+                // returns a failMessage), so rcAccountId is the reliable tenant key here.
+                const company = await findCompany({ rcAccountId, hostname });
                 if (!company) {
                     return {
                         successful: false,
@@ -350,11 +375,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     const hostname = userInfo.hostname;
     console.log("hostname", hostname)
 
-    const companyData = await models.companies.findOne({
-        where: {
-            hostname: normalizeHostname(hostname)
-        }
-    });
+    const companyData = await findCompany({ rcAccountId: user.rcAccountId, hostname });
 
     let states = [];
     let interactionType = [];
@@ -534,12 +555,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const userInfo = await getHostname(user.dataValues.hostname);
 
-    const { userDetailsPath } = await models.companies.findOne({
-        where: {
-            hostname: normalizeHostname(userInfo.hostname)
-        },
-        raw: true
-    })
+    const companyData = await findCompany({ rcAccountId: user.rcAccountId, hostname: userInfo.hostname });
+    const userDetailsPath = companyData?.userDetailsPath;
 
     if (!userDetailsPath) {
         return {
@@ -561,11 +578,6 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
-    const companyData = await models.companies.findOne({
-        where: {
-            hostname: normalizeHostname(hostname)
-        }
-    });
 
     const contactTable = (companyData?.contactTable == 'user') ? 'table/sys_user' : 'contact';
 
@@ -982,12 +994,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
-    const { userDetailsPath } = await models.companies.findOne({
-        where: {
-            hostname: normalizeHostname(hostname)
-        },
-        raw: true
-    })
+    const messageLogCompany = await findCompany({ rcAccountId: user.rcAccountId, hostname });
+    const userDetailsPath = messageLogCompany?.userDetailsPath;
 
     if (!userDetailsPath) {
         return {
@@ -1218,11 +1226,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
-    const companyData = await models.companies.findOne({
-        where: {
-            hostname: normalizeHostname(hostname)
-        }
-    });
+    const companyData = await findCompany({ rcAccountId: user.rcAccountId, hostname });
 
     const postBody = {
         phone: phoneNumber,
