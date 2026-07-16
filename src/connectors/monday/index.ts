@@ -541,13 +541,10 @@ async function getUserInfo({ authHeader, hostname, query }) {
     // Discover the connector's single board once, at connect time, and store it so the
     // rest of the system reuses it without re-discovering.
     let boardId = null;
-    let boardName = null;
     try {
       const boards = await getCrmBoards({ accessToken, userId: null, operation: 'getUserInfo' });
-      const defaultBoard = pickDefaultBoard(boards);
-      boardId = defaultBoard?.id || null;
-      boardName = defaultBoard?.name || null;
-      console.log('[Monday][getUserInfo] selected board', { boardId, boardName, discoveredBoardCount: boards.length });
+      boardId = pickDefaultBoard(boards)?.id || null;
+      console.log('[Monday][getUserInfo] selected board', { boardId, discoveredBoardCount: boards.length });
     } catch (e) {
       console.warn('[Monday][getUserInfo] board discovery failed (will retry lazily):', e.message);
     }
@@ -561,7 +558,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
         email: userData.email,
         overridingApiKey: accessToken,
         ...(cleanHostname ? { overridingHostname: cleanHostname } : {}),
-        platformAdditionalInfo: { ...(boardId ? { boardId, boardName } : {}) }
+        platformAdditionalInfo: { ...(boardId ? { boardId } : {}) }
       },
       returnMessage: { messageType: 'success', message: 'Successfully connected to Monday.', ttl: 3000 }
     };
@@ -573,33 +570,6 @@ async function getUserInfo({ authHeader, hostname, query }) {
       returnMessage: { messageType: 'error', message: 'Monday authentication failed.', ttl: 3000 }
     };
   }
-}
-
-// Runs right after the user record is saved during OAuth connect (before the extension
-// fetches user settings). Seed the contactBoardId setting here — the framework hardcodes
-// `userSettings: {}` on create, so this is the earliest point we can populate it. Seeding at
-// connect (rather than lazily in findContact/getBoardId) ensures the {contactBoardId} URL
-// token resolves on the very first call-pop without the user opening Settings to enter it.
-async function postSaveUserInfo({ userInfo, oauthApp }) {
-  try {
-    // saveUserInfo returns only { id, name } — NOT the Sequelize instance — so re-fetch the
-    // persisted user to read platformAdditionalInfo.boardId (stored by getUserInfo at connect)
-    // and write userSettings.contactBoardId before the extension loads settings.
-    const userId = userInfo?.id;
-    if (userId) {
-      const user = await UserModel.findByPk(userId);
-      const pai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {};
-      if (user && pai.boardId) {
-        await seedContactBoardIdSetting(user, String(pai.boardId));
-        console.log('[Monday][postSaveUserInfo] seeded contactBoardId at connect', { userId, boardId: pai.boardId });
-      } else {
-        console.warn('[Monday][postSaveUserInfo] no boardId on user record; contactBoardId not seeded', { userId, hasUser: !!user });
-      }
-    }
-  } catch (e: any) {
-    console.warn('[Monday][postSaveUserInfo] failed to seed contactBoardId:', e.message);
-  }
-  return userInfo;
 }
 
 async function unAuthorize({ user }) {
@@ -678,43 +648,9 @@ function getUserId(user) {
 // The connector uses a single board for everything. It is discovered once (the default
 // board with a Phone column), stored on the user record's platformAdditionalInfo, and
 // reused everywhere — no per-contact board lookup.
-// Self-labeling display value for a matched/created contact's `type`/`contactType`. Renders
-// as e.g. "Board: Sales Leads" so the board name is distinguishable from the numeric Monday
-// item (pulse) id shown alongside it. Falls back to the board id when the name is unknown
-// (e.g. users connected before boardName was persisted). Used only for display — the deep-link
-// URL resolves the board via the {contactBoardId} setting and logging reads the persisted id.
-function boardDisplayLabel({ boardName, boardId }: { boardName?: any, boardId?: any }) {
-  const val = boardName || (boardId != null ? String(boardId) : '');
-  return val ? `Board: ${val}` : '';
-}
-
-// Auto-populate the per-user `contactBoardId` setting so the {contactBoardId} URL token
-// (contactPageUrl/logPageUrl/callPopUrl) resolves without the admin entering it manually.
-// The token reads from `userSettings.contactBoardId.value`. Written only when it differs, to
-// avoid redundant DB writes. This also backfills users whose board was persisted before the
-// feature existed.
-async function seedContactBoardIdSetting(user: any, boardId: string) {
-  if (!boardId || typeof user?.update !== 'function') return;
-  const current = user.userSettings || user.dataValues?.userSettings || {};
-  if (String(current?.contactBoardId?.value ?? '') === String(boardId)) return;
-  try {
-    const nextSettings = { ...current, contactBoardId: { value: String(boardId) } };
-    await user.update({ userSettings: nextSettings });
-    if (typeof user.changed === 'function') {
-      user.changed('userSettings', true);
-      if (typeof user.save === 'function') await user.save();
-    }
-    console.log('[Monday][board] seeded contactBoardId setting', { boardId });
-  } catch (e: any) {
-    console.warn('[Monday][board] failed to seed contactBoardId setting:', e.message);
-  }
-}
-
 async function getBoardId({ user, accessToken, operation = 'getBoardId' }) {
   const pai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {};
   if (pai.boardId) {
-    // Backfill the contactBoardId setting for users whose board was persisted earlier.
-    await seedContactBoardIdSetting(user, String(pai.boardId));
     return String(pai.boardId);
   }
   // Not stored yet — discover the default board and persist it on the user record.
@@ -724,7 +660,7 @@ async function getBoardId({ user, accessToken, operation = 'getBoardId' }) {
   console.log('[Monday][board] discovered board', { boardId, boardName: board?.name, discoveredBoardCount: boards.length });
   if (boardId && typeof user?.update === 'function') {
     try {
-      const nextPai = { ...pai, boardId, boardName: board?.name || pai.boardName };
+      const nextPai = { ...pai, boardId };
       await user.update({ platformAdditionalInfo: nextPai });
       // JSON columns don't always auto-flag as changed; force a save to be safe.
       if (typeof user.changed === 'function') {
@@ -735,8 +671,6 @@ async function getBoardId({ user, accessToken, operation = 'getBoardId' }) {
     } catch (e) {
       console.warn('[Monday][board] failed to persist boardId on user record:', e.message);
     }
-    // Seed the contactBoardId setting so the {contactBoardId} URL token resolves.
-    await seedContactBoardIdSetting(user, String(boardId));
   }
   return boardId;
 }
@@ -867,48 +801,38 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
   }
 
   const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-
-  // ── SINGLE-BOARD MODE ─────────────────────────────────────────────────────────────────
-  // Multi-board search is disabled for now. Contacts are matched against the connector's
-  // single default board. `boardId` is kept for logging; `type`/`contactType` now carry the
-  // board NAME (shown in the contact list) since the deep-link URL uses the {contactBoardId}
-  // setting token, not {contactType}. We also seed that setting from the resolved board.
-  //
-  // --- multi-board search (commented out; restore to search every board) ---
-  // let boards = []
-  // try { boards = await getCrmBoards({ accessToken: resolvedAccessToken, userId: getUserId(user) }) }
-  // catch (e) { return { successful: false, returnMessage: { messageType: 'warning', message: 'Monday is taking too long to respond. Please try again.', ttl: 3000 } } }
-  // const perBoardMatches = await Promise.all(boards.map(async board => { ... type: String(board.id) ... }))
-  // --------------------------------------------------------------------------
-  let board: any = null
+  // Contacts can live on ANY board, so search every accessible CRM board (each active board
+  // with a Phone column), not just the single default board. Each match is tagged with the id
+  // of the board it was found on, so `type`/`contactType` (the {contactType} URL variable)
+  // points the "open contact" / "view call log" links at that contact's actual board.
+  let boards = []
   try {
-    const boards = await getCrmBoards({ accessToken: resolvedAccessToken, userId: getUserId(user), operation: 'findContact' })
-    board = pickDefaultBoard(boards)
-  } catch (e: any) {
+    boards = await getCrmBoards({ accessToken: resolvedAccessToken, userId: getUserId(user), operation: 'findContact' })
+  } catch (e) {
     // A board-discovery failure (e.g. a slow query hitting the request timeout) should not
     // surface as a hard error — tell the user to retry.
     console.warn('[Monday] findContact: board discovery failed', e.message)
     return { successful: false, returnMessage: { messageType: 'warning', message: 'Monday is taking too long to respond. Please try again.', ttl: 3000 } }
   }
-  if (!board) {
+  if (!boards || boards.length === 0) {
     return { successful: false, returnMessage: { messageType: 'error', message: 'No Monday board with a Phone column was found. Add a Phone column to your board and try again.', ttl: 3000 } }
   }
-  // Auto-populate the contactBoardId setting so the {contactBoardId} URL token resolves.
-  await seedContactBoardIdSetting(user, String(board.id))
 
-  const boardName = board.name || String(board.id)
   const phone = normalizePhone(phoneNumber)
-  const matchedContactInfo: any[] = []
+  const matchedContactInfo = []
 
   if (phone) {
-    const phoneColumnId = board.phoneColumnId || await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId: board.id })
-    if (phoneColumnId) {
-      const items = await searchBoardByPhone({ accessToken: resolvedAccessToken, boardId: board.id, phoneColumnId, phone })
-      const boardLabel = boardDisplayLabel({ boardName, boardId: board.id })
-      for (const item of items) {
-        // Display the board name (self-labeled "Board: …") in the contact list; keep boardId for logging.
-        matchedContactInfo.push({ id: item.id, name: item.name, phone, type: boardLabel, contactType: boardLabel, boardId: board.id, boardName })
-      }
+    // Search each board's Phone column in parallel, tagging every match with its board id.
+    const perBoardMatches = await Promise.all(boards.map(async board => {
+      const phoneColumnId = board.phoneColumnId || await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId: board.id, operation: 'findContact' })
+      if (!phoneColumnId) return []
+      const items = await searchBoardByPhone({ accessToken: resolvedAccessToken, boardId: board.id, phoneColumnId, phone, operation: 'findContact' })
+      // The extension reads `type` off the contact to build the RC entity's contactType
+      // (contacts/match.js), which feeds the {contactType} URL variable. Set both names to be safe.
+      return items.map(item => ({ id: item.id, name: item.name, phone, type: String(board.id), contactType: String(board.id), boardId: board.id }))
+    }))
+    for (const boardMatches of perBoardMatches) {
+      matchedContactInfo.push(...boardMatches)
     }
 
     if (matchedContactInfo.length === 0 && user?.rcAccountId) {
@@ -992,11 +916,8 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
   }
 
   // `type` feeds the RC entity contactType (contacts/match.js) → {contactType} URL var.
-  // Match findContact's display: board name (self-labeled), not the raw boardId.
-  const wnPai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {}
-  const wnBoardLabel = boardDisplayLabel({ boardName: wnPai.boardName, boardId })
-  const matchedContactInfo = items.map(item => ({ id: item.id, name: item.name, type: wnBoardLabel, contactType: wnBoardLabel, boardId, boardName: wnPai.boardName }))
-  console.log('[Monday] findContactWithName', { term, matches: matchedContactInfo.length })
+  const matchedContactInfo = items.map(item => ({ id: item.id, name: item.name, type: String(boardId), contactType: String(boardId), boardId }))
+  apiLog.logSuccess('Monday', 'findContactWithName', { name: term, matchedCount: matchedContactInfo.length, boardId })
 
   return { successful: true, matchedContactInfo }
 }
@@ -1077,18 +998,13 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
 
   await trackAnalytics({ user, crm: 'Monday', event: 'contactCreated' });
 
-  const createdBoardName =
-    (user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {})?.boardName
-  const createdBoardLabel = boardDisplayLabel({ boardName: createdBoardName, boardId })
   return {
     contactInfo: {
       id: created.id,
       name: created.name,
-      // `type`/`contactType` carry the board name (self-labeled "Board: …") for display; `boardId`
-      // targets the board for logging, and the deep-link URL resolves the board via the
-      // {contactBoardId} setting.
-      type: createdBoardLabel,
-      contactType: createdBoardLabel,
+      // `type` feeds the RC entity contactType so logging/URLs target the right board.
+      type: String(boardId),
+      contactType: String(boardId),
       boardId
     },
     returnMessage: {
@@ -1124,12 +1040,10 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
   // Log directly against the contact passed in — like ServiceTitan/ServiceNow — instead of
   // re-querying Monday for the board. create_update only needs the item id (contactInfo.id),
-  // so no board lookup ("search") is needed on the main path. The board id is only needed for
-  // an optional recording upload, which resolves it lazily below. In single-board mode we read
-  // the persisted board id off the user record (no API call) — `contactInfo.type` now carries
-  // the board NAME for display, so it can no longer double as the board id.
-  const persistedPai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {};
-  const boardId = String(contactInfo?.boardId || persistedPai.boardId || '') || null;
+  // so no board lookup ("search") is needed on the main path. The board id is carried on the
+  // contact (smuggled via `type`); it's only needed for an optional recording upload, which
+  // resolves it lazily below. This keeps logging working even if board discovery is slow/down.
+  const boardId = String(contactInfo?.boardId || contactInfo?.type || '') || null;
   // Fall back to a generated subject when no custom subject is supplied — matches every
   // other connector (clio/insightly/netsuite) and avoids the blank "Subject:" line.
   const defaultSubject = `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo?.name || 'contact'}`
@@ -1436,24 +1350,6 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
   }
 
   const body = lines.join("<br>").replace(/^(<br>)+|(<br>)+$/g, '');
-
-  // ---- Recording Upload (recording-sync) ----
-  // RingCentral recordings are usually NOT ready when the call is first logged, so
-  // createCallLog's upload is skipped and the recording only arrives here, on the later
-  // recording-sync, as `recordingDownloadLink`. Upload it now so the MP3 lands in the board's
-  // Files column. Dedupe against the case where the recording WAS ready at create: if the
-  // existing log body already has a Recording section (`parsed.recording`), createCallLog
-  // already handled the file — skip to avoid a duplicate upload.
-  if (recordingDownloadLink && !parsed.recording && itemId && (user.userSettings?.addCallLogRecording?.value ?? true)) {
-    try {
-      const uploadBoardId = await resolveBoardId({ accessToken: resolvedAccessToken, user })
-      const fileName = `Call-${Date.now()}.mp3`
-      const s3Url = await downloadAudioFile(recordingDownloadLink, process.env.S3_BUCKET, fileName)
-      await uploadToMonday({ s3Url, accessToken: resolvedAccessToken, itemId, fileName, boardId: uploadBoardId })
-    } catch (e: any) {
-      console.warn('[Monday][updateCallLog] recording upload failed:', e.message)
-    }
-  }
 
   // 2. Edit the existing update if we could read it.
   if (canEditExisting) {
@@ -2104,7 +2000,6 @@ exports.getAuthType = getAuthType;
 exports.getOauthInfo = getOauthInfo;
 exports.getOverridingOAuthOption = getOverridingOAuthOption;
 exports.getUserInfo = getUserInfo;
-exports.postSaveUserInfo = postSaveUserInfo;
 exports.unAuthorize = unAuthorize;
 exports.findContact = findContact;
 exports.findContactWithName = findContactWithName;
