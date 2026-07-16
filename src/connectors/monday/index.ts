@@ -394,7 +394,6 @@ async function getOauthInfo() {
 }
 
 async function getUserInfo({ authHeader, hostname, query }) {
-  console.log("Hostname : ", hostname)
   // OAuth callback already provides `query` with rcAccountId — no framework change needed.
   const rcAccountId = query?.rcAccountId;
   apiLog.logStart('Monday', 'getUserInfo', { rcAccountId, hostname });
@@ -482,7 +481,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
             raw: true
           });
         }
-        console.log("Company: ", company)
+
         if (!company) {
           company = await models.companies.findOne({
             where: { rcAccountId: String(rcAccountId), status: true },
