@@ -28,6 +28,20 @@ const SERVICE_TITAN_CRM_URL = process.env.SERVICETITAN_CRM_URL || "https://api-i
 
 apiLog.installErrorInterceptor(serviceTitanApiClient, 'ServiceTitan');
 
+// Format a timestamp with the user's chosen date format from the extension settings
+// (userSettings.logDateFormat — one of RC's six formats, e.g. 'MM/DD/YYYY hh:mm:ss A'),
+// applying the user's timezone offset the same way core's callLogComposer does.
+function formatDateTime({ user, time }) {
+    let momentTime = moment(time);
+    const tz = user?.timezoneOffset;
+    if (tz) {
+        momentTime = (typeof tz === 'string' && tz.includes(':'))
+            ? momentTime.utcOffset(tz)
+            : momentTime.utcOffset(Number(tz));
+    }
+    return momentTime.format(user?.userSettings?.logDateFormat?.value || 'YYYY-MM-DD hh:mm:ss A');
+}
+
 async function getLicenseStatus({ userId }) {
     return licenseHelper.getLicenseStatus({ models, userId });
 }
@@ -575,9 +589,9 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
     const footerLines = [];
     if (callLog.startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
-        footerLines.push(`Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`);
+        footerLines.push(`Start Time: ${formatDateTime({ user, time: callLog.startTime })}`);
         if (callLog.duration) {
-            footerLines.push(`End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`);
+            footerLines.push(`End Time: ${formatDateTime({ user, time: moment(callLog.startTime).add(callLog.duration, "seconds") })}`);
         }
     }
 
@@ -700,9 +714,9 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         result = incomingResult;
     }
     if (incomingStartTime) {
-        startTime = moment(incomingStartTime).format("YYYY-MM-DD HH:mm:ss");
+        startTime = formatDateTime({ user, time: incomingStartTime });
         if (incomingDuration != null) {
-            endTime = moment(incomingStartTime).add(incomingDuration, "seconds").format("YYYY-MM-DD HH:mm:ss");
+            endTime = formatDateTime({ user, time: moment(incomingStartTime).add(incomingDuration, "seconds") });
         }
     }
 
@@ -872,7 +886,7 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
                 : "Agent";
 
         const line =
-            `[${moment(message.creationTime).format("YYYY-MM-DD HH:mm:ss")}] ${direction}: ${message.subject}`;
+            `[${formatDateTime({ user, time: message.creationTime })}] ${direction}: ${message.subject}`;
 
         noteText = `
 Conversation:
@@ -973,7 +987,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
                 : "Agent";
 
         const newLine =
-            `[${moment(message.creationTime).format("YYYY-MM-DD HH:mm:ss")}] ${direction}: ${message.subject}`;
+            `[${formatDateTime({ user, time: message.creationTime })}] ${direction}: ${message.subject}`;
 
         const updatedConversation =
             previousConversation
