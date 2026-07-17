@@ -131,7 +131,16 @@ function hasTransientMondayError(errors) {
 
 // `operation` names the connector function making the call (e.g. 'createCallLog') so every
 // API log line is attributable — same idea as ServiceTitan's `_operation` axios tag.
+//
+// Error contract: transient failures (HTTP 5xx / timeout / network, or Monday's
+// INTERNAL_SERVER_ERROR GraphQL errors) are retried up to `maxAttempts`. Once retries are
+// exhausted, HTTP/transport errors are re-thrown to the caller; GraphQL errors are returned
+// in the body (Monday sends them with HTTP 200) — callers that require data must check
+// `res.errors` or use assertNoGraphqlErrors.
 async function mondayRequest(accessToken, query, variables = {}, { maxAttempts = 2, operation = 'unknown' } = {}) {
+  if (!MONDAY_API_URL) {
+    throw new Error('MONDAY_API_URL is not configured on the server');
+  }
   const reqId = ++mondayApiCallCounter;
   const op = describeGraphqlOperation(query);
   let lastBody = null;
@@ -196,6 +205,9 @@ function isNumericMondayId(id) {
   return id != null && /^\d+$/.test(String(id));
 }
 
+// Resolve the board's "Call Logs" long-text column id, creating the column if it does
+// not exist yet. The id is cached per board+name; throws with the Monday GraphQL error
+// message when the column can be neither found nor created.
 async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'Call Logs', operation = 'getOrCreateCallLogsColumn' }) {
   let columnId = await getColumnIdByName({
     accessToken,
@@ -228,8 +240,9 @@ async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'C
     { operation }
   )
 
+  assertNoGraphqlErrors(res, `create "${columnName}" column`)
   if (!res?.data?.create_column?.id) {
-    throw new Error('Failed to create "Call Logs" column in Monday')
+    throw new Error(`Failed to create "${columnName}" column in Monday`)
   }
 
   const newColumnId = res.data.create_column.id
@@ -271,8 +284,9 @@ async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'File
     { operation }
   )
 
+  assertNoGraphqlErrors(res, `create "${columnName}" column`)
   if (!res?.data?.create_column?.id) {
-    throw new Error('Failed to create "Files" column in Monday')
+    throw new Error(`Failed to create "${columnName}" column in Monday`)
   }
 
   const newColumnId = res.data.create_column.id
@@ -482,7 +496,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
             raw: true
           });
         }
-        console.log("Company: ", company)
+
         if (!company) {
           company = await models.companies.findOne({
             where: { rcAccountId: String(rcAccountId), status: true },
@@ -543,7 +557,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
     let boardId = null;
     let boardName = null;
     try {
-      const boards = await getCrmBoards({ accessToken, userId: null });
+      const boards = await getCrmBoards({ accessToken, userId: null, operation: 'getUserInfo' });
       const defaultBoard = pickDefaultBoard(boards);
       boardId = defaultBoard?.id || null;
       boardName = defaultBoard?.name || null;
@@ -710,7 +724,7 @@ async function seedContactBoardIdSetting(user: any, boardId: string) {
   }
 }
 
-async function getBoardId({ user, accessToken }) {
+async function getBoardId({ user, accessToken, operation = 'getBoardId' }) {
   const pai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {};
   if (pai.boardId) {
     // Backfill the contactBoardId setting for users whose board was persisted earlier.
@@ -825,16 +839,16 @@ async function searchBoardByPhone({ accessToken, boardId, phoneColumnId, phone, 
       const res = await mondayRequest(
         accessToken,
         `
-        query ($value: String!) {
+        query ($boardId: ID!, $columnId: String!, $value: String!) {
           items_page_by_column_values(
-            board_id: ${boardId},
-            columns: [{ column_id: "${phoneColumnId}", column_values: [$value] }]
+            board_id: $boardId,
+            columns: [{ column_id: $columnId, column_values: [$value] }]
           ) {
             items { id name }
           }
         }
         `,
-        { value: searchValue },
+        { boardId: String(boardId), columnId: String(phoneColumnId), value: searchValue },
         { operation }
       )
       if (res?.errors?.length) {
@@ -882,7 +896,7 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
   // --------------------------------------------------------------------------
   let board: any = null
   try {
-    const boards = await getCrmBoards({ accessToken: resolvedAccessToken, userId: getUserId(user) })
+    const boards = await getCrmBoards({ accessToken: resolvedAccessToken, userId: getUserId(user), operation: 'findContact' })
     board = pickDefaultBoard(boards)
   } catch (e: any) {
     // A board-discovery failure (e.g. a slow query hitting the request timeout) should not
@@ -930,7 +944,7 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
     isNewContact: true
   })
 
-  apiLog.logSuccess('Monday', 'findContact', { phoneNumber, matchedCount: matchedContactInfo.length - 1, boardsSearched: boards.length });
+  apiLog.logSuccess('Monday', 'findContact', { phoneNumber, matchedCount: matchedContactInfo.length - 1, boardId: board.id });
   return { successful: true, matchedContactInfo }
 }
 
@@ -959,6 +973,17 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
     return { successful: true, matchedContactInfo: [] }
   }
 
+  // The interface contract (docs/developers/interfaces/findContactWithName.md) requires the
+  // same contact shape as findContact — including `phone`. Without it, the extension cannot
+  // reconcile a manually-selected contact with later phone-based lookups, so fetch the
+  // board's phone column value alongside id/name. A missing phone column is non-fatal.
+  let phoneColumnId = null
+  try {
+    phoneColumnId = await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId, operation: 'findContactWithName' })
+  } catch (e) {
+    console.warn('[Monday] findContactWithName: phone column resolution failed', e.message)
+  }
+
   // Inline the search term via JSON.stringify so it is a safely-escaped GraphQL list
   // literal (e.g. ["O'Brien"]). compare_value is Monday's JSON CompareValue scalar.
   const compareValue = JSON.stringify([term])
@@ -968,18 +993,18 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
     const res = await mondayRequest(
       resolvedAccessToken,
       `
-      query ($boardId: [ID!]) {
+      query ($boardId: [ID!]${phoneColumnId ? ', $phoneColumnIds: [String!]' : ''}) {
         boards(ids: $boardId) {
           items_page(
             limit: 25,
             query_params: { rules: [{ column_id: "name", compare_value: ${compareValue}, operator: contains_text }] }
           ) {
-            items { id name }
+            items { id name${phoneColumnId ? ' column_values(ids: $phoneColumnIds) { text }' : ''} }
           }
         }
       }
       `,
-      { boardId: [boardId] },
+      { boardId: [boardId], ...(phoneColumnId ? { phoneColumnIds: [String(phoneColumnId)] } : {}) },
       { operation: 'findContactWithName' }
     )
     if (res?.errors?.length) {
@@ -995,8 +1020,15 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
   // Match findContact's display: board name (self-labeled), not the raw boardId.
   const wnPai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {}
   const wnBoardLabel = boardDisplayLabel({ boardName: wnPai.boardName, boardId })
-  const matchedContactInfo = items.map(item => ({ id: item.id, name: item.name, type: wnBoardLabel, contactType: wnBoardLabel, boardId, boardName: wnPai.boardName }))
-  console.log('[Monday] findContactWithName', { term, matches: matchedContactInfo.length })
+  const matchedContactInfo = items.map(item => {
+    // Monday stores the phone column as display text (e.g. "+1 623 201 1816" or
+    // "16232011816"); normalize to E.164 where possible so it matches what findContact
+    // returns, falling back to the raw text rather than dropping the number.
+    const rawPhone = item.column_values?.[0]?.text?.trim() || ''
+    const phone = rawPhone ? (normalizePhone(rawPhone) || normalizePhone(`+${rawPhone.replace(/\D/g, '')}`) || rawPhone) : ''
+    return { id: item.id, name: item.name, phone, type: wnBoardLabel, contactType: wnBoardLabel, boardId, boardName: wnPai.boardName }
+  })
+  console.log('[Monday] findContactWithName', { term, matches: matchedContactInfo.length, withPhone: matchedContactInfo.filter(c => c.phone).length })
 
   return { successful: true, matchedContactInfo }
 }
@@ -1264,6 +1296,28 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
       messageType: "success",
       ttl: 2000
     }
+  }
+}
+
+// Mirror createCallLog's recording upload for updates: the recording usually arrives AFTER
+// the log is created (recording-sync fires updateCallLog), so attach the audio file to the
+// contact item's Files column here too. Failures are logged but never break the log update.
+// `recordingLink` here should be the DOWNLOAD link (tokenized) when available — the
+// media-reader page link often has no accessToken, so downloading it fails auth.
+async function uploadCallRecording({ accessToken, user, itemId, recordingLink, operation = 'updateCallLog' }) {
+  if (!recordingLink || !itemId) return
+  try {
+    const boardId = await resolveBoardId({ accessToken, user, operation })
+    const fileName = `Call-${Date.now()}.mp3`
+    const s3Url = await downloadAudioFile(recordingLink, process.env.S3_BUCKET, fileName)
+    if (!s3Url) {
+      console.warn(`[Monday][${operation}] recording download failed — skipping file upload`, { itemId })
+      return
+    }
+    await uploadToMonday({ s3Url, accessToken, itemId: Number(itemId), fileName, boardId })
+    console.log(`[Monday][${operation}] recording file attached`, { itemId, boardId })
+  } catch (e) {
+    console.warn(`[Monday][${operation}] recording upload failed`, { itemId, message: e.message })
   }
 }
 
