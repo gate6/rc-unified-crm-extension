@@ -39,6 +39,51 @@ function stringifyForLog(value, maxLength = 1200) {
 
 apiLog.installErrorInterceptor(mondayApiClient, 'Monday');
 
+// AI notes arrive with markdown bold markers (**Recap**, **Tasks**) which Monday updates
+// don't render — they show as literal asterisks. Strip them for clean plain text.
+function stripMarkdownBold(text) {
+  return text ? String(text).replace(/\*\*/g, '') : text;
+}
+
+// Format a timestamp with the user's chosen date format from the extension settings
+// (userSettings.logDateFormat — one of RC's six formats, e.g. 'MM/DD/YYYY hh:mm:ss A'),
+// applying the user's timezone offset the same way core's callLogComposer does.
+function formatDateTime({ user, time }) {
+  let momentTime = moment(time);
+  const tz = user?.timezoneOffset;
+  if (tz) {
+    momentTime = (typeof tz === 'string' && tz.includes(':'))
+      ? momentTime.utcOffset(tz)
+      : momentTime.utcOffset(Number(tz));
+  }
+  return momentTime.format(user?.userSettings?.logDateFormat?.value || 'YYYY-MM-DD hh:mm:ss A');
+}
+
+// Core builds a tokenized download link for fax attachments but NOT for voicemail —
+// connectors only get the media-reader page link, which 401s server-side. Build the
+// tokenized link ourselves from the message's AudioRecording attachment uri plus the
+// RC access token stamped onto the message by the /messageLog wrapper in src/index.ts.
+function getVoicemailDownloadLink(message) {
+  const audio = message?.attachments?.find?.(a => a.type === 'AudioRecording');
+  if (audio?.uri && message?.rcAccessToken) {
+    return `${audio.uri}${audio.uri.includes('?') ? '&' : '?'}access_token=${message.rcAccessToken}`;
+  }
+  return null;
+}
+
+// A recording link may be the media-reader PAGE (https://ringcentral.github.io/
+// ringcentral-media-reader/?media=<real media url>) rather than the raw media content.
+// Downloading the page yields HTML — that's how "recordings" ended up as .htm files in
+// Monday. Unwrap the real media URL before downloading.
+function resolveMediaContentUrl(link) {
+  try {
+    const mediaParam = new URL(link).searchParams.get('media');
+    return mediaParam || link;
+  } catch (e) {
+    return link;
+  }
+}
+
 // Normalize a hostname to the bare host the companies table stores:
 // strips scheme (http/https), any path/query, port, and trailing slash; lowercased.
 function normalizeHostname(raw) {
@@ -84,13 +129,15 @@ function hasTransientMondayError(errors) {
   });
 }
 
-async function mondayRequest(accessToken, query, variables = {}, { maxAttempts = 2 } = {}) {
+// `operation` names the connector function making the call (e.g. 'createCallLog') so every
+// API log line is attributable — same idea as ServiceTitan's `_operation` axios tag.
+async function mondayRequest(accessToken, query, variables = {}, { maxAttempts = 2, operation = 'unknown' } = {}) {
   const reqId = ++mondayApiCallCounter;
   const op = describeGraphqlOperation(query);
   let lastBody = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const startedAt = Date.now();
-    console.log(attempt === 1 ? '[Monday][api] →' : '[Monday][api] ↻ retry', { reqId, op, attempt, ...(attempt === 1 ? { variables: stringifyForLog(variables, 600) } : {}) });
+    console.log(attempt === 1 ? '[Monday][api] →' : '[Monday][api] ↻ retry', { reqId, operation, op, attempt, ...(attempt === 1 ? { variables: stringifyForLog(variables, 600) } : {}) });
     try {
       const res = await mondayApiClient.post(
         MONDAY_API_URL,
@@ -99,7 +146,8 @@ async function mondayRequest(accessToken, query, variables = {}, { maxAttempts =
           headers: {
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json'
-          }
+          },
+          _operation: operation
         }
       );
       const ms = Date.now() - startedAt;
@@ -108,19 +156,19 @@ async function mondayRequest(accessToken, query, variables = {}, { maxAttempts =
       // Monday returns GraphQL errors with HTTP 200, so they bypass the axios
       // interceptor — surface them explicitly here.
       if (body?.errors?.length) {
-        console.error('[Monday][api] ✗ GraphQL error', { reqId, op, ms, attempt, errors: stringifyForLog(body.errors, 1000) });
+        console.error('[Monday][api] ✗ GraphQL error', { reqId, operation, op, ms, attempt, variables: stringifyForLog(variables, 600), errors: stringifyForLog(body.errors, 1000) });
         if (hasTransientMondayError(body.errors) && attempt < maxAttempts) {
           await sleep(400 * attempt);
           continue;
         }
       } else {
-        console.log('[Monday][api] ←', { reqId, op, ms, dataKeys: body?.data ? Object.keys(body.data) : [] });
+        console.log('[Monday][api] ←', { reqId, operation, op, ms, dataKeys: body?.data ? Object.keys(body.data) : [] });
       }
       return body;
     } catch (err) {
       const ms = Date.now() - startedAt;
       const status = err?.response?.status || null;
-      console.error('[Monday][api] ✗ HTTP error', { reqId, op, ms, attempt, status, message: err?.message || '', responseBody: stringifyForLog(err?.response?.data, 1000) });
+      console.error('[Monday][api] ✗ HTTP error', { reqId, operation, op, ms, attempt, status, message: err?.message || '', variables: stringifyForLog(variables, 600), responseBody: stringifyForLog(err?.response?.data, 1000) });
       // Retry transient transport failures (5xx, timeout, network) too.
       const transient = !status || status >= 500 || err?.code === 'ECONNABORTED';
       if (transient && attempt < maxAttempts) {
@@ -148,11 +196,12 @@ function isNumericMondayId(id) {
   return id != null && /^\d+$/.test(String(id));
 }
 
-async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'Call Logs' }) {
+async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'Call Logs', operation = 'getOrCreateCallLogsColumn' }) {
   let columnId = await getColumnIdByName({
     accessToken,
     boardId,
-    columnName
+    columnName,
+    operation
   })
 
   if (columnId) {
@@ -175,7 +224,8 @@ async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'C
     {
       boardId: Number(boardId),
       title: columnName
-    }
+    },
+    { operation }
   )
 
   if (!res?.data?.create_column?.id) {
@@ -189,11 +239,12 @@ async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'C
   return newColumnId
 }
 
-async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'Files' }) {
+async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'Files', operation = 'getOrCreateFilesColumn' }) {
   let columnId = await getColumnIdByName({
     accessToken,
     boardId,
-    columnName
+    columnName,
+    operation
   })
 
   if (columnId) {
@@ -216,7 +267,8 @@ async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'File
     {
       boardId: Number(boardId),
       title: columnName
-    }
+    },
+    { operation }
   )
 
   if (!res?.data?.create_column?.id) {
@@ -231,7 +283,7 @@ async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'File
   return newColumnId
 }
 
-async function getColumnIdByName({ accessToken, boardId, columnName }) {
+async function getColumnIdByName({ accessToken, boardId, columnName, operation = 'getColumnIdByName' }) {
   if (!columnName) {
     return null
   }
@@ -258,7 +310,8 @@ async function getColumnIdByName({ accessToken, boardId, columnName }) {
       }
     }
     `,
-    { boardId: Number(boardId) }
+    { boardId: Number(boardId) },
+    { operation }
   )
   const boardData = res?.data?.boards?.[0]
   const columns = boardData?.columns || []
@@ -336,14 +389,15 @@ async function getOauthInfo() {
     clientSecret: process.env.MONDAY_CLIENT_SECRET,
     accessTokenUri: process.env.MONDAY_TOKEN_URI,
     redirectUri: process.env.REDIRECT_URI,
-    scopes: ['me:read', 'users:read', 'boards:read', 'boards:write', 'updates:write']
+    scopes: ['me:read', 'users:read', 'boards:read', 'boards:write', 'updates:write', 'account:read']
   };
 }
 
 async function getUserInfo({ authHeader, hostname, query }) {
+  console.log("Hostname : ", hostname)
   // OAuth callback already provides `query` with rcAccountId — no framework change needed.
   const rcAccountId = query?.rcAccountId;
-  console.log("Rc AccountId", rcAccountId)
+  apiLog.logStart('Monday', 'getUserInfo', { rcAccountId, hostname });
   try {
     const accessToken = authHeader.replace('Bearer ', '');
     if (!accessToken) {
@@ -353,23 +407,34 @@ async function getUserInfo({ authHeader, hostname, query }) {
       };
     }
 
-    console.log('[Monday][api] → query me (getUserInfo)');
-    const userDataResponse = await mondayApiClient.post(
-      MONDAY_API_URL,
-      { query: "query { me { id name email } }" },
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json"
+    // Ask for account.slug too (the account the token was issued for). If the token lacks
+    // the scope for the account field, retry with the plain `me` query so connect never
+    // breaks — we just lose the slug and fall back to the extension-provided hostname.
+    const meQuery = async (query) => {
+      const response = await mondayApiClient.post(
+        MONDAY_API_URL,
+        { query },
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          _operation: 'getUserInfo'
         }
-      }
-    );
+      );
+      return response.data;
+    };
 
-    const result = userDataResponse.data;
+    console.log('[Monday][api] → query me (getUserInfo)');
+    let result = await meQuery("query { me { id name email account { slug } } }");
+    if (result?.errors?.length || !result?.data?.me) {
+      console.warn('[Monday][getUserInfo] me query with account.slug failed — retrying without it', stringifyForLog(result?.errors, 800));
+      result = await meQuery("query { me { id name email } }");
+    }
     if (result?.errors?.length) {
       console.error('[Monday][api] ✗ GraphQL error (getUserInfo me)', stringifyForLog(result.errors, 800));
     } else {
-      console.log('[Monday][api] ← query me (getUserInfo)', { meId: result?.data?.me?.id });
+      console.log('[Monday][api] ← query me (getUserInfo)', { meId: result?.data?.me?.id, accountSlug: result?.data?.me?.account?.slug });
     }
     if (!result?.data?.me) {
       return {
@@ -389,11 +454,18 @@ async function getUserInfo({ authHeader, hostname, query }) {
       email: result.data.me.email
     };
 
-    // Normalize the hostname (admin may enter a full URL in the managed-OAuth form)
-    // so it is stored as a bare host — required for the license lookup and for the
-    // {hostname} URL templates to resolve correctly.
-    const cleanHostname = normalizeHostname(hostname);
-    console.log('[Monday][getUserInfo] hostname normalized', { rawHostname: hostname, cleanHostname });
+    // Derive the hostname from the account the token was ACTUALLY issued for (me.account.slug),
+    // not from what the extension passed in. The extension's dynamic-environment hostname is
+    // sticky (first workspace URL it saw) and auth.monday.com authorizes the user's active
+    // session account — both can disagree with the account the user meant to connect. The
+    // slug is authoritative: token, hostname and {hostname} URL templates always match.
+    const accountSlug = result?.data?.me?.account?.slug || null;
+    const slugHostname = accountSlug ? `${accountSlug}.monday.com` : null;
+    if (!slugHostname) {
+      console.warn('[Monday][getUserInfo] me.account.slug missing — falling back to extension-provided hostname', { rawHostname: hostname });
+    }
+    const cleanHostname = normalizeHostname(slugHostname || hostname);
+    console.log('[Monday][getUserInfo] hostname resolved', { accountSlug, rawHostname: hostname, cleanHostname });
 
     // Company / customer onboarding — mirrors the ServiceTitan pattern so that each
     // connecting user is registered in the `customer` table with a `companyId` FK.
@@ -410,6 +482,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
             raw: true
           });
         }
+        console.log("Company: ", company)
         if (!company) {
           company = await models.companies.findOne({
             where: { rcAccountId: String(rcAccountId), status: true },
@@ -479,6 +552,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
       console.warn('[Monday][getUserInfo] board discovery failed (will retry lazily):', e.message);
     }
 
+    apiLog.logSuccess('Monday', 'getUserInfo', { userId: userData.id, boardId, hostname: cleanHostname });
     return {
       successful: true,
       platformUserInfo: {
@@ -548,7 +622,7 @@ async function unAuthorize({ user }) {
 
 // Discover the CRM boards a connected user can access — any active board that has a
 // Phone column. Results are cached briefly per user to avoid repeated board lookups.
-async function getCrmBoards({ accessToken, userId }) {
+async function getCrmBoards({ accessToken, userId, operation = 'getCrmBoards' }) {
   const now = Date.now();
   const cached = userId ? boardCache.get(userId) : null;
   if (cached && cached.expiry > now) {
@@ -565,7 +639,9 @@ async function getCrmBoards({ accessToken, userId }) {
         columns { id title type }
       }
     }
-    `
+    `,
+    {},
+    { operation }
   );
 
   const rawBoards = res?.data?.boards || [];
@@ -642,7 +718,7 @@ async function getBoardId({ user, accessToken }) {
     return String(pai.boardId);
   }
   // Not stored yet — discover the default board and persist it on the user record.
-  const boards = await getCrmBoards({ accessToken, userId: getUserId(user) });
+  const boards = await getCrmBoards({ accessToken, userId: getUserId(user), operation });
   const board = pickDefaultBoard(boards);
   const boardId = board?.id || null;
   console.log('[Monday][board] discovered board', { boardId, boardName: board?.name, discoveredBoardCount: boards.length });
@@ -667,15 +743,15 @@ async function getBoardId({ user, accessToken }) {
 
 // Logging always targets the connector's single board (read stored, else discover).
 // This does not depend on contactInfo.type surviving the extension round-trip.
-async function resolveBoardId({ accessToken, user }) {
-  const boardId = await getBoardId({ user, accessToken });
-  console.log('[Monday][board] resolveBoardId ->', { boardId });
+async function resolveBoardId({ accessToken, user, operation = 'resolveBoardId' }) {
+  const boardId = await getBoardId({ user, accessToken, operation });
+  console.log('[Monday][board] resolveBoardId ->', { boardId, operation });
   return boardId;
 }
 
 // The Phone column id for a board, cached via getColumnIdByName.
-async function getPhoneColumnId({ accessToken, boardId }) {
-  return getColumnIdByName({ accessToken, boardId, columnName: 'Phone' });
+async function getPhoneColumnId({ accessToken, boardId, operation = 'getPhoneColumnId' }) {
+  return getColumnIdByName({ accessToken, boardId, columnName: 'Phone', operation });
 }
 
 function parseMondayCallLogBody(body = '') {
@@ -739,7 +815,7 @@ function parseMondayCallLogBody(body = '') {
   }
 }
 
-async function searchBoardByPhone({ accessToken, boardId, phoneColumnId, phone }) {
+async function searchBoardByPhone({ accessToken, boardId, phoneColumnId, phone, operation = 'findContact' }) {
   // Try formats in priority order (Monday's "+1 623 201 1816" first) and STOP at the
   // first format that matches — best case is a single query. Each request is bounded by
   // the client timeout and try/caught, so a slow/failed format is skipped, not fatal.
@@ -758,7 +834,8 @@ async function searchBoardByPhone({ accessToken, boardId, phoneColumnId, phone }
           }
         }
         `,
-        { value: searchValue }
+        { value: searchValue },
+        { operation }
       )
       if (res?.errors?.length) {
         console.warn('[Monday] searchBoardByPhone error on board', boardId, res.errors[0].message)
@@ -777,6 +854,7 @@ async function searchBoardByPhone({ accessToken, boardId, phoneColumnId, phone }
 }
 
 async function findContact({ phoneNumber, accessToken, authHeader, user, isExtension }) {
+  apiLog.logStart('Monday', 'findContact', { phoneNumber, isExtension });
   const licenseError = await validateLicenseOrFail(user, 'findContact');
   if (licenseError) return licenseError;
 
@@ -852,10 +930,12 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
     isNewContact: true
   })
 
+  apiLog.logSuccess('Monday', 'findContact', { phoneNumber, matchedCount: matchedContactInfo.length - 1, boardsSearched: boards.length });
   return { successful: true, matchedContactInfo }
 }
 
 async function findContactWithName({ name, accessToken, authHeader, user }) {
+  apiLog.logStart('Monday', 'findContactWithName', { name });
   const licenseError = await validateLicenseOrFail(user, 'findContactWithName');
   if (licenseError) return licenseError;
 
@@ -870,7 +950,7 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
   // "Contact search by name failed". Degrade to an empty result instead.
   let boardId = null
   try {
-    boardId = await getBoardId({ user, accessToken: resolvedAccessToken })
+    boardId = await getBoardId({ user, accessToken: resolvedAccessToken, operation: 'findContactWithName' })
   } catch (e) {
     console.warn('[Monday] findContactWithName: board resolution failed', e.message)
     return { successful: true, matchedContactInfo: [] }
@@ -899,7 +979,8 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
         }
       }
       `,
-      { boardId: [boardId] }
+      { boardId: [boardId] },
+      { operation: 'findContactWithName' }
     )
     if (res?.errors?.length) {
       console.warn('[Monday] findContactWithName error on board', boardId, res.errors[0].message)
@@ -921,12 +1002,13 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
 }
 
 async function createContact({ phoneNumber, newContactName, accessToken, authHeader, user }) {
+  apiLog.logStart('Monday', 'createContact', { phoneNumber, newContactName });
   const licenseError = await validateLicenseOrFail(user, 'createContact');
   if (licenseError) return licenseError;
 
   const resolvedAccessToken = authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-  const boardId = await getBoardId({ user, accessToken: resolvedAccessToken })
-  const phoneColumnId = boardId ? await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId }) : null
+  const boardId = await getBoardId({ user, accessToken: resolvedAccessToken, operation: 'createContact' })
+  const phoneColumnId = boardId ? await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId, operation: 'createContact' }) : null
   if (!boardId || !phoneColumnId) {
     return {
       contactInfo: null,
@@ -969,7 +1051,8 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
       {
         name: newContactName,
         values: JSON.stringify({ [phoneColumnId]: variant })
-      }
+      },
+      { operation: 'createContact' }
     )
     if (!res?.errors?.length && res?.data?.create_item?.id) {
       created = res.data.create_item
@@ -990,7 +1073,7 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
     }
   }
 
-  console.log('[Monday][createContact] created item', { itemId: created.id, boardId })
+  apiLog.logSuccess('Monday', 'createContact', { contactId: created.id, boardId })
 
   await trackAnalytics({ user, crm: 'Monday', event: 'contactCreated' });
 
@@ -1033,6 +1116,7 @@ async function getMondayUserName(user) {
 }
 
 async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, accessToken, authHeader, user }) {
+  apiLog.logStart('Monday', 'createCallLog', { contactId: contactInfo?.id, direction: callLog?.direction, duration: callLog?.duration, sessionId: callLog?.sessionId, hasRecording: !!callLog?.recording?.downloadUrl });
   const licenseError = await validateLicenseOrFail(user, 'createCallLog');
   if (licenseError) return licenseError;
 
@@ -1063,7 +1147,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     sections.push(`Recording:<br>${callLog.recording.link}`)
   }
   if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-    sections.push(`AI Note:<br>${aiNote.replace(/\r?\n/g, '<br>')}`)
+    sections.push(`AI Note:<br>${stripMarkdownBold(aiNote).replace(/\r?\n/g, '<br>')}`)
   }
   if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
     sections.push(`Transcript:<br>${transcript.replace(/\r?\n/g, '<br>')}`)
@@ -1104,9 +1188,9 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
 
   const footerLines = [];
   if (callLog.startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) {
-    footerLines.push(`Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}`);
+    footerLines.push(`Start Time: ${formatDateTime({ user, time: callLog.startTime })}`);
     if (callLog.duration) {
-      footerLines.push(`End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}`);
+      footerLines.push(`End Time: ${formatDateTime({ user, time: moment(callLog.startTime).add(callLog.duration, "seconds") })}`);
     }
   }
 
@@ -1134,7 +1218,8 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     {
       itemId: Number(contactInfo.id),
       body
-    }
+    },
+    { operation: 'createCallLog' }
   )
   assertNoGraphqlErrors(res, `createCallLog (create_update itemId=${contactInfo.id})`)
 
@@ -1142,14 +1227,14 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   if (!updateId) {
     throw new Error(`Monday createCallLog: create_update returned no id for itemId=${contactInfo.id}`)
   }
-  console.log('[Monday][createCallLog] created update', { updateId, itemId: Number(contactInfo.id), boardId })
+  apiLog.logSuccess('Monday', 'createCallLog', { logId: updateId, contactId: Number(contactInfo.id), boardId })
 
   // ---- Recording Upload ----
   // Only here is the board id actually needed. Use the one carried on the contact; resolve
   // it lazily (one query) only if it wasn't provided, so the call log itself never blocks on
   // board discovery.
   if (callLog?.recording?.downloadUrl) {
-    const uploadBoardId = boardId || await resolveBoardId({ accessToken: resolvedAccessToken, user })
+    const uploadBoardId = boardId || await resolveBoardId({ accessToken: resolvedAccessToken, user, operation: 'createCallLog' })
     const fileName = `Call-${Date.now()}.mp3`
     const s3Key = fileName
     const s3Url = await downloadAudioFile(
@@ -1158,13 +1243,15 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
       s3Key
     )
 
-    await uploadToMonday({
-      s3Url,
-      accessToken: resolvedAccessToken,
-      itemId: Number(contactInfo.id),
-      fileName,
-      boardId: uploadBoardId
-    })
+    if (s3Url) {
+      await uploadToMonday({
+        s3Url,
+        accessToken: resolvedAccessToken,
+        itemId: Number(contactInfo.id),
+        fileName,
+        boardId: uploadBoardId
+      })
+    }
   }
 
   await trackAnalytics({ user, crm: 'Monday', event: 'callLogCreated', eventDate: callLog?.startTime });
@@ -1188,10 +1275,12 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
   const logId = existingCallLog?.thirdPartyLogId
   const itemId = Number(existingCallLog?.contactId)
-  console.log('[Monday][updateCallLog] start', {
-    thirdPartyLogId: logId,
+  apiLog.logStart('Monday', 'updateCallLog', {
+    logId,
     contactId: existingCallLog?.contactId,
-    isNumericId: isNumericMondayId(logId)
+    isNumericId: isNumericMondayId(logId),
+    hasRecordingLink: !!recordingLink,
+    hasRecordingDownloadLink: !!recordingDownloadLink
   })
 
   // 1. Read the existing update so we can merge with it — only if the stored id is a
@@ -1210,7 +1299,8 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
           }
         }
         `,
-        { updateId: [logId] }
+        { updateId: [logId] },
+        { operation: 'updateCallLog' }
       )
       if (res?.errors?.length) {
         console.warn('[Monday][updateCallLog] could not read existing update; will recreate', { logId })
@@ -1261,7 +1351,7 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
     sections.push(`Recording:<br>${effectiveRecording}`)
   }
   if (effectiveAiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-    sections.push(`AI Note:<br>${effectiveAiNote.replace(/\r?\n/g, '<br>')}`)
+    sections.push(`AI Note:<br>${stripMarkdownBold(effectiveAiNote).replace(/\r?\n/g, '<br>')}`)
   }
   if (effectiveTranscript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
     sections.push(`Transcript:<br>${effectiveTranscript.replace(/\r?\n/g, '<br>')}`)
@@ -1271,9 +1361,9 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
   let endTimeToUse = parsed.endTime
 
   if (startTime) {
-    startTimeToUse = moment(startTime).format("YYYY-MM-DD HH:mm:ss")
+    startTimeToUse = formatDateTime({ user, time: startTime })
     if (duration) {
-      endTimeToUse = moment(startTime).add(duration, "seconds").format("YYYY-MM-DD HH:mm:ss")
+      endTimeToUse = formatDateTime({ user, time: moment(startTime).add(duration, "seconds") })
     }
   }
 
@@ -1355,9 +1445,17 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
           }
         }
         `,
-        { updateId: logId, body }
+        { updateId: logId, body },
+        { operation: 'updateCallLog' }
       )
       if (!updateRes?.errors?.length && updateRes?.data?.edit_update?.id) {
+        // Attach the recording file only when a NEW recording link arrived (the old body not
+        // already carrying it) — otherwise every later edit would re-upload a duplicate file.
+        // Prefer the tokenized download link; the display link is the fallback.
+        if (recordingLink && recordingLink !== parsed.recording) {
+          await uploadCallRecording({ accessToken: resolvedAccessToken, user, itemId, recordingLink: recordingDownloadLink || recordingLink })
+        }
+        apiLog.logSuccess('Monday', 'updateCallLog', { logId: updateRes.data.edit_update.id, contactId: existingCallLog?.contactId, mode: 'edited' });
         await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated', eventDate: startTime });
         return {
           logId: updateRes.data.edit_update.id,
@@ -1384,14 +1482,18 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
       }
     }
     `,
-    { itemId, body }
+    { itemId, body },
+    { operation: 'updateCallLog' }
   )
   assertNoGraphqlErrors(createRes, 'updateCallLog (create_update fallback)')
   const newLogId = createRes?.data?.create_update?.id
   if (!newLogId) {
     throw new Error('Monday updateCallLog: fallback create_update returned no id')
   }
-  console.log('[Monday][updateCallLog] recreated update', { oldLogId: logId, newLogId, itemId })
+  apiLog.logSuccess('Monday', 'updateCallLog', { logId: newLogId, oldLogId: logId, contactId: itemId, mode: 'recreated' })
+  if (recordingLink && recordingLink !== parsed.recording) {
+    await uploadCallRecording({ accessToken: resolvedAccessToken, user, itemId, recordingLink: recordingDownloadLink || recordingLink })
+  }
   // Repoint the stored id so the next update edits this new update instead of recreating.
   try {
     if (typeof existingCallLog?.update === 'function') {
@@ -1410,6 +1512,7 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
 }
 
 async function getCallLog({ callLogId, accessToken, authHeader, user }) {
+  apiLog.logStart('Monday', 'getCallLog', { logId: callLogId });
   const licenseError = await validateLicenseOrFail(user, 'getCallLog');
   if (licenseError) return licenseError;
 
@@ -1436,7 +1539,8 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
       }
     }
     `,
-    { updateId: [callLogId] }
+    { updateId: [callLogId] },
+    { operation: 'getCallLog' }
   )
 
   if (res?.errors?.length || !res?.data?.updates?.length) {
@@ -1458,6 +1562,7 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
   const rawBody = update.body || ''
   const parsed = parseMondayCallLogBody(rawBody)
 
+  apiLog.logSuccess('Monday', 'getCallLog', { logId: callLogId })
   return {
     callLogInfo: {
       subject: parsed.subject,
@@ -1477,17 +1582,19 @@ async function upsertCallDisposition({ existingCallLog }) {
   return { logId: existingCallLog.thirdPartyLogId }
 }
 
-async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink, accessToken }) {
+async function createMessageLog({ user, contactInfo, message, recordingLink, recordingDownloadLink, faxDocLink, faxDownloadLink, accessToken }) {
+  apiLog.logStart('Monday', 'createMessageLog', { contactId: contactInfo?.id, direction: message?.direction, hasRecording: !!recordingLink, hasRecordingDownloadLink: !!recordingDownloadLink, hasFax: !!faxDocLink });
   const licenseError = await validateLicenseOrFail(user, 'createMessageLog');
   if (licenseError) return licenseError;
 
   const resolvedAccessToken = accessToken || user?.accessToken
-  const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user });
+  const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user, operation: 'createMessageLog' });
   const itemId = Number(contactInfo.id)
   const callLogsColumnId = await getOrCreateCallLogsColumn({
     accessToken: resolvedAccessToken,
     boardId,
-    columnName: 'Call Logs'
+    columnName: 'Call Logs',
+    operation: 'createMessageLog'
   })
   const messageType =
     recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS')
@@ -1500,7 +1607,7 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
         : 'You'
     const text = message.subject || message.text || ''
     body = `SMS conversation with ${contactInfo.name}<br>`
-    body += `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}<br>`
+    body += `[${formatDateTime({ user, time: message.creationTime || Date.now() })}] ${sender}: ${text}<br>`
 
   }
 
@@ -1524,7 +1631,8 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
     {
       itemId,
       body
-    }
+    },
+    { operation: 'createMessageLog' }
   )
 
   if (!res?.data?.create_update?.id) {
@@ -1553,12 +1661,15 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
         itemId,
         columnId: callLogsColumnId,
         value: body
-      }
+      },
+      { operation: 'createMessageLog' }
     )
   }
 
   if (recordingLink || faxDocLink) {
-    const downloadUrl = recordingLink || faxDocLink
+    // Prefer the tokenized download links — the display links (media-reader pages)
+    // have no access token and 401 when downloaded server-side.
+    const downloadUrl = recordingDownloadLink || faxDownloadLink || getVoicemailDownloadLink(message) || recordingLink || faxDocLink
     const fileName =
       recordingLink
         ? `Voicemail-${Date.now()}.mp3`
@@ -1570,17 +1681,20 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
       s3Key
     )
 
-    await uploadToMonday({
-      s3Url,
-      accessToken: resolvedAccessToken,
-      itemId,
-      fileName,
-      boardId
-    })
+    if (s3Url) {
+      await uploadToMonday({
+        s3Url,
+        accessToken: resolvedAccessToken,
+        itemId,
+        fileName,
+        boardId
+      })
+    }
   }
 
   await trackAnalytics({ user, crm: 'Monday', event: 'messageLogCreated', eventDate: message?.creationTime });
 
+  apiLog.logSuccess('Monday', 'createMessageLog', { logId: updateId, contactId: itemId, messageType, boardId })
   return {
     logId: updateId,
     contactId: itemId,
@@ -1592,19 +1706,21 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
   }
 }
 
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink, accessToken }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, recordingDownloadLink, faxDocLink, faxDownloadLink, accessToken }) {
+  apiLog.logStart('Monday', 'updateMessageLog', { contactId: contactInfo?.id, logId: existingMessageLog?.thirdPartyLogId, direction: message?.direction, hasRecording: !!recordingLink, hasFax: !!faxDocLink });
   const licenseError = await validateLicenseOrFail(user, 'updateMessageLog');
   if (licenseError) return licenseError;
 
   const MAX_THREAD_MESSAGES = 10
   const resolvedAccessToken = accessToken || user?.accessToken
-  const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user });
+  const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user, operation: 'updateMessageLog' });
   const itemId = Number(contactInfo.id)
   const updateId = existingMessageLog.thirdPartyLogId
   const callLogsColumnId = await getOrCreateCallLogsColumn({
     accessToken: resolvedAccessToken,
     boardId,
-    columnName: 'Call Logs'
+    columnName: 'Call Logs',
+    operation: 'updateMessageLog'
   })
   const messageType =
     recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS')
@@ -1635,13 +1751,15 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
       {
         itemId,
         body
-      }
+      },
+      { operation: 'updateMessageLog' }
     )
 
     const newUpdateId = res.data.create_update.id
 
     await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated', eventDate: message?.creationTime });
 
+    apiLog.logSuccess('Monday', 'updateMessageLog', { logId: newUpdateId, contactId: itemId, messageType })
     return {
       logId: newUpdateId,
       returnMessage: {
@@ -1666,7 +1784,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
       }
     }
     `,
-    { updateId: [updateId] }
+    { updateId: [updateId] },
+    { operation: 'updateMessageLog' }
   )
 
   const previousBody =
@@ -1676,8 +1795,10 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
       ? contactInfo.name
       : 'You'
   const text = message.subject || message.text || ''
-  const newLine =
-    `<br>[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}<br>`
+  // No leading/trailing <br> on the message line itself — junction breaks are added
+  // explicitly below, so messages are separated by exactly ONE line break (the old
+  // `<br>…<br>` pattern doubled up into a blank line between every message).
+  const newLine = `[${formatDateTime({ user, time: message.creationTime || Date.now() })}] ${sender}: ${text}`
   const messageLines =
     previousBody
       .split('<br>')
@@ -1686,44 +1807,77 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
   let updatedBody
   let response
   let newThreadId = updateId
+  // On a thread reset (>= MAX messages) the old update stays as history; otherwise the
+  // new update carries the merged history forward and the old one is deleted.
+  let shouldDeleteOld = false
 
   if (messageCount >= MAX_THREAD_MESSAGES) {
     updatedBody =
-      `SMS conversation with ${contactInfo.name}<br>` +
-      `[${moment(message.creationTime || Date.now()).format('YYYY-MM-DD HH:mm:ss')}] ${sender}: ${text}<br>`
-    response = await mondayRequest(
-      resolvedAccessToken,
-      `
-      mutation ($itemId: ID!, $body: String!) {
-        create_update(item_id: $itemId, body: $body) {
-          id
-        }
-      }
-      `,
-      {
-        itemId,
-        body: updatedBody
-      }
-    )
-
-    newThreadId = response.data.create_update.id
-
+      `SMS conversation with ${contactInfo.name}<br>${newLine}`
   } else {
-    updatedBody = previousBody + newLine
-    response = await mondayRequest(
-      resolvedAccessToken,
-      `
-      mutation ($updateId: ID!, $body: String!) {
-        edit_update(id: $updateId, body: $body) {
-          id
+    shouldDeleteOld = true
+    // Collapse legacy double breaks, then strip trailing breaks so the append adds
+    // exactly one line break — this also cleans up old threads on their next message.
+    const trimmedPrevious = previousBody
+      .replace(/(<br\s*\/?>)\s*(<br\s*\/?>)+/gi, '$1')
+      .replace(/(?:\s|<br\s*\/?>)+$/i, '')
+    updatedBody = trimmedPrevious
+      ? `${trimmedPrevious}<br>${newLine}`
+      : `SMS conversation with ${contactInfo.name}<br>${newLine}`
+  }
+
+  // Monday's updates feed is ordered by creation time and edit_update does NOT move an
+  // update up — so an ongoing conversation stayed buried under newer updates. Recreate
+  // the thread (create a fresh update with the full history, then delete the old one)
+  // so the conversation always surfaces on top.
+  response = await mondayRequest(
+    resolvedAccessToken,
+    `
+    mutation ($itemId: ID!, $body: String!) {
+      create_update(item_id: $itemId, body: $body) {
+        id
+      }
+    }
+    `,
+    {
+      itemId,
+      body: updatedBody
+    },
+    { operation: 'updateMessageLog' }
+  )
+  assertNoGraphqlErrors(response, 'updateMessageLog (create_update SMS thread)')
+  newThreadId = response?.data?.create_update?.id
+  if (!newThreadId) {
+    throw new Error('Monday updateMessageLog: create_update returned no id')
+  }
+
+  if (shouldDeleteOld && isNumericMondayId(updateId) && String(newThreadId) !== String(updateId)) {
+    try {
+      await mondayRequest(
+        resolvedAccessToken,
+        `
+        mutation ($updateId: ID!) {
+          delete_update(id: $updateId) {
+            id
+          }
         }
-      }
-      `,
-      {
-        updateId,
-        body: updatedBody
-      }
-    )
+        `,
+        { updateId },
+        { operation: 'updateMessageLog' }
+      )
+    } catch (e) {
+      console.warn('[Monday][updateMessageLog] failed to delete old thread update — a duplicate may remain', { oldUpdateId: updateId, message: e.message })
+    }
+  }
+
+  // Repoint the stored id so the next message appends to the recreated thread instead
+  // of a deleted update (which would restart the conversation and lose history).
+  if (String(newThreadId) !== String(updateId) && typeof existingMessageLog?.update === 'function') {
+    try {
+      await existingMessageLog.update({ thirdPartyLogId: String(newThreadId) })
+    } catch (e) {
+      console.warn('[Monday][updateMessageLog] failed to repoint thirdPartyLogId', { newThreadId, message: e.message })
+    }
   }
 
   if (callLogsColumnId) {
@@ -1746,12 +1900,15 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         itemId,
         columnId: callLogsColumnId,
         value: updatedBody
-      }
+      },
+      { operation: 'updateMessageLog' }
     )
   }
 
   if (recordingLink || faxDocLink) {
-    const downloadUrl = recordingLink || faxDocLink
+    // Prefer the tokenized download links — the display links (media-reader pages)
+    // have no access token and 401 when downloaded server-side.
+    const downloadUrl = recordingDownloadLink || faxDownloadLink || getVoicemailDownloadLink(message) || recordingLink || faxDocLink
     const fileName =
       recordingLink
         ? `Voicemail-${Date.now()}.mp3`
@@ -1763,17 +1920,20 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
       s3Key
     )
 
-    await uploadToMonday({
-      s3Url,
-      accessToken: resolvedAccessToken,
-      itemId,
-      fileName,
-      boardId
-    })
+    if (s3Url) {
+      await uploadToMonday({
+        s3Url,
+        accessToken: resolvedAccessToken,
+        itemId,
+        fileName,
+        boardId
+      })
+    }
   }
 
   await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated', eventDate: message?.creationTime });
 
+  apiLog.logSuccess('Monday', 'updateMessageLog', { logId: newThreadId, contactId: itemId, messageType: 'SMS', appended: newThreadId === updateId })
   return {
     logId: newThreadId,
     returnMessage: {
@@ -1792,8 +1952,11 @@ async function getUserList() {
 }
 
 async function downloadAudioFile(url, s3Bucket, s3Key) {
+  // Unwrap media-reader page links to the raw media content URL (see resolveMediaContentUrl).
+  url = resolveMediaContentUrl(url);
   const urlObj = new URL(url);
-  const accessToken = urlObj.searchParams.get("accessToken");
+  // RC media links carry the token as either `accessToken` or `access_token`.
+  const accessToken = urlObj.searchParams.get("accessToken") || urlObj.searchParams.get("access_token");
   const s3Values = {
     accessKeyId: process.env.MEDIA_UPLOAD_KEY_ID,
     secretAccessKey: process.env.MEDIA_UPLOAD_SECRET_KEY,
@@ -1803,12 +1966,20 @@ async function downloadAudioFile(url, s3Bucket, s3Key) {
   console.log("Downloading Audio File...");
 
   try {
+    // Only send Authorization when we actually have a token — `Bearer null` makes RC
+    // reject the request even when the URL itself carries a valid query token.
     const response = await mondayApiClient.get(url, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
       responseType: "stream",
+      _operation: 'downloadAudioFile'
     });
+    // If we still got a web page instead of media, don't upload it — a .htm file in the
+    // Files column is worse than no file.
+    const contentType = response.headers?.['content-type'] || '';
+    if (contentType.includes('text/html')) {
+      console.warn('[Monday][downloadAudioFile] got HTML instead of media — skipping upload', { url: url.split('?')[0], contentType });
+      return null;
+    }
     const uploadParams = {
       Bucket: s3Bucket,
       Key: s3Key,
@@ -1828,7 +1999,8 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, boardId })
     console.log('[Monday][api] → file upload (add_file_to_column)', { itemId, boardId, fileName })
     const filesColumnId = await getOrCreateFilesColumn({
       accessToken,
-      boardId
+      boardId,
+      operation: 'uploadToMonday'
     })
 
     if (!filesColumnId) {
@@ -1856,7 +2028,7 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, boardId })
 
     formData.append('variables[file]', fileStream, {
       filename: fileName,
-      contentType: 'audio/mpeg'
+      contentType: fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'audio/mpeg'
     })
 
     const response = await mondayApiClient.post(
@@ -1867,7 +2039,8 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, boardId })
           Authorization: `Bearer ${accessToken}`,
           ...formData.getHeaders()
         },
-        maxBodyLength: Infinity
+        maxBodyLength: Infinity,
+        _operation: 'uploadToMonday'
       }
     )
 
