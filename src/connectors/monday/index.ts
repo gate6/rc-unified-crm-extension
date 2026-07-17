@@ -943,7 +943,7 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
     isNewContact: true
   })
 
-  apiLog.logSuccess('Monday', 'findContact', { phoneNumber, matchedCount: matchedContactInfo.length - 1, boardsSearched: boards.length });
+  apiLog.logSuccess('Monday', 'findContact', { phoneNumber, matchedCount: matchedContactInfo.length - 1, boardId: board.id });
   return { successful: true, matchedContactInfo }
 }
 
