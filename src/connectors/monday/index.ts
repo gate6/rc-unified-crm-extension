@@ -131,7 +131,16 @@ function hasTransientMondayError(errors) {
 
 // `operation` names the connector function making the call (e.g. 'createCallLog') so every
 // API log line is attributable — same idea as ServiceTitan's `_operation` axios tag.
+//
+// Error contract: transient failures (HTTP 5xx / timeout / network, or Monday's
+// INTERNAL_SERVER_ERROR GraphQL errors) are retried up to `maxAttempts`. Once retries are
+// exhausted, HTTP/transport errors are re-thrown to the caller; GraphQL errors are returned
+// in the body (Monday sends them with HTTP 200) — callers that require data must check
+// `res.errors` or use assertNoGraphqlErrors.
 async function mondayRequest(accessToken, query, variables = {}, { maxAttempts = 2, operation = 'unknown' } = {}) {
+  if (!MONDAY_API_URL) {
+    throw new Error('MONDAY_API_URL is not configured on the server');
+  }
   const reqId = ++mondayApiCallCounter;
   const op = describeGraphqlOperation(query);
   let lastBody = null;
@@ -196,6 +205,9 @@ function isNumericMondayId(id) {
   return id != null && /^\d+$/.test(String(id));
 }
 
+// Resolve the board's "Call Logs" long-text column id, creating the column if it does
+// not exist yet. The id is cached per board+name; throws with the Monday GraphQL error
+// message when the column can be neither found nor created.
 async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'Call Logs', operation = 'getOrCreateCallLogsColumn' }) {
   let columnId = await getColumnIdByName({
     accessToken,
@@ -228,8 +240,9 @@ async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'C
     { operation }
   )
 
+  assertNoGraphqlErrors(res, `create "${columnName}" column`)
   if (!res?.data?.create_column?.id) {
-    throw new Error('Failed to create "Call Logs" column in Monday')
+    throw new Error(`Failed to create "${columnName}" column in Monday`)
   }
 
   const newColumnId = res.data.create_column.id
@@ -271,8 +284,9 @@ async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'File
     { operation }
   )
 
+  assertNoGraphqlErrors(res, `create "${columnName}" column`)
   if (!res?.data?.create_column?.id) {
-    throw new Error('Failed to create "Files" column in Monday')
+    throw new Error(`Failed to create "${columnName}" column in Monday`)
   }
 
   const newColumnId = res.data.create_column.id
@@ -758,16 +772,16 @@ async function searchBoardByPhone({ accessToken, boardId, phoneColumnId, phone, 
       const res = await mondayRequest(
         accessToken,
         `
-        query ($value: String!) {
+        query ($boardId: ID!, $columnId: String!, $value: String!) {
           items_page_by_column_values(
-            board_id: ${boardId},
-            columns: [{ column_id: "${phoneColumnId}", column_values: [$value] }]
+            board_id: $boardId,
+            columns: [{ column_id: $columnId, column_values: [$value] }]
           ) {
             items { id name }
           }
         }
         `,
-        { value: searchValue },
+        { boardId: String(boardId), columnId: String(phoneColumnId), value: searchValue },
         { operation }
       )
       if (res?.errors?.length) {
