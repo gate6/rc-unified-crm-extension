@@ -972,6 +972,17 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
     return { successful: true, matchedContactInfo: [] }
   }
 
+  // The interface contract (docs/developers/interfaces/findContactWithName.md) requires the
+  // same contact shape as findContact — including `phone`. Without it, the extension cannot
+  // reconcile a manually-selected contact with later phone-based lookups, so fetch the
+  // board's phone column value alongside id/name. A missing phone column is non-fatal.
+  let phoneColumnId = null
+  try {
+    phoneColumnId = await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId, operation: 'findContactWithName' })
+  } catch (e) {
+    console.warn('[Monday] findContactWithName: phone column resolution failed', e.message)
+  }
+
   // Inline the search term via JSON.stringify so it is a safely-escaped GraphQL list
   // literal (e.g. ["O'Brien"]). compare_value is Monday's JSON CompareValue scalar.
   const compareValue = JSON.stringify([term])
@@ -981,18 +992,18 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
     const res = await mondayRequest(
       resolvedAccessToken,
       `
-      query ($boardId: [ID!]) {
+      query ($boardId: [ID!]${phoneColumnId ? ', $phoneColumnIds: [String!]' : ''}) {
         boards(ids: $boardId) {
           items_page(
             limit: 25,
             query_params: { rules: [{ column_id: "name", compare_value: ${compareValue}, operator: contains_text }] }
           ) {
-            items { id name }
+            items { id name${phoneColumnId ? ' column_values(ids: $phoneColumnIds) { text }' : ''} }
           }
         }
       }
       `,
-      { boardId: [boardId] },
+      { boardId: [boardId], ...(phoneColumnId ? { phoneColumnIds: [String(phoneColumnId)] } : {}) },
       { operation: 'findContactWithName' }
     )
     if (res?.errors?.length) {
@@ -1008,8 +1019,15 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
   // Match findContact's display: board name (self-labeled), not the raw boardId.
   const wnPai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {}
   const wnBoardLabel = boardDisplayLabel({ boardName: wnPai.boardName, boardId })
-  const matchedContactInfo = items.map(item => ({ id: item.id, name: item.name, type: wnBoardLabel, contactType: wnBoardLabel, boardId, boardName: wnPai.boardName }))
-  console.log('[Monday] findContactWithName', { term, matches: matchedContactInfo.length })
+  const matchedContactInfo = items.map(item => {
+    // Monday stores the phone column as display text (e.g. "+1 623 201 1816" or
+    // "16232011816"); normalize to E.164 where possible so it matches what findContact
+    // returns, falling back to the raw text rather than dropping the number.
+    const rawPhone = item.column_values?.[0]?.text?.trim() || ''
+    const phone = rawPhone ? (normalizePhone(rawPhone) || normalizePhone(`+${rawPhone.replace(/\D/g, '')}`) || rawPhone) : ''
+    return { id: item.id, name: item.name, phone, type: wnBoardLabel, contactType: wnBoardLabel, boardId, boardName: wnPai.boardName }
+  })
+  console.log('[Monday] findContactWithName', { term, matches: matchedContactInfo.length, withPhone: matchedContactInfo.filter(c => c.phone).length })
 
   return { successful: true, matchedContactInfo }
 }
