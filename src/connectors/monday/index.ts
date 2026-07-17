@@ -408,6 +408,7 @@ async function getOauthInfo() {
 }
 
 async function getUserInfo({ authHeader, hostname, query }) {
+  console.log("Hostname : ", hostname)
   // OAuth callback already provides `query` with rcAccountId — no framework change needed.
   const rcAccountId = query?.rcAccountId;
   apiLog.logStart('Monday', 'getUserInfo', { rcAccountId, hostname });
