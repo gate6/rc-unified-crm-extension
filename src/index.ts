@@ -48,10 +48,12 @@ function reKeyManifest(manifest, originalKey, newKey) {
 
 connectorRegistry.registerConnector('servicetitan', serviceTitan, require('./connectors/servicetitan/manifest.json'));
 connectorRegistry.registerConnector('gate6.servicetitan', serviceTitan, reKeyManifest(require('./connectors/servicetitan/manifest.json'), 'servicetitan', 'gate6.servicetitan'));
+connectorRegistry.registerConnector('gate6.servicetitan1', serviceTitan, reKeyManifest(require('./connectors/servicetitan/manifest.json'), 'servicetitan', 'gate6.servicetitan1'));
 connectorRegistry.registerConnector('servicenow', servicenow, require('./connectors/servicenow/manifest.json'));
 connectorRegistry.registerConnector('gate6.servicenow', servicenow, reKeyManifest(require('./connectors/servicenow/manifest.json'), 'servicenow', 'gate6.servicenow'));
 connectorRegistry.registerConnector('monday', monday, require('./connectors/monday/manifest.json'));
 connectorRegistry.registerConnector('gate6.monday', monday, reKeyManifest(require('./connectors/monday/manifest.json'), 'monday', 'gate6.monday'));
+connectorRegistry.registerConnector('gate6.monday1', monday, reKeyManifest(require('./connectors/monday/manifest.json'), 'monday', 'gate6.monday1'));
 connectorRegistry.registerConnector('agencyzoom', agencyzoom, require('./connectors/agencyzoom/manifest.json'));
 connectorRegistry.registerConnector('gate6.agencyzoom', agencyzoom, reKeyManifest(require('./connectors/agencyzoom/manifest.json'), 'agencyzoom', 'gate6.agencyzoom'));
 connectorRegistry.registerConnector('vinsolutions', vinsolutions);

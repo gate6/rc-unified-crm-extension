@@ -6,6 +6,7 @@ const { saveUserInfo } = require('../servicenow-core/auth');
 const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts, applyClosedDatesIfNeeded, formatDuration } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
 const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
+const managedOAuthCore = require('@app-connect/core/handlers/managedOAuth');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
 const Sequelize = require('sequelize');
@@ -34,16 +35,46 @@ function stringifyForLog(value, maxLength = 1200) {
 
 apiLog.installErrorInterceptor(serviceNowApiClient, 'ServiceNow');
 
+// Format a timestamp with the user's chosen date format from the extension settings
+// (userSettings.logDateFormat — one of RC's six formats, e.g. 'MM/DD/YYYY hh:mm:ss A'),
+// applying the user's timezone offset the same way core's callLogComposer does.
+function formatDateTime({ user, time }) {
+    let momentTime = moment(time);
+    const tz = user?.timezoneOffset;
+    if (tz) {
+        momentTime = (typeof tz === 'string' && tz.includes(':'))
+            ? momentTime.utcOffset(tz)
+            : momentTime.utcOffset(Number(tz));
+    }
+    return momentTime.format(user?.userSettings?.logDateFormat?.value || 'YYYY-MM-DD hh:mm:ss A');
+}
+
+// Build a message-log work note in the same format as the Monday connector, adapted to
+// ServiceNow's plain-text journal field (\n instead of <br>). Each message is written as
+// its own work note (journal entry) — callers PATCH work_notes with just this text.
+function buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, includeHeader = true }) {
+    if (messageType === 'Voicemail') {
+        return `Voicemail from ${contactInfo.name}\n\nRecording:\n${recordingLink}`;
+    }
+    if (messageType === 'Fax') {
+        return `Fax from ${contactInfo.name}\n\nDocument:\n${faxDocLink}`;
+    }
+    const sender = message.direction === 'Inbound' ? contactInfo.name : 'You';
+    const text = message.subject || message.text || '';
+    const line = `[${formatDateTime({ user, time: message.creationTime || Date.now() })}] ${sender}: ${text}`;
+    return includeHeader ? `SMS conversation with ${contactInfo.name}\n${line}` : line;
+}
+
 // Normalize a hostname to the bare host the companies table stores:
 // strips scheme (http/https), any path/query, port, and trailing slash; lowercased.
 function normalizeHostname(raw) {
-  if (!raw) return raw;
-  let host = String(raw).trim();
-  host = host.replace(/^https?:\/\//i, '');   // drop scheme
-  host = host.split('/')[0];                   // drop path / trailing slash
-  host = host.split('?')[0];                   // drop query
-  host = host.split(':')[0];                   // drop port
-  return host.toLowerCase();
+    if (!raw) return raw;
+    let host = String(raw).trim();
+    host = host.replace(/^https?:\/\//i, '');   // drop scheme
+    host = host.split('/')[0];                   // drop path / trailing slash
+    host = host.split('?')[0];                   // drop query
+    host = host.split(':')[0];                   // drop port
+    return host.toLowerCase();
 }
 
 // Resolve the companies row for a connection. ServiceNow uses admin-managed OAuth:
@@ -117,8 +148,29 @@ async function getHostname(hostname) {
     return existingUser;
 }
 
-async function getOauthInfo(requestData) {
-    // Credentials are managed via AppConnect admin-managed OAuth.
+async function getOauthInfo({ hostname, rcAccountId } = {}) {
+    // Credentials are managed via AppConnect admin-managed OAuth (clientId/clientSecret/
+    // accessTokenUri live in accountData keyed by rcAccountId). During login the core
+    // resolves this before calling us; but the token-REFRESH paths (log/contact handlers)
+    // call getOauthInfo directly with only a hostname — no rcAccountId — so we resolve the
+    // managed config here too. Without it, refresh builds an OAuth app with no accessTokenUri
+    // and client-oauth2 crashes ("Cannot read properties of undefined (reading 'clone')"),
+    // which logs the user out a few minutes after login when the access token expires.
+    let accountId = rcAccountId;
+    if (!accountId && hostname) {
+        const company = await findCompany({ hostname });
+        accountId = company?.rcAccountId;
+    }
+    if (accountId) {
+        try {
+            const managed = await managedOAuthCore.resolveManagedOAuthInfo({ rcAccountId: accountId, platform: 'gate6.servicenow' });
+            if (managed?.oauthInfo?.clientId && managed?.oauthInfo?.accessTokenUri) {
+                return managed.oauthInfo;
+            }
+        } catch (error) {
+            console.error('[ServiceNow][getOauthInfo] failed to resolve managed OAuth:', error.message);
+        }
+    }
     // This fallback is only reached if managed OAuth is not yet configured.
     return {
         failMessage: 'ServiceNow OAuth credentials have not been configured. Please ask your admin to set up the connector via the AppConnect admin panel.'
@@ -166,13 +218,6 @@ async function getUserInfo({ authHeader, hostname, query }) {
             id = perUserKey
                 ? `admin-${perUserKey}`
                 : crypto.createHash('sha256').update(`snow-admin:${normalizeHostname(hostname)}`).digest('hex').slice(0, 32);
-            console.log('[ServiceNow][getUserInfo] admin sys_id remapped to stable id', {
-                hasRcExtensionId: !!rcExtensionId,
-                extIdSameAsAccount: !!(rcExtensionId && String(rcExtensionId) === String(rcAccountId)),
-                hasRcUserEmail: !!rcUserEmail,
-                usedFallbackHash: !perUserKey,
-                id
-            });
         }
 
         // Tenant-scope the id so the same ServiceNow user under different RC accounts
@@ -548,7 +593,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const rcPhoneNumberFromLog = agentParty?.phoneNumber;
     const effectiveRcPhoneNumber = rcPhoneNumberFromLog || callLog?.extensionNumber;
     if (effectiveRcPhoneNumber && (user.userSettings?.addRingCentralNumber?.value ?? true)) { body = upsertRingCentralNumber({ body, rcPhoneNumber: effectiveRcPhoneNumber }); }
-    if (user.userSettings?.addCallLogDateTime?.value ?? true) { body = upsertCallDateTime({ body, startTime: callLog.startTime, duration: callLog.duration }); }
+    if (user.userSettings?.addCallLogDateTime?.value ?? true) { body = upsertCallDateTime({ body, startTime: callLog.startTime, duration: callLog.duration, user }); }
     if (!!callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true)) { body = upsertCallRecording({ body, recordingLink: callLog.recording.link }); }
     if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { body = upsertAiNote({ body, aiNote }); }
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { body = upsertTranscript({ body, transcript }); }
@@ -701,12 +746,14 @@ function upsertCallAgentNote({ body, note }) {
     if (!!!note) {
         return body;
     }
-    const noteRegex = RegExp('- Agent note: ([\\s\\S]+?)\n');
+    // Labeled block like the AI Note, with a blank line above and below.
+    const block = `\n- Agent Note:\n${note}\n\n`;
+    const noteRegex = RegExp('\\n?- Agent Note:\\n[\\s\\S]*?\\n\\n');
     if (noteRegex.test(body)) {
-        body = body.replace(noteRegex, `- Agent note: ${note}\n`);
+        body = body.replace(noteRegex, block);
     }
     else {
-        body += `- Agent note: ${note}\n`;
+        body += block;
     }
     return body;
 }
@@ -789,11 +836,11 @@ function upsertRingCentralNumber({ body, rcPhoneNumber }) {
     return body;
 }
 
-function upsertCallDateTime({ body, startTime, duration }) {
+function upsertCallDateTime({ body, startTime, duration, user }) {
     if (!!!startTime) {
         return body;
     }
-    const formattedStartTime = moment(startTime).format("YYYY-MM-DD HH:mm:ss");
+    const formattedStartTime = formatDateTime({ user, time: startTime });
     const startTimeRegex = RegExp('- Start Time: (.+?)\n');
     if (startTimeRegex.test(body)) {
         body = body.replace(startTimeRegex, `- Start Time: ${formattedStartTime}\n`);
@@ -802,7 +849,7 @@ function upsertCallDateTime({ body, startTime, duration }) {
     }
 
     if (duration != null && duration !== '') {
-        const formattedEndTime = moment(startTime).add(duration, "seconds").format("YYYY-MM-DD HH:mm:ss");
+        const formattedEndTime = formatDateTime({ user, time: moment(startTime).add(duration, "seconds") });
         const endTimeRegex = RegExp('- End Time: (.+?)\n');
         if (endTimeRegex.test(body)) {
             body = body.replace(endTimeRegex, `- End Time: ${formattedEndTime}\n`);
@@ -818,18 +865,19 @@ function upsertCallRecording({ body, recordingLink }) {
     if (!!recordingLink && recordingLinkRegex.test(body)) {
         body = body.replace(recordingLinkRegex, `- Call recording link: ${recordingLink}\n`);
     } else if (!!recordingLink) {
-        body += `- Call recording link: ${recordingLink}\n`;
+        body += `\n- Call recording link: ${recordingLink}\n`;
     }
     return body;
 }
 
 function upsertAiNote({ body, aiNote }) {
     const aiNoteRegex = RegExp('- AI Note:([\\s\\S]*?)--- END');
-    const clearedAiNote = aiNote.replace(/\n+$/, '');
+    // Strip markdown bold markers (**) that RC adds, and trailing blank lines.
+    const clearedAiNote = aiNote.replace(/\*+/g, '').replace(/\n+$/, '');
     if (aiNoteRegex.test(body)) {
-        body = body.replace(aiNoteRegex, `- AI Note:\n${clearedAiNote}\n--- END`);
+        body = body.replace(aiNoteRegex, `- AI Note:\n${clearedAiNote}\n\n--- END`);
     } else {
-        body += `- AI Note:\n${clearedAiNote}\n--- END\n`;
+        body += `\n- AI Note:\n${clearedAiNote}\n\n--- END\n`;
     }
     return body;
 }
@@ -837,9 +885,9 @@ function upsertAiNote({ body, aiNote }) {
 function upsertTranscript({ body, transcript }) {
     const transcriptRegex = RegExp('- Transcript:([\\s\\S]*?)--- END');
     if (transcriptRegex.test(body)) {
-        body = body.replace(transcriptRegex, `- Transcript:\n${transcript}\n--- END`);
+        body = body.replace(transcriptRegex, `- Transcript:\n${transcript}\n\n--- END`);
     } else {
-        body += `- Transcript:\n${transcript}\n--- END\n`;
+        body += `\n- Transcript:\n${transcript}\n\n--- END\n`;
     }
     return body;
 }
@@ -929,10 +977,14 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const rcNameFromLog = agentParty?.name;
     const effectiveRcUserName = rcNameFromLog || '';
     if (effectiveRcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) { logBody = upsertRingCentralUserName({ body: logBody, rcUserName: effectiveRcUserName }); }
+    // On update, existingCallLog usually lacks the live to/from phoneNumber, so re-deriving
+    // would fall back to the extension number and overwrite the real RC number written at
+    // create time. Prefer the live value if present, else reuse the one already in the note.
+    const existingRcPhoneNumber = originalNote.match(/- RingCentral Phone Number: (.+?)\n/)?.[1]?.trim();
     const rcPhoneNumberFromLog = agentParty?.phoneNumber;
-    const effectiveRcPhoneNumber = rcPhoneNumberFromLog || existingCallLog?.extensionNumber;
+    const effectiveRcPhoneNumber = rcPhoneNumberFromLog || existingRcPhoneNumber || existingCallLog?.extensionNumber;
     if (effectiveRcPhoneNumber && (user.userSettings?.addRingCentralNumber?.value ?? true)) { logBody = upsertRingCentralNumber({ body: logBody, rcPhoneNumber: effectiveRcPhoneNumber }); }
-    if (!!startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) { logBody = upsertCallDateTime({ body: logBody, startTime, duration }); }
+    if (!!startTime && (user.userSettings?.addCallLogDateTime?.value ?? true)) { logBody = upsertCallDateTime({ body: logBody, startTime, duration, user }); }
     if (!!recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) { logBody = upsertCallRecording({ body: logBody, recordingLink: decodeURIComponent(recordingLink) }); }
     if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
@@ -1025,14 +1077,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // detect message type (SMS / Voicemail / Fax)
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
 
-    const workNotes =
-        `${message.direction} ${messageType} - ${message.direction === 'Inbound'
-            ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
-            : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
-        }\n${message.subject ? `[Message] ${message.subject}` : ''}`
-        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '')
-        + (faxDocLink ? `\n[Fax document link] ${faxDocLink}` : '')
-        + `\n\n--- Created via RingCentral CRM Extension`;
+    const workNotes = buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink });
 
     const postBody = {
         short_description: `[${messageType}] ${message.direction} ${messageType} - ${contactInfo.name}`,
@@ -1140,15 +1185,11 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     // detect message type
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
 
-    const updatedText =
-        `${message.direction} ${messageType} - ${message.direction === 'Inbound'
-            ? `from ${message.from.name ?? ''} (${message.from.phoneNumber})`
-            : `to ${message.to[0].name ?? ''} (${message.to[0].phoneNumber})`
-        }\n${message.subject ? `[Message] ${message.subject}` : ''}`
-        + (recordingLink ? `\n[Recording link] ${recordingLink}` : '')
-        + (faxDocLink ? `\n[Fax document link] ${faxDocLink}` : '');
+    // Same append flow as before — just Monday-style formatting. Only add the "SMS
+    // conversation with…" header when starting a fresh note; otherwise append the line.
+    const updatedText = buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, includeHeader: !originalNote });
 
-    const updatedWorkNotes = `${originalNote}\n${updatedText}`;
+    const updatedWorkNotes = originalNote ? `${originalNote}\n${updatedText}` : updatedText;
 
     const patchBody = {
         short_description: `[${messageType}] ${message.direction} ${messageType} - ${existingMessageLog.contactName ?? ''}`,
