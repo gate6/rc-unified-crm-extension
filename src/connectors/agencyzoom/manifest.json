@@ -40,15 +40,27 @@
               },
               {
                 "const": "username",
+                "managed": false,
                 "title": "Username (Email)",
                 "type": "string",
                 "required": true
               },
               {
                 "const": "password",
+                "managed": false,
                 "title": "Password",
                 "type": "string",
                 "required": true
+              },
+              {
+                "const": "useVertaforeSso",
+                "title": "Sign in with Vertafore SSO",
+                "description": "",
+                "type": "boolean",
+                "required": false,
+                "managed": true,
+                "managedScope": "account",
+                "hidden": true
               }
             ]
           }
@@ -117,6 +129,30 @@
               "type": "boolean",
               "name": "Add transcript to call log",
               "defaultValue": true
+            },
+            {
+              "id": "addCallLogResult",
+              "type": "boolean",
+              "name": "Add result to call log",
+              "defaultValue": true
+            },
+            {
+              "id": "addCallSessionId",
+              "type": "boolean",
+              "name": "Add call session ID to call log",
+              "defaultValue": true
+            },
+            {
+              "id": "addRingCentralUserName",
+              "type": "boolean",
+              "name": "Add RingCentral username to call log",
+              "defaultValue": true
+            },
+            {
+              "id": "addRingCentralNumber",
+              "type": "boolean",
+              "name": "Add RingCentral phone number to call log",
+              "defaultValue": true
             }
           ]
         }
@@ -155,6 +191,14 @@
         {
           "id": "rcExtensionId",
           "path": "cachedData.extensionInfo.id"
+        },
+        {
+          "id": "rcUserName",
+          "path": "cachedData.extensionInfo.name"
+        },
+        {
+          "id": "rcUserEmail",
+          "path": "cachedData.extensionInfo.contact.email"
         }
       ]
     }

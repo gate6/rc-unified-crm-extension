@@ -18,15 +18,6 @@ const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
 
 const agencyZoomApiClient = axios.create();
 
-function stringifyForLog(value, maxLength = 1200) {
-  try {
-    const str = typeof value === 'string' ? value : JSON.stringify(value);
-    return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
-  } catch (error) {
-    return String(value);
-  }
-}
-
 apiLog.installErrorInterceptor(agencyZoomApiClient, 'AgencyZoom');
 
 async function getLicenseStatus({ userId }) {
@@ -38,6 +29,10 @@ async function validateLicenseOrFail(user) {
 }
 
 function extractLogId(noteBody) {
+
+  // AgencyZoom can return notes with a null/empty body (notes created outside our flow),
+  // so guard before matching — otherwise buildNoteIndex throws on the first such note.
+  if (!noteBody) return null;
 
   const match = noteBody.match(/RC_LOG_ID:\s*(\S+)/);
 
@@ -60,6 +55,79 @@ function buildNoteIndex(notes) {
   return index;
 }
 
+/* ---------------- NOTE FORMATTING (mirrors ServiceTitan) ---------------- */
+
+// Respect the user's timezone offset + preferred log date format, exactly like ServiceTitan's
+// formatDateTime (which mirrors core's callLogComposer). Falls back to a sensible default.
+function formatDateTime({ user, time }) {
+  let momentTime = moment(time);
+  const tz = user?.timezoneOffset;
+  if (tz) {
+    momentTime = (typeof tz === 'string' && tz.includes(':'))
+      ? momentTime.utcOffset(tz)
+      : momentTime.utcOffset(Number(tz));
+  }
+  return momentTime.format(user?.userSettings?.logDateFormat?.value || 'YYYY-MM-DD hh:mm:ss A');
+}
+
+const HEADER_MARK = String.fromCharCode(1); // sentinel for converted header lines; stripped at end
+
+// Strip markdown (the ** asterisks, __ and #) that AI notes/transcripts arrive with, so the
+// AgencyZoom note shows clean text. Ported verbatim from ServiceTitan's sanitizeNoteText.
+function sanitizeNoteText(text) {
+  if (!text) return '';
+  let s = String(text).replace(/\r\n/g, '\n');
+  s = s.replace(/^[ \t]*\*\*(.+?)\*\*[ \t]*$/gm, (_, h) => {
+    const t = h.trim().replace(/:+$/, '');
+    return (t.length <= 30 && t.split(/\s+/).length <= 4) ? `${HEADER_MARK}${t}:` : t;
+  });
+  s = s.replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1').replace(/^[ \t]*#{1,6}[ \t]*/gm, '');
+  s = s.replace(/[ \t]+$/gm, '');
+  s = s.replace(new RegExp(`${HEADER_MARK}([^\\n]*)\\n\\s*\\n`, 'g'), `${HEADER_MARK}$1\n`);
+  s = s.replace(new RegExp(`([^\\n])\\n${HEADER_MARK}`, 'g'), `$1\n\n${HEADER_MARK}`);
+  s = s.replace(new RegExp(HEADER_MARK, 'g'), '');
+  return s.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// The contact number should be a real, full phone number — never a bare RingCentral
+// extension (e.g. 101/102) that internal calls can surface. Extensions are 3–5 digits;
+// real numbers are longer, so require at least 7 digits.
+function looksLikeFullNumber(value) {
+  return String(value || '').replace(/\D/g, '').length >= 7;
+}
+
+// Build the AgencyZoom note body: our RC_LOG_ID header (kept for matching) followed by a
+// ServiceTitan-style layout — header lines, a blank line, optional sections (each separated
+// by a blank line), a blank line, then the start/end time footer. Every optional/field entry
+// respects the matching user setting (defaulting on when the setting is absent).
+function composeCallLogNote({ user, logId, subject, direction, result, duration, callSessionId, rcUserName, rcPhone, contactPhone, note, recording, transcript, aiNote, startTimeText, endTimeText }) {
+  const headerLines = [];
+  if (subject) headerLines.push(`Subject: ${subject}`);
+  if (direction) headerLines.push(`Direction: ${direction}`);
+  if (result && (user.userSettings?.addCallLogResult?.value ?? true)) headerLines.push(`Result: ${result}`);
+  if (duration && (user.userSettings?.addCallLogDuration?.value ?? true)) headerLines.push(`Duration: ${duration} sec`);
+  if (callSessionId && (user.userSettings?.addCallSessionId?.value ?? true)) headerLines.push(`Call Session ID: ${callSessionId}`);
+  if (rcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) headerLines.push(`RingCentral Username: ${rcUserName}`);
+  if (rcPhone && looksLikeFullNumber(rcPhone) && (user.userSettings?.addRingCentralNumber?.value ?? true)) headerLines.push(`RingCentral Phone Number: ${rcPhone}`);
+  if (contactPhone && looksLikeFullNumber(contactPhone) && (user.userSettings?.addCallLogContactNumber?.value ?? true)) headerLines.push(`Contact Number: ${contactPhone}`);
+
+  const sections = [];
+  if (note && (user.userSettings?.addCallLogNote?.value ?? true)) sections.push(`Agent Notes:\n${sanitizeNoteText(note)}`);
+  if (recording && (user.userSettings?.addCallLogRecording?.value ?? true)) sections.push(`Recording:\n${recording}`);
+  if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) sections.push(`Transcript:\n${sanitizeNoteText(transcript)}`);
+  if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) sections.push(`AI Note:\n${sanitizeNoteText(aiNote)}`);
+
+  const footerLines = [];
+  if (startTimeText && (user.userSettings?.addCallLogDateTime?.value ?? true)) footerLines.push(`Start Time: ${startTimeText}`);
+  if (endTimeText && (user.userSettings?.addCallLogDateTime?.value ?? true)) footerLines.push(`End Time: ${endTimeText}`);
+
+  let body = headerLines.join("\n");
+  if (sections.length > 0) body += `\n\n${sections.join("\n\n")}`;
+  if (footerLines.length > 0) body += `\n\n${footerLines.join("\n")}`;
+
+  return `[RingCentral Call Log]\nRC_LOG_ID: ${logId}\n\n${body}`;
+}
+
 /* ---------------- AUTH TYPE ---------------- */
 
 function getAuthType() {
@@ -72,11 +140,24 @@ function getBasicAuth({ apiKey }) {
 
 /* ---------------- AUTHENTICATION ---------------- */
 
-async function authenticate(username, password) {
-  apiLog.logStart('AgencyZoom', 'authenticate', { username });
+// A boolean coming back from the auth form / persisted JSON can surface as a real
+// boolean or the string "true" — normalize both to a single flag.
+function isVertaforeSso(value) {
+  return value === true || value === 'true';
+}
+
+// Native login (`/auth/login`) validates against AgencyZoom's own user store; Vertafore
+// SSO login (`/auth/ssologin`) validates the same username/password against Vertafore's
+// identity provider. Both return the same `{ token }`. SSO-provisioned users have no
+// native AgencyZoom password, so they must use the SSO endpoint.
+async function authenticate(username, password, useVertaforeSso = false) {
+  const ssoMode = isVertaforeSso(useVertaforeSso);
+  const endpoint = ssoMode ? 'ssologin' : 'login';
+
+  apiLog.logStart('AgencyZoom', 'authenticate', { username, ssoMode });
 
   const res = await agencyZoomApiClient.post(
-    `${AZ_BASE_URL}/auth/login`,
+    `${AZ_BASE_URL}/auth/${endpoint}`,
     {
       username,
       password
@@ -89,7 +170,7 @@ async function authenticate(username, password) {
     }
   );
 
-  apiLog.logSuccess('AgencyZoom', 'authenticate', { username, apiEndpoint: `${AZ_BASE_URL}/auth/login` });
+  apiLog.logSuccess('AgencyZoom', 'authenticate', { username, apiEndpoint: `${AZ_BASE_URL}/auth/${endpoint}` });
 
   return res.data?.jwt || res.data?.token;
 }
@@ -101,11 +182,12 @@ async function getRefreshedAuthToken(user) {
   const username = user.platformAdditionalInfo?.username;
   const encodedPassword = user.platformAdditionalInfo?.password;
   const password = encodedPassword ? decoded(encodedPassword) : null;
+  const useVertaforeSso = user.platformAdditionalInfo?.useVertaforeSso;
   if (!username || !password) {
     throw new Error("AgencyZoom credentials are missing for token refresh");
   }
 
-  const token = await authenticate(username, password);
+  const token = await authenticate(username, password, useVertaforeSso);
 
   user.accessToken = token;
   await user.save();
@@ -118,7 +200,7 @@ async function getRefreshedAuthToken(user) {
 async function getUserInfo({ hostname, additionalInfo }) {
   // rcAccountId, rcExtensionId, rcUserName, rcUserEmail arrive via the manifest's
   // rcAdditionalSubmission (auto from RC cached data — no user prompt, no framework change).
-  const { username, password, rcAccountId, rcExtensionId, rcUserName, rcUserEmail } = additionalInfo ?? {};
+  const { username, password, useVertaforeSso, rcAccountId, rcExtensionId, rcUserName, rcUserEmail } = additionalInfo ?? {};
 
   if (!hostname || !username || !password) {
     return {
@@ -144,80 +226,88 @@ async function getUserInfo({ hostname, additionalInfo }) {
     : `az-user-${rcAccountId || 'noacct'}-${perUserKey || 'unknown'}`;
   const displayName = rcUserName || rcUserEmail || username || 'AgencyZoom User';
 
-  // Always log the resolved RC identity (no secrets) so the per-user key can be verified.
-  console.log('[AgencyZoom][getUserInfo] RC identity', {
-    additionalInfoKeys: Object.keys(additionalInfo ?? {}),
-    rcAccountId,
-    rcExtensionId,
-    extIdSameAsAccount: !!(rcExtensionId && String(rcExtensionId) === String(rcAccountId)),
-    hasRcUserName: !!rcUserName,
-    hasRcUserEmail: !!rcUserEmail,
-    userId
-  });
-
   apiLog.logStart('AgencyZoom', 'getUserInfo', { userId, username, rcAccountId });
 
-  try {
-    const token = await authenticate(username, password);
-
-    // License / seat enforcement (mirrors ServiceTitan getUserInfo). Runs after a successful
-    // login so a failed authentication never consumes a seat; a DB error degrades gracefully
-    // (logged, login still allowed) so it can't lock out an otherwise-licensed user.
-    if (models && models.companies && models.customer && rcAccountId) {
-      try {
-        const company = await models.companies.findOne({
+  let company = null;
+  let needsSeat = false;
+  if (models && models.companies && models.customer && rcAccountId) {
+    try {
+      const cleanHostname = hostname ? String(hostname).trim().toLowerCase() : '';
+      if (cleanHostname) {
+        company = await models.companies.findOne({
+          where: { rcAccountId: String(rcAccountId), hostname: cleanHostname, status: true },
+          raw: true
+        });
+      }
+      if (!company) {
+        company = await models.companies.findOne({
           where: { rcAccountId: String(rcAccountId), status: true },
           raw: true
         });
-        if (!company) {
+      }
+      if (!company) {
+        return {
+          successful: false,
+          returnMessage: {
+            messageType: 'error',
+            message: 'No active subscription found for this account. Please contact Gate6 support.',
+            ttl: 5000
+          }
+        };
+      }
+
+      const existingCustomer = await models.customer.findOne({
+        where: { companyId: company.id, sysId: String(userId) },
+        raw: true
+      });
+
+      // Only a genuinely new user needs a seat; existing users already hold one.
+      if (!existingCustomer) {
+        const currentSeatCount = await models.customer.count({
+          where: { companyId: company.id }
+        });
+
+        const maxSeats = Number(company.maxAllowedUsers);
+        if (Number.isFinite(maxSeats) && maxSeats >= 0 && currentSeatCount >= maxSeats) {
           return {
             successful: false,
             returnMessage: {
               messageType: 'error',
-              message: 'No active subscription found for this account. Please contact Gate6 support.',
+              message: `License seat limit reached (${maxSeats} of ${maxSeats} in use). Contact your admin.`,
               ttl: 5000
             }
           };
         }
 
-        const existingCustomer = await models.customer.findOne({
-          where: { companyId: company.id, sysId: String(userId) },
-          raw: true
+        needsSeat = true;
+      }
+    } catch (err) {
+      console.error('Error enforcing customer seat limits:', err);
+    }
+  }
+
+  try {
+    const token = await authenticate(username, password, useVertaforeSso);
+
+    // Login succeeded — now it's safe to consume the seat (only for a genuinely new user).
+    // Kept in its own try so a seat-write hiccup never fails an otherwise-valid login.
+    if (needsSeat && company && models?.customer) {
+      try {
+        await models.customer.create({
+          sysId: String(userId),
+          companyId: company.id,
+          email: rcUserEmail || username || '',
+          firstname: displayName,
+          platform: 'gate6.agencyzoom',
+          hostname,
+          rcAccountId
         });
-
-        if (!existingCustomer) {
-          const currentSeatCount = await models.customer.count({
-            where: { companyId: company.id }
-          });
-
-          const maxSeats = Number(company.maxAllowedUsers);
-          if (Number.isFinite(maxSeats) && maxSeats >= 0 && currentSeatCount >= maxSeats) {
-            return {
-              successful: false,
-              returnMessage: {
-                messageType: 'error',
-                message: `License seat limit reached (${maxSeats} of ${maxSeats} in use). Contact your admin.`,
-                ttl: 5000
-              }
-            };
-          }
-
-          await models.customer.create({
-            sysId: String(userId),
-            companyId: company.id,
-            email: rcUserEmail || username || '',
-            firstname: displayName,
-            platform: 'gate6.agencyzoom',
-            hostname,
-            rcAccountId
-          });
-        }
       } catch (err) {
-        console.error('Error enforcing customer seat limits:', err);
+        console.error('Error creating customer seat row:', err);
       }
     }
 
-    apiLog.logSuccess('AgencyZoom', 'getUserInfo', { userId, apiEndpoint: `${AZ_BASE_URL}/auth/login` });
+    apiLog.logSuccess('AgencyZoom', 'getUserInfo', { userId, apiEndpoint: `${AZ_BASE_URL}/auth/${isVertaforeSso(useVertaforeSso) ? 'ssologin' : 'login'}` });
 
     return {
       successful: true,
@@ -228,7 +318,8 @@ async function getUserInfo({ hostname, additionalInfo }) {
         overridingApiKey: token,
         platformAdditionalInfo: {
           username,
-          password: encode(password)
+          password: encode(password),
+          useVertaforeSso: isVertaforeSso(useVertaforeSso)
         }
       },
       returnMessage: { messageType: "success", message: "Successfully connected to AgencyZoom.", ttl: 3000 }
@@ -359,10 +450,12 @@ async function findContactWithName({ user, name }) {
     apiLog.logStart('AgencyZoom', 'findContactWithName', { name });
 
     const auth = await getRefreshedAuthToken(user);
-    const encodedName = encodeURIComponent(name || "");
 
-    const res = await agencyZoomApiClient.get(
-      `${AZ_BASE_URL}/customers?name=${encodedName}`,
+    // AgencyZoom's customer search is POST /customers with a CustomerSearchRequest body
+    // (same endpoint findContact uses for phone). `fullName` does a name lookup.
+    const res = await agencyZoomApiClient.post(
+      `${AZ_BASE_URL}/customers`,
+      { fullName: name || "" },
       {
         headers: {
           Authorization: `Bearer ${auth}`
@@ -376,10 +469,11 @@ async function findContactWithName({ user, name }) {
     const matchedContactInfo = customers.map(c => ({
       id: c.id,
       name: c.housename || [c.firstname, c.middlename, c.lastname].filter(Boolean).join(" "),
+      phone: c.phone,
       type: "contact"
     }));
 
-    apiLog.logSuccess('AgencyZoom', 'findContactWithName', { name, matchedCount: customers.length, apiEndpoint: `${AZ_BASE_URL}/customers?name=${encodedName}` });
+    apiLog.logSuccess('AgencyZoom', 'findContactWithName', { name, matchedCount: customers.length, apiEndpoint: `${AZ_BASE_URL}/customers` });
 
     return {
       successful: true,
@@ -473,7 +567,7 @@ async function createContact({ user, phoneNumber, newContactName }) {
 
 /* ---------------- CREATE CALL LOG ---------------- */
 
-async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript }) {
+async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript, additionalSubmission }) {
   const licenseError = await validateLicenseOrFail(user);
   if (licenseError) return licenseError;
 
@@ -482,37 +576,43 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
   apiLog.logStart('AgencyZoom', 'createCallLog', { contactId: contactInfo?.id, logId, direction: callLog?.direction, duration: callLog?.duration });
 
+  // Never leave the subject blank (matches ServiceTitan's create-side fallback).
+  const defaultSubject = `${callLog?.direction || ''} Call ${callLog?.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo?.name || 'contact'}`.trim();
   const subject =
     (user.userSettings?.addCallLogSubject?.value ?? true)
-      ? (callLog?.customSubject?.trim() || "")
-      : ""
+      ? (callLog?.customSubject?.trim() || defaultSubject)
+      : "";
 
-  let description = "";
+  const startTimeText = callLog?.startTime ? formatDateTime({ user, time: callLog.startTime }) : "";
+  const endTimeText = (callLog?.startTime && callLog?.duration)
+    ? formatDateTime({ user, time: moment(callLog.startTime).add(callLog.duration, "seconds") })
+    : "";
 
-  if (note && (user.userSettings?.addCallLogNote?.value ?? true))
-    description += `Agent Notes: ${note}\n`;
+  // Direction-based phone resolution: on an inbound call the contact is the caller (`from`)
+  // and the RC user is the callee (`to`); on outbound it's reversed.
+  const isInbound = callLog?.direction === 'Inbound';
+  const contactPhone = (isInbound ? callLog?.from?.phoneNumber : callLog?.to?.phoneNumber)
+    || contactInfo?.phoneNumber || contactInfo?.phone || "";
+  const rcPhone = (isInbound ? callLog?.to?.phoneNumber : callLog?.from?.phoneNumber) || "";
 
-  if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true))
-    description += `AI Note: ${aiNote}\n`;
-
-  if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true))
-    description += `Transcript: ${transcript}\n`;
-
-  if (callLog.recording?.link && (user.userSettings?.addCallLogRecording?.value ?? true))
-    description += `Recording: ${callLog.recording.link}\n`;
-
-  const noteBody = `
-[RingCentral Call Log]
-RC_LOG_ID: ${logId}
-
-Subject: ${subject}
-Direction: ${callLog.direction}
-Duration: ${callLog.duration} sec
-Start Time: ${moment(callLog.startTime).format("YYYY-MM-DD HH:mm:ss")}
-End Time: ${moment(callLog.startTime).add(callLog.duration, "seconds").format("YYYY-MM-DD HH:mm:ss")}
-
-${description}
-`;
+  const noteBody = composeCallLogNote({
+    user,
+    logId,
+    subject,
+    direction: callLog?.direction,
+    result: callLog?.result,
+    duration: callLog?.duration,
+    callSessionId: callLog?.sessionId,
+    rcUserName: additionalSubmission?.rcUserName,
+    rcPhone,
+    contactPhone,
+    note,
+    recording: callLog?.recording?.link,
+    transcript,
+    aiNote,
+    startTimeText,
+    endTimeText
+  });
 
   await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/${contactInfo.id}/notes`,
@@ -557,72 +657,92 @@ async function updateCallLog({ user, existingCallLog, subject, startTime, durati
 
   apiLog.logStart('AgencyZoom', 'updateCallLog', { contactId, logId, duration });
 
-  const oldBody =
-    existingCallLogDetails?.body ||
-    existingCallLogDetails?.note ||
-    existingCallLogDetails?.fullBody ||
-    "";
-  const oldDirection =
-    typeof oldBody === "string"
-      ? (oldBody.match(/Direction:\s*(.*?)(?:\n|$)/)?.[1] || "").trim()
-      : "";
-  const resolvedDirection = oldDirection || existingCallLog?.direction || "";
-  const resolvedDuration = duration ?? existingCallLog?.duration ?? 0;
-  const resolvedStartTime = startTime || existingCallLog?.startTime || null;
-  const subjectMatch = typeof oldBody === "string" ? oldBody.match(/Subject:\s*(.*?)(?:\n|$)/)?.[1] || "" : "";
-  let subjectToUse = subjectMatch || "";
-  if (!subjectToUse || subjectToUse.toLowerCase().startsWith("direction:")) {
-    subjectToUse = "";
+  // Fetch the current note for this logId so we can PRESERVE fields the caller didn't re-supply.
+  // AgencyZoom has no get-note-by-id, so scan the contact's notes (same as getCallLog). Falls
+  // back to the framework-supplied details. Without this, a recording-only or disposition-only
+  // sync would wipe the note/recording/transcript/AI note that were already logged.
+  let oldBody = "";
+  try {
+    const res = await agencyZoomApiClient.get(
+      `${AZ_BASE_URL}/customers/${contactId}`,
+      { headers: { Authorization: `Bearer ${auth}` }, _operation: 'updateCallLog' }
+    );
+    oldBody = buildNoteIndex(res.data?.notes || [])[logId]?.body || "";
+  } catch (err) {
+    console.warn('[AgencyZoom][updateCallLog] could not fetch existing note, will fall back to supplied details:', err.message);
+  }
+  if (!oldBody) {
+    oldBody = existingCallLogDetails?.body || existingCallLogDetails?.note || existingCallLogDetails?.fullBody || "";
   }
 
-  let description = "";
+  const normalized = (oldBody || "").replace(/\r\n/g, '\n');
 
+  // Parse the previously-stored fields (terminate multi-line sections at the next "Header:" line).
+  const oldSubject = normalized.match(/^\s*Subject:\s*(.*)$/m)?.[1]?.trim() || "";
+  const oldDirection = normalized.match(/^\s*Direction:\s*(.*)$/m)?.[1]?.trim() || "";
+  const oldResult = normalized.match(/^\s*Result:\s*(.*)$/m)?.[1]?.trim() || "";
+  const oldDuration = normalized.match(/^\s*Duration:\s*(.*)$/m)?.[1]?.replace(/\s*sec$/i, '').trim() || "";
+  const oldCallSessionId = normalized.match(/^\s*Call Session ID:\s*(.*)$/m)?.[1]?.trim() || "";
+  const oldRcUserName = normalized.match(/^\s*RingCentral Username:\s*(.*)$/m)?.[1]?.trim() || "";
+  const oldRcPhone = normalized.match(/^\s*RingCentral Phone Number:\s*(.*)$/m)?.[1]?.trim() || "";
+  const oldContactPhone = normalized.match(/^\s*Contact Number:\s*(.*)$/m)?.[1]?.trim() || "";
+  const oldNote = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
+  const oldRecording = normalized.match(/Recording:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
+  const oldTranscript = normalized.match(/Transcript:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/i)?.[1]?.trim() || "";
+  const oldAiNote = normalized.match(/AI Note\s*:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/i)?.[1]?.trim() || "";
+  const oldStart = normalized.match(/^\s*Start Time:\s*(.*)$/m)?.[1]?.trim() || "";
+  const oldEnd = normalized.match(/^\s*End Time:\s*(.*)$/m)?.[1]?.trim() || "";
+
+  // Merge: prefer the incoming value, else keep what the original log already had.
+  let decodedRecording = recordingLink;
+  if (recordingLink) {
+    try { decodedRecording = decodeURIComponent(recordingLink); } catch (err) { decodedRecording = recordingLink; }
+  }
+
+  const effNote = note || oldNote;
+  const effRecording = decodedRecording || oldRecording;
+  const effTranscript = transcript || oldTranscript;
+  const effAiNote = aiNote || oldAiNote;
+  const resolvedDirection = oldDirection || existingCallLog?.direction || "";
+  const resolvedResult = result ?? (oldResult || existingCallLog?.result || "");
+  const resolvedDuration = duration != null ? String(duration) : (oldDuration || String(existingCallLog?.duration ?? ""));
+
+  // Start/End time: prefer freshly-supplied startTime, else keep the previously-formatted text.
+  let startTimeText = oldStart;
+  let endTimeText = oldEnd;
+  if (startTime) {
+    startTimeText = formatDateTime({ user, time: startTime });
+    const durForEnd = duration != null ? duration : Number(oldDuration) || 0;
+    endTimeText = formatDateTime({ user, time: moment(startTime).add(durForEnd, "seconds") });
+  }
+
+  // Subject: incoming wins; else keep the old one (ignoring a stale "Direction:" leak); else a fallback.
+  let subjectToUse = oldSubject && !oldSubject.toLowerCase().startsWith("direction:") ? oldSubject : "";
   if (subject && (user.userSettings?.addCallLogSubject?.value ?? true)) {
     subjectToUse = subject.trim();
   }
-
-  if (note && (user.userSettings?.addCallLogNote?.value ?? true)) {
-    description += `Agent Notes: ${note}\n`;
+  if (!subjectToUse) {
+    subjectToUse = resolvedDirection ? `${resolvedDirection} Call` : "Call";
   }
 
-  if (aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) {
-    description += `AI Note: ${aiNote}\n`;
-  }
-
-  if (transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) {
-    description += `Transcript: ${transcript}\n`;
-  }
-
-  if (recordingLink && (user.userSettings?.addCallLogRecording?.value ?? true)) {
-    let decodedLink = recordingLink;
-    try {
-      decodedLink = decodeURIComponent(recordingLink);
-    } catch (err) {
-      decodedLink = recordingLink;
-    }
-    description += `Recording: ${decodedLink}\n`;
-  }
-
-  const startTimeText = resolvedStartTime
-    ? moment(resolvedStartTime).format("YYYY-MM-DD HH:mm:ss")
-    : "";
-  const endTimeText = resolvedStartTime
-    ? moment(resolvedStartTime).add(Number(resolvedDuration) || 0, "seconds").format("YYYY-MM-DD HH:mm:ss")
-    : "";
-
-  const noteBody = `
-[RingCentral Call Log]
-RC_LOG_ID: ${logId}
-
-Subject: ${subjectToUse}
-Direction: ${resolvedDirection}
-Result: ${result ?? existingCallLog?.result ?? ""}
-Duration: ${resolvedDuration} sec
-Start Time: ${startTimeText}
-End Time: ${endTimeText}
-
-${description}
-`;
+  const noteBody = composeCallLogNote({
+    user,
+    logId,
+    subject: subjectToUse,
+    direction: resolvedDirection,
+    result: resolvedResult,
+    duration: resolvedDuration,
+    callSessionId: oldCallSessionId,
+    rcUserName: oldRcUserName,
+    rcPhone: oldRcPhone,
+    contactPhone: oldContactPhone,
+    note: effNote,
+    recording: effRecording,
+    transcript: effTranscript,
+    aiNote: effAiNote,
+    startTimeText,
+    endTimeText
+  });
 
   await agencyZoomApiClient.post(
     `${AZ_BASE_URL}/customers/${contactId}/notes`,
@@ -690,7 +810,7 @@ async function getCallLog({ user, callLogId }) {
     }
   );
 
-  const notes = res.data.notes || [];
+  const notes = res.data?.notes || [];
 
   const noteIndex = buildNoteIndex(notes);
 
@@ -719,7 +839,7 @@ async function getCallLog({ user, callLogId }) {
   }
 
   let agentNote = "";
-  const agentMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n(?:AI Note|Transcript|Recording):|$)/);
+  const agentMatch = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/);
 
   if (agentMatch) {
     agentNote = agentMatch[1].trim();
@@ -960,6 +1080,7 @@ exports.createMessageLog = createMessageLog;
 exports.updateMessageLog = updateMessageLog;
 exports.getCallLog = getCallLog;
 exports.findContact = findContact;
+exports.findContactWithName = findContactWithName;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
 exports.findContactWithName = findContactWithName;
