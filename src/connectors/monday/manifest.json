@@ -34,9 +34,9 @@
       "customState": "",
       "scope": "",
       "canOpenLogPage": true,
-      "contactPageUrl": "https://{hostname}/boards/{contactType}/pulses/{contactId}",
-      "logPageUrl": "https://{hostname}/boards/{contactType}/pulses/{contactId}",
-      "callPopUrl": "https://{hostname}/boards/{contactType}/pulses/{contactId}",
+      "contactPageUrl": "https://{hostname}/boards/{contactBoardId}/pulses/{contactId}",
+      "logPageUrl": "https://{hostname}/boards/{contactBoardId}/pulses/{contactId}",
+      "callPopUrl": "https://{hostname}/boards/{contactBoardId}/pulses/{contactId}",
       "embeddedOnCrmPage": {
         "welcomePage": {
           "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
@@ -44,6 +44,18 @@
         }
       },
       "settings": [
+        {
+          "id": "mondayOptions",
+          "type": "section",
+          "name": "Monday options",
+          "items": [
+            {
+              "id": "contactBoardId",
+              "type": "inputField",
+              "name": "Contact board ID"
+            }
+          ]
+        },
         {
           "id": "mondayLogging",
           "type": "section",
