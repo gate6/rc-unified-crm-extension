@@ -13,6 +13,7 @@ const models = sequelize ? initModels(sequelize) : null;
 
 const licenseHelper = require('../shared/license');
 const apiLog = require('../shared/apiLogger');
+const { trackAnalytics } = require('../servicenow-core/analytics');
 
 const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
 
@@ -552,6 +553,8 @@ async function createContact({ user, phoneNumber, newContactName }) {
 
   apiLog.logSuccess('AgencyZoom', 'createContact', { contactId: res.data.id, phoneNumber, apiEndpoint: `${AZ_BASE_URL}/customers/create` });
 
+  await trackAnalytics({ user, crm: 'AgencyZoom', event: 'contactCreated' });
+
   return {
     contactInfo: {
       id: res.data.id,
@@ -621,6 +624,8 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
   );
 
   apiLog.logSuccess('AgencyZoom', 'createCallLog', { logId, contactId: Number(contactInfo.id), apiEndpoint: `${AZ_BASE_URL}/customers/${contactInfo.id}/notes` });
+
+  await trackAnalytics({ user, crm: 'AgencyZoom', event: 'callLogCreated' });
 
   return {
     logId,
@@ -751,6 +756,8 @@ async function updateCallLog({ user, existingCallLog, subject, startTime, durati
   );
 
   apiLog.logSuccess('AgencyZoom', 'updateCallLog', { logId, contactId, apiEndpoint: `${AZ_BASE_URL}/customers/${contactId}/notes` });
+
+  await trackAnalytics({ user, crm: 'AgencyZoom', event: 'callLogUpdated' });
 
   return {
     logId,
@@ -926,6 +933,8 @@ ${description}
 
   apiLog.logSuccess('AgencyZoom', 'createMessageLog', { logId, contactId: Number(contactInfo.id), apiEndpoint: `${AZ_BASE_URL}/customers/${contactInfo.id}/notes` });
 
+  await trackAnalytics({ user, crm: 'AgencyZoom', event: 'messageLogCreated' });
+
   return {
     logId,
     contactId: Number(contactInfo.id),
@@ -1035,6 +1044,8 @@ ${updatedConversation}
   );
 
   apiLog.logSuccess('AgencyZoom', 'updateMessageLog', { logId, contactId, apiEndpoint: `${AZ_BASE_URL}/customers/${contactId}/notes` });
+
+  await trackAnalytics({ user, crm: 'AgencyZoom', event: 'messageLogUpdated' });
 
   return {
     logId,

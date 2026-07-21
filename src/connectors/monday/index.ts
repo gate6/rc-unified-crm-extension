@@ -1286,7 +1286,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     }
   }
 
-  await trackAnalytics({ user, crm: 'Monday', event: 'callLogCreated', eventDate: callLog?.startTime });
+  await trackAnalytics({ user, crm: 'Monday', event: 'callLogCreated' });
 
   return {
     logId: updateId,
@@ -1510,7 +1510,7 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
           await uploadCallRecording({ accessToken: resolvedAccessToken, user, itemId, recordingLink: recordingDownloadLink || recordingLink })
         }
         apiLog.logSuccess('Monday', 'updateCallLog', { logId: updateRes.data.edit_update.id, contactId: existingCallLog?.contactId, mode: 'edited' });
-        await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated', eventDate: startTime });
+        await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated' });
         return {
           logId: updateRes.data.edit_update.id,
           returnMessage: { message: "Call log updated", messageType: "success", ttl: 2000 }
@@ -1557,7 +1557,7 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
     console.warn('[Monday][updateCallLog] failed to repoint thirdPartyLogId', { newLogId, message: e.message })
   }
 
-  await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated', eventDate: startTime });
+  await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated' });
 
   return {
     logId: newLogId,
@@ -1746,7 +1746,7 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, rec
     }
   }
 
-  await trackAnalytics({ user, crm: 'Monday', event: 'messageLogCreated', eventDate: message?.creationTime });
+  await trackAnalytics({ user, crm: 'Monday', event: 'messageLogCreated' });
 
   apiLog.logSuccess('Monday', 'createMessageLog', { logId: updateId, contactId: itemId, messageType, boardId })
   return {
@@ -1811,7 +1811,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
     const newUpdateId = res.data.create_update.id
 
-    await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated', eventDate: message?.creationTime });
+    await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated' });
 
     apiLog.logSuccess('Monday', 'updateMessageLog', { logId: newUpdateId, contactId: itemId, messageType })
     return {
@@ -1985,7 +1985,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     }
   }
 
-  await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated', eventDate: message?.creationTime });
+  await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated' });
 
   apiLog.logSuccess('Monday', 'updateMessageLog', { logId: newThreadId, contactId: itemId, messageType: 'SMS', appended: newThreadId === updateId })
   return {
