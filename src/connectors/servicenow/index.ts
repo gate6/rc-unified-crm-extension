@@ -22,6 +22,7 @@ const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
 const apiLog = require('../shared/apiLogger');
+const { trackAnalytics } = require('../shared/analytics');
 const serviceNowApiClient = axios.create();
 
 function stringifyForLog(value, maxLength = 1200) {
@@ -721,6 +722,9 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     //---CHECK.4: Open db.sqlite and CRM website to check if call log is saved ---
     //----------------------------------------------------------------------------
     apiLog.logSuccess('ServiceNow', 'createCallLog', { logId: addLogRes.data.result.sys_id, contactId: contactInfo?.id, apiEndpoint: `https://${hostname}/api/now/table/interaction` });
+
+    await trackAnalytics({ user, crm: 'ServiceNow', event: 'callLogCreated' });
+
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
@@ -1023,6 +1027,9 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
     //-----------------------------------------------------------------------------------------
     apiLog.logSuccess('ServiceNow', 'updateCallLog', { logId: existingLogId, apiEndpoint: `https://${hostname}/api/now/table/interaction/${existingLogId}` });
+
+    await trackAnalytics({ user, crm: 'ServiceNow', event: 'callLogUpdated' });
+
     return {
         updatedNote: note,
         returnMessage: {
@@ -1138,6 +1145,9 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
     //-------------------------------------------------------------------------------------------------------------
     apiLog.logSuccess('ServiceNow', 'createMessageLog', { logId: addLogRes.data.result.sys_id, contactId: contactInfo?.id, apiEndpoint: `https://${hostname}/api/now/table/interaction` });
+
+    await trackAnalytics({ user, crm: 'ServiceNow', event: 'messageLogCreated' });
+
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
@@ -1244,6 +1254,9 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
     //---------------------------------------------------------------------------------------------------------------------------------------------
     apiLog.logSuccess('ServiceNow', 'updateMessageLog', { logId: existingLogId, contactId: contactInfo?.id, apiEndpoint: `https://${hostname}/api/now/table/interaction/${existingLogId}` });
+
+    await trackAnalytics({ user, crm: 'ServiceNow', event: 'messageLogUpdated' });
+
     return {
         logId: existingLogId,
         returnMessage: {
@@ -1320,6 +1333,9 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     //---CHECK.9: In extension, try create a new contact against an unknown number ---
     //--------------------------------------------------------------------------------
     apiLog.logSuccess('ServiceNow', 'createContact', { contactId: contactInfoRes.id, apiEndpoint: createContactEndpoint });
+
+    await trackAnalytics({ user, crm: 'ServiceNow', event: 'contactCreated' });
+
     return {
         contactInfo: {
             id: contactInfoRes.id,

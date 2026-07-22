@@ -12,7 +12,7 @@ const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel'
 const qs = require('qs');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
-const { trackAnalytics } = require('../servicenow-core/analytics');
+const { trackAnalytics } = require('../shared/analytics');
 const models = sequelize ? initModels(sequelize) : null;
 const licenseHelper = require('../shared/license');
 const apiLog = require('../shared/apiLogger');
@@ -616,7 +616,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     const logId = `${addNoteRes.data.id}_note`;
     apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, contactId: contactInfo.id, apiEndpoint: createCallLogUrl });
 
-    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'callLogCreated', eventDate: callLog?.startTime });
+    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'callLogCreated' });
 
     return {
         logId,
@@ -928,6 +928,8 @@ ${faxDocLink}
 
     apiLog.logSuccess('ServiceTitan', 'createMessageLog', { logId: addLogRes.data.id, contactId, apiEndpoint: createMessageLogUrl });
 
+    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogCreated' });
+
     return {
         logId: addLogRes.data.id,
         contactId,
@@ -1069,7 +1071,7 @@ ${faxDocLink}
     apiLog.logSuccess('ServiceTitan', 'updateMessageLog', { logId: addLogRes.data.id, contactId, apiEndpoint: updateMessageLogUrl });
 
 
-    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogUpdated', eventDate: message?.creationTime });
+    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogUpdated' });
 
     return {
         logId: addLogRes.data.id,
