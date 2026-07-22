@@ -10,12 +10,15 @@ const Sequelize = require('sequelize');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { raw } = require('mysql2');
 const { ensureSchemaOnce } = require('../servicenow-models/migrate');
+const { runRcAccountIdBackfillOnce } = require('../servicenow-models/backfillRcAccountId');
 const models = initModels(sequelize);
 // On boot, add any columns/tables that exist in the models but are missing in the database
 // (add-only, never changes existing data), so no manual SQL is needed per environment.
 // Kicked off here so it is usually done before the first request; functions that read these
 // tables also await ensureSchemaOnce as a guard in case a request arrives mid-migration.
-ensureSchemaOnce(sequelize, models);
+// Once the schema is ready, run the one-time proactive rcAccountId back-fill (fills companies
+// whose isRcAccountId flag is still unset from any connected user that has a real id).
+ensureSchemaOnce(sequelize, models).then(() => runRcAccountIdBackfillOnce(models));
 const { secondsToHoursMinutesSeconds } = require('@app-connect/core/lib/util');
 const fs = require("fs");
 const path = require("path");
