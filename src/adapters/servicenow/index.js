@@ -464,7 +464,19 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
             }
         };
     }
-    
+
+    // Back-fill the RingCentral account id for existing companies once.
+    // Guard: only update when we actually have an rcAccountId on the logged-in user.
+    try {
+        const rcAccountId = user?.dataValues?.rcAccountId;
+        if (!companyData.isRcAccountId && rcAccountId) {
+            await companyData.update({ rcAccountId, isRcAccountId: true });
+            console.log("Company Value updated")
+        }
+    } catch (err) {
+        console.log('Failed to back-fill rcAccountId for company:', err?.message);
+    }
+
     let states = [];
     let interactionType = [];
     try {
