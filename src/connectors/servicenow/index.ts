@@ -22,7 +22,7 @@ const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
 const apiLog = require('../shared/apiLogger');
-const { trackAnalytics } = require('../servicenow-core/analytics');
+const { trackAnalytics } = require('../shared/analytics');
 const serviceNowApiClient = axios.create();
 
 function stringifyForLog(value, maxLength = 1200) {

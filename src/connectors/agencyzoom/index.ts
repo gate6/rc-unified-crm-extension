@@ -13,7 +13,7 @@ const models = sequelize ? initModels(sequelize) : null;
 
 const licenseHelper = require('../shared/license');
 const apiLog = require('../shared/apiLogger');
-const { trackAnalytics } = require('../servicenow-core/analytics');
+const { trackAnalytics } = require('../shared/analytics');
 
 const AZ_BASE_URL = "https://api.agencyzoom.com/v1/api";
 
