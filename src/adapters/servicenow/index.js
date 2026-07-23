@@ -9,7 +9,16 @@ const { initModels } = require('../servicenow-models/init-models');
 const Sequelize = require('sequelize');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { raw } = require('mysql2');
+const { ensureSchemaOnce } = require('../servicenow-models/migrate');
+const { runRcAccountIdBackfillOnce } = require('../servicenow-models/backfillRcAccountId');
 const models = initModels(sequelize);
+// On boot, add any columns/tables that exist in the models but are missing in the database
+// (add-only, never changes existing data), so no manual SQL is needed per environment.
+// Kicked off here so it is usually done before the first request; functions that read these
+// tables also await ensureSchemaOnce as a guard in case a request arrives mid-migration.
+// Once the schema is ready, run the one-time proactive rcAccountId back-fill (fills companies
+// whose isRcAccountId flag is still unset from any connected user that has a real id).
+ensureSchemaOnce(sequelize, models).then(() => runRcAccountIdBackfillOnce(models));
 const { secondsToHoursMinutesSeconds } = require('@app-connect/core/lib/util');
 const fs = require("fs");
 const path = require("path");
@@ -92,6 +101,7 @@ async function getOauthInfo(requestData) {
     // }
     console.log("getOauthInfo requestData", requestData);
 
+    await ensureSchemaOnce(sequelize, models);
     const companyData = await models.companies.findOne({
         where: {
             hostname: requestData.hostname
@@ -161,6 +171,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
     // ------------------------------------------------------
     try {
 
+        await ensureSchemaOnce(sequelize, models);
         const getCompanyDetails = await models.companies.findOne({
             where: {
                 hostname: hostname
@@ -440,6 +451,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
 
     console.log("hostname", hostname)
 
+    await ensureSchemaOnce(sequelize, models);
     const companyData = await models.companies.findOne({
         where: {
             hostname: hostname,
@@ -464,7 +476,19 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
             }
         };
     }
-    
+
+    // Back-fill the RingCentral account id for existing companies once.
+    // Guard: only update when we actually have an rcAccountId on the logged-in user.
+    try {
+        const rcAccountId = user?.dataValues?.rcAccountId;
+        if (!companyData.isRcAccountId && rcAccountId) {
+            await companyData.update({ rcAccountId, isRcAccountId: true });
+            console.log("Company Value updated")
+        }
+    } catch (err) {
+        console.log('Failed to back-fill rcAccountId for company:', err?.message);
+    }
+
     let states = [];
     let interactionType = [];
     try {
@@ -605,6 +629,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     const userInfo = await getHostname(user.dataValues.hostname);
 
+    await ensureSchemaOnce(sequelize, models);
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
             hostname: userInfo.hostname,
@@ -919,6 +944,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
+    await ensureSchemaOnce(sequelize, models);
     const { userDetailsPath }  = await models.companies.findOne({
         where: {
             hostname: hostname,
@@ -1139,6 +1165,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     const instanceId = userInfo.instanceId;
     const hostname = userInfo.hostname;
 
+    await ensureSchemaOnce(sequelize, models);
     const companyData = await models.companies.findOne({
         where: {
             hostname: hostname,
