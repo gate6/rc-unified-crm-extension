@@ -959,6 +959,7 @@ ${faxDocLink}
     // Same write-back as createCallLog: append the number this message came in on to the CRM customer.
     const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ message });
     await appendContactNumberIfNew({ user, contactInfo, receivedNumber, auth, tenantId, stAppKey, logPrefix: '[ServiceTitan] createMessageLog:' });
+    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogCreated', eventDate: message?.creationTime });
 
     return {
         logId: addLogRes.data.id,
