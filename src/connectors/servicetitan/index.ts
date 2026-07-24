@@ -12,7 +12,7 @@ const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel'
 const qs = require('qs');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
-const { trackAnalytics } = require('../servicenow-core/analytics');
+const { trackAnalytics } = require('../shared/analytics');
 const models = sequelize ? initModels(sequelize) : null;
 const licenseHelper = require('../shared/license');
 const apiLog = require('../shared/apiLogger');
@@ -1102,7 +1102,7 @@ ${faxDocLink}
     apiLog.logSuccess('ServiceTitan', 'updateMessageLog', { logId: addLogRes.data.id, contactId, apiEndpoint: updateMessageLogUrl });
 
 
-    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogUpdated', eventDate: message?.creationTime });
+    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogUpdated' });
 
     return {
         logId: addLogRes.data.id,
