@@ -5,7 +5,7 @@ const moment = require("moment");
 const { encode, decoded } = require("@app-connect/core/lib/encode");
 const { parsePhoneNumber } = require("awesome-phonenumber");
 const { UserModel } = require('@app-connect/core/models/userModel');
-const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
+const phoneWriteback = require('../shared/phoneWriteback');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
@@ -361,6 +361,128 @@ function normalizePhone(phone) {
   return parsed.valid ? parsed.number.significant : phone;
 }
 
+// Create an AgencyZoom customer carrying `phoneNumber`, split `name` into first/last, and
+// derive the agentId from the JWT the same way createContact does. Shared by createContact and
+// the log write-back so both build the customer identically. Returns { id, name }.
+async function createCustomerRecord({ auth, name, phoneNumber }) {
+  const phone = normalizePhone(phoneNumber);
+  const [firstName, ...rest] = (name || '').trim().split(" ");
+  const lastName = rest.join(" ") || firstName;
+  const email = `${phone}@ringcentral.local`;
+
+  let agentId;
+  try {
+    const jwtPayload = JSON.parse(Buffer.from(auth.split(".")[1], "base64").toString());
+    agentId = parseInt(Buffer.from(jwtPayload?.jti?.agent || "", "base64").toString(), 10);
+  } catch (err) {
+    agentId = undefined;
+  }
+
+  const res = await agencyZoomApiClient.post(
+    `${AZ_BASE_URL}/customers/create`,
+    { firstname: firstName, lastname: lastName, phone, email, agentId },
+    { headers: { Authorization: `Bearer ${auth}` }, _operation: 'createContact' }
+  );
+
+  return { id: res.data.id, name: `${firstName} ${lastName}`.trim() };
+}
+
+// Write `phoneNumber` onto an existing AgencyZoom customer, preserving its name/email so the
+// PUT (which replaces the record) doesn't blank them. Used to fill an empty phone field rather
+// than creating a duplicate customer. Endpoint: PUT /v1/api/customers/{customerId} with a
+// CustomerUpdateRequest body (per the AgencyZoom OpenAPI spec). Throws on failure.
+async function updateCustomerPhone({ auth, customer, phoneNumber }) {
+  const phone = normalizePhone(phoneNumber);
+  await agencyZoomApiClient.put(
+    `${AZ_BASE_URL}/customers/${customer.id}`,
+    {
+      firstname: customer.firstname,
+      lastname: customer.lastname,
+      email: customer.email,
+      phone
+    },
+    { headers: { Authorization: `Bearer ${auth}` }, _operation: 'updateContact' }
+  );
+}
+
+// AgencyZoom customers hold a single phone. Decide, for the number this interaction came in on,
+// where to log:
+//   - already on the picked customer          -> log against it unchanged (no-op)
+//   - another customer already has this number -> reuse that customer (never duplicate the number)
+//   - picked customer's phone is EMPTY         -> fill it in on the SAME customer
+//   - picked customer has a DIFFERENT number   -> create a NEW customer and log there
+// Returns the customer to log against. Falls back to the picked contact if anything fails.
+//
+// The picked customer's stored number is NOT on contactInfo — core sets contactInfo.phoneNumber
+// to the CALL's number — so read the customer by id and compare. If that read fails we leave the
+// picked contact untouched rather than risk a duplicate.
+async function resolveLogTarget({ auth, contactInfo, receivedNumber, logPrefix }) {
+  if (!receivedNumber || !contactInfo?.id) return contactInfo;
+
+  let customer = null; // null = couldn't read
+  try {
+    const res = await agencyZoomApiClient.get(
+      `${AZ_BASE_URL}/customers/${contactInfo.id}`,
+      { headers: { Authorization: `Bearer ${auth}` }, _operation: 'createCallLog' }
+    );
+    customer = res.data || null;
+  } catch (err) {
+    console.warn(`${logPrefix} could not read customer to compare numbers:`, err?.response?.data || err.message);
+  }
+  if (!customer) return contactInfo;
+
+  const existingPhone = (customer.phone || '').toString();
+  if (!phoneWriteback.isNewNumberForContact(receivedNumber, existingPhone)) return contactInfo; // picked already has it
+
+  // Identity is NAME + number: the user picked a name (e.g. "emma"), so reuse only a customer with
+  // that SAME name that already carries this number — never a different-named customer who happens
+  // to own the number (e.g. "freya"). This both stops duplicate emmas AND stops the log landing on
+  // freya. If no same-named customer has the number, we fall through to fill/create so a customer
+  // of the picked name ends up owning it.
+  const pickedName = String(contactInfo?.name || '').trim().toLowerCase();
+  try {
+    const searchRes = await agencyZoomApiClient.post(
+      `${AZ_BASE_URL}/customers`,
+      { phone: normalizePhone(receivedNumber) },
+      { headers: { Authorization: `Bearer ${auth}` }, _operation: 'createCallLog' }
+    );
+    const match = (searchRes.data?.customers || []).find(c => {
+      if (String(c.id) === String(contactInfo.id)) return false;
+      const cName = (c.housename || [c.firstname, c.middlename, c.lastname].filter(Boolean).join(' ')).trim().toLowerCase();
+      return cName === pickedName;
+    });
+    if (match) {
+      const matchName = match.housename || [match.firstname, match.middlename, match.lastname].filter(Boolean).join(' ');
+      console.log(`${logPrefix} reusing existing same-name customer for number:`, match.id);
+      return { ...contactInfo, id: match.id, name: matchName || contactInfo.name, phone: receivedNumber, phoneNumber: receivedNumber };
+    }
+  } catch (err) {
+    console.warn(`${logPrefix} could not search customers for existing number:`, err?.response?.data || err.message);
+  }
+
+  // No customer has this number yet. If the picked customer's phone is empty, fill it in place.
+  if (!existingPhone.replace(/\D/g, '')) {
+    try {
+      await updateCustomerPhone({ auth, customer, phoneNumber: receivedNumber });
+      console.log(`${logPrefix} filled empty phone on existing customer:`, contactInfo.id);
+      return { ...contactInfo, phone: receivedNumber, phoneNumber: receivedNumber };
+    } catch (err) {
+      console.warn(`${logPrefix} failed to fill empty phone; creating new customer instead:`, err?.response?.data || err.message);
+      // fall through to create a new customer
+    }
+  }
+
+  // Picked customer holds a different number and none exists for this one: create a new customer.
+  try {
+    const created = await createCustomerRecord({ auth, name: contactInfo?.name, phoneNumber: receivedNumber });
+    console.log(`${logPrefix} created new customer for new number:`, created.id);
+    return { ...contactInfo, id: created.id, name: created.name, phone: receivedNumber, phoneNumber: receivedNumber };
+  } catch (err) {
+    console.warn(`${logPrefix} failed to create customer for new number:`, err?.response?.data || err.message);
+    return contactInfo;
+  }
+}
+
 /* ---------------- FIND CONTACT ---------------- */
 
 async function findContact({ user, phoneNumber }) {
@@ -398,24 +520,6 @@ async function findContact({ user, phoneNumber }) {
     // If multiple contacts found, pick first for auto logging
     if (matchedContactInfo.length > 1) {
       matchedContactInfo = [matchedContactInfo[0]];
-    }
-
-    // No contacts found in AgencyZoom — delete stale cache entry if it exists
-    if (matchedContactInfo.length === 0 && user?.rcAccountId) {
-      try {
-        const deleted = await AccountDataModel.destroy({
-          where: {
-            rcAccountId: user.rcAccountId,
-            platformName: 'agencyzoom',
-            dataKey: `contact-${phoneNumber}`
-          }
-        });
-        if (deleted > 0) {
-          console.log('[AgencyZoom] findContact: deleted stale cache for phone:', phoneNumber);
-        }
-      } catch (err) {
-        console.warn('[AgencyZoom] findContact: failed to delete stale cache:', err.message);
-      }
     }
 
     matchedContactInfo.push({
@@ -513,49 +617,14 @@ async function createContact({ user, phoneNumber, newContactName }) {
 
   const auth = await getRefreshedAuthToken(user);
 
-  const phone = normalizePhone(phoneNumber);
+  const created = await createCustomerRecord({ auth, name: newContactName, phoneNumber });
 
-  const [firstName, ...rest] = newContactName.split(" ");
-  const lastName = rest.join(" ") || firstName;
-
-  const email = `${phone}@ringcentral.local`;
-
-  let agentId;
-  try {
-    const jwtPayload = JSON.parse(
-      Buffer.from(auth.split(".")[1], "base64").toString()
-    );
-    agentId = parseInt(
-      Buffer.from(jwtPayload?.jti?.agent || "", "base64").toString(),
-      10
-    );
-  } catch (err) {
-    agentId = undefined;
-  }
-
-  const res = await agencyZoomApiClient.post(
-    `${AZ_BASE_URL}/customers/create`,
-    {
-      firstname: firstName,
-      lastname: lastName,
-      phone,
-      email,
-      agentId
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${auth}`
-      },
-      _operation: 'createContact'
-    }
-  );
-
-  apiLog.logSuccess('AgencyZoom', 'createContact', { contactId: res.data.id, phoneNumber, apiEndpoint: `${AZ_BASE_URL}/customers/create` });
+  apiLog.logSuccess('AgencyZoom', 'createContact', { contactId: created.id, phoneNumber, apiEndpoint: `${AZ_BASE_URL}/customers/create` });
 
   return {
     contactInfo: {
-      id: res.data.id,
-      name: `${firstName} ${lastName}`
+      id: created.id,
+      name: created.name
     },
     returnMessage: {
       message: "Contact created.",
@@ -574,7 +643,13 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
   const auth = await getRefreshedAuthToken(user);
   const logId = `az-log-${Date.now().toString(36)}`;
 
-  apiLog.logStart('AgencyZoom', 'createCallLog', { contactId: contactInfo?.id, logId, direction: callLog?.direction, duration: callLog?.duration });
+  // If this call came in on a number the picked contact doesn't have, log against a new customer
+  // carrying that number (AgencyZoom holds a single phone, so it can't be appended). `target` is
+  // the picked contact otherwise.
+  const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ callLog });
+  const target = await resolveLogTarget({ auth, contactInfo, receivedNumber, logPrefix: '[AgencyZoom] createCallLog:' });
+
+  apiLog.logStart('AgencyZoom', 'createCallLog', { contactId: target?.id, logId, direction: callLog?.direction, duration: callLog?.duration });
 
   // Never leave the subject blank (matches ServiceTitan's create-side fallback).
   const defaultSubject = `${callLog?.direction || ''} Call ${callLog?.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo?.name || 'contact'}`.trim();
@@ -615,16 +690,16 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
   });
 
   await agencyZoomApiClient.post(
-    `${AZ_BASE_URL}/customers/${contactInfo.id}/notes`,
+    `${AZ_BASE_URL}/customers/${target.id}/notes`,
     { note: noteBody },
     { headers: { Authorization: `Bearer ${auth}` }, _operation: 'createCallLog' }
   );
 
-  apiLog.logSuccess('AgencyZoom', 'createCallLog', { logId, contactId: Number(contactInfo.id), apiEndpoint: `${AZ_BASE_URL}/customers/${contactInfo.id}/notes` });
+  apiLog.logSuccess('AgencyZoom', 'createCallLog', { logId, contactId: Number(target.id), apiEndpoint: `${AZ_BASE_URL}/customers/${target.id}/notes` });
 
   return {
     logId,
-    contactId: Number(contactInfo.id),
+    contactId: Number(target.id),
     returnMessage: {
       messageType: 'success',
       message: 'Call log created',
@@ -884,7 +959,12 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
     recordingLink ? "Voicemail" :
       (faxDocLink ? "Fax" : "SMS");
 
-  apiLog.logStart('AgencyZoom', 'createMessageLog', { contactId: contactInfo?.id, logId, messageType, direction: message?.direction });
+  // Same as createCallLog: if this message came in on a number the picked contact lacks, log
+  // against a new customer carrying that number. `target` is the picked contact otherwise.
+  const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ message });
+  const target = await resolveLogTarget({ auth, contactInfo, receivedNumber, logPrefix: '[AgencyZoom] createMessageLog:' });
+
+  apiLog.logStart('AgencyZoom', 'createMessageLog', { contactId: target?.id, logId, messageType, direction: message?.direction });
 
   let subject = "";
   let description = "";
@@ -919,16 +999,16 @@ ${description}
 `;
 
   await agencyZoomApiClient.post(
-    `${AZ_BASE_URL}/customers/${contactInfo.id}/notes`,
+    `${AZ_BASE_URL}/customers/${target.id}/notes`,
     { note: noteBody },
     { headers: { Authorization: `Bearer ${auth}` }, _operation: 'createMessageLog' }
   );
 
-  apiLog.logSuccess('AgencyZoom', 'createMessageLog', { logId, contactId: Number(contactInfo.id), apiEndpoint: `${AZ_BASE_URL}/customers/${contactInfo.id}/notes` });
+  apiLog.logSuccess('AgencyZoom', 'createMessageLog', { logId, contactId: Number(target.id), apiEndpoint: `${AZ_BASE_URL}/customers/${target.id}/notes` });
 
   return {
     logId,
-    contactId: Number(contactInfo.id),
+    contactId: Number(target.id),
     returnMessage: {
       message: "Message logged in AgencyZoom",
       messageType: "success",
