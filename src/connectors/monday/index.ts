@@ -5,7 +5,7 @@ const { parsePhoneNumber } = require('awesome-phonenumber')
 const { initModels } = require('../servicenow-models/init-models');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { UserModel } = require('@app-connect/core/models/userModel');
-const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
+const phoneWriteback = require('../shared/phoneWriteback');
 const { trackAnalytics } = require('../servicenow-core/analytics');
 const models = sequelize ? initModels(sequelize) : null;
 const FormData = require('form-data')
@@ -203,53 +203,6 @@ function assertNoGraphqlErrors(res, context) {
 // hash from a stale record) is invalid and must not be sent to the API.
 function isNumericMondayId(id) {
   return id != null && /^\d+$/.test(String(id));
-}
-
-// Resolve the board's "Call Logs" long-text column id, creating the column if it does
-// not exist yet. The id is cached per board+name; throws with the Monday GraphQL error
-// message when the column can be neither found nor created.
-async function getOrCreateCallLogsColumn({ accessToken, boardId, columnName = 'Call Logs', operation = 'getOrCreateCallLogsColumn' }) {
-  let columnId = await getColumnIdByName({
-    accessToken,
-    boardId,
-    columnName,
-    operation
-  })
-
-  if (columnId) {
-    return columnId
-  }
-
-  const res = await mondayRequest(
-    accessToken,
-    `
-    mutation ($boardId: ID!, $title: String!) {
-      create_column(
-        board_id: $boardId,
-        title: $title,
-        column_type: long_text
-      ) {
-        id
-      }
-    }
-    `,
-    {
-      boardId: Number(boardId),
-      title: columnName
-    },
-    { operation }
-  )
-
-  assertNoGraphqlErrors(res, `create "${columnName}" column`)
-  if (!res?.data?.create_column?.id) {
-    throw new Error(`Failed to create "${columnName}" column in Monday`)
-  }
-
-  const newColumnId = res.data.create_column.id
-
-  columnIdCache.set(`${boardId}:${columnName}`, newColumnId)
-
-  return newColumnId
 }
 
 async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'Files', operation = 'getOrCreateFilesColumn' }) {
@@ -925,17 +878,6 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
       }
     }
 
-    if (matchedContactInfo.length === 0 && user?.rcAccountId) {
-      try {
-        const cachePlatform = user?.dataValues?.platform || user?.platform || 'gate6.monday'
-        const deleted = await AccountDataModel.destroy({
-          where: { rcAccountId: user.rcAccountId, platformName: cachePlatform, dataKey: `contact-${phoneNumber}` }
-        })
-        if (deleted > 0) console.log('[Monday] findContact: deleted stale cache for phone:', phoneNumber)
-      } catch (err) {
-        console.warn('[Monday] findContact: failed to delete stale cache:', err.message)
-      }
-    }
   }
 
   matchedContactInfo.push({
@@ -1033,6 +975,166 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
   return { successful: true, matchedContactInfo }
 }
 
+// Monday "phone"-type columns expect a JSON object { phone, countryShortName }; a plain string
+// is rejected. Text columns named "Phone" accept a plain string. Callers try the structured
+// format first, then fall back to the plain string.
+function buildMondayPhoneVariants(phoneNumber) {
+  const parsed = parsePhoneNumber(phoneNumber || '')
+  const e164 = parsed?.valid ? parsed.number.e164 : (phoneNumber || '')
+  const countryShortName = parsed?.valid ? parsed.regionCode : ''
+  return [
+    countryShortName ? { phone: e164, countryShortName } : { phone: e164 },
+    e164
+  ]
+}
+
+// Write `phoneNumber` into an existing item's phone column (used to fill an empty field on a
+// contact picked by name, rather than creating a duplicate item). Throws on failure.
+async function updateItemPhone({ accessToken, boardId, itemId, phoneColumnId, phoneNumber, operation }) {
+  let lastError = ''
+  for (const variant of buildMondayPhoneVariants(phoneNumber)) {
+    const res = await mondayRequest(
+      accessToken,
+      `
+      mutation ($itemId: ID!, $boardId: ID!, $columnId: String!, $value: JSON!) {
+        change_column_value(item_id: $itemId, board_id: $boardId, column_id: $columnId, value: $value) {
+          id
+        }
+      }
+      `,
+      { itemId: String(itemId), boardId: String(boardId), columnId: String(phoneColumnId), value: JSON.stringify(variant) },
+      { operation }
+    )
+    if (!res?.errors?.length && res?.data?.change_column_value?.id) return true
+    lastError = res?.errors?.[0]?.message || 'unknown error'
+    console.warn(`[Monday][${operation}] change_column_value attempt failed; trying next phone format`, { boardId, itemId, variant, error: lastError })
+  }
+  throw new Error(lastError || 'change_column_value failed')
+}
+
+// Create an item named `name` on `boardId` with `phoneNumber` written into `phoneColumnId`.
+// Shared by createContact and the log write-back so both build the item identically. Returns the
+// created { id, name } or throws on failure.
+async function createItemOnBoard({ accessToken, boardId, phoneColumnId, name, phoneNumber, operation }) {
+  let created = null
+  let lastError = ''
+  for (const variant of buildMondayPhoneVariants(phoneNumber)) {
+    const res = await mondayRequest(
+      accessToken,
+      `
+      mutation ($name: String!, $values: JSON!) {
+        create_item(
+          board_id: ${boardId},
+          item_name: $name,
+          column_values: $values
+        ) {
+          id
+          name
+        }
+      }
+      `,
+      {
+        name,
+        values: JSON.stringify({ [phoneColumnId]: variant })
+      },
+      { operation }
+    )
+    if (!res?.errors?.length && res?.data?.create_item?.id) {
+      created = res.data.create_item
+      break
+    }
+    lastError = res?.errors?.[0]?.message || 'unknown error'
+    console.warn(`[Monday][${operation}] create_item attempt failed; trying next phone format`, { boardId, variant, error: lastError })
+  }
+
+  if (!created) throw new Error(lastError || 'create_item failed')
+  return created
+}
+
+// Read the phone-column text of a single item by id. Returns the string (possibly empty) or
+// null when it couldn't be read, so callers can distinguish "no number" from "unknown".
+async function getItemPhoneText({ accessToken, itemId, phoneColumnId, operation }) {
+  if (!itemId || !phoneColumnId) return null
+  try {
+    const res = await mondayRequest(
+      accessToken,
+      `
+      query ($ids: [ID!], $cols: [String!]) {
+        items(ids: $ids) { column_values(ids: $cols) { text } }
+      }
+      `,
+      { ids: [String(itemId)], cols: [String(phoneColumnId)] },
+      { operation }
+    )
+    if (res?.errors?.length) return null
+    return res?.data?.items?.[0]?.column_values?.[0]?.text ?? ''
+  } catch (e) {
+    console.warn(`[Monday][${operation}] failed to read item phone`, { itemId, message: e.message })
+    return null
+  }
+}
+
+// Monday phone columns hold a single value. Decide, for the number this interaction came in on,
+// where to log:
+//   - already on the picked item          -> log against it unchanged (no-op)
+//   - another item already has this number -> reuse that item (never duplicate the number)
+//   - picked item's phone is EMPTY         -> fill it in on the SAME item
+//   - picked item has a DIFFERENT number   -> create a NEW item carrying this number and log there
+// Returns the item to log against. Falls back to the picked contact if anything fails, so
+// logging never breaks.
+//
+// The picked item's stored number is NOT on contactInfo — core sets contactInfo.phoneNumber to
+// the CALL's number — so read the item's phone column and compare. If that read fails we leave
+// the picked contact untouched rather than risk a duplicate.
+async function resolveLogTarget({ user, accessToken, contactInfo, boardId, receivedNumber, logPrefix }) {
+  if (!receivedNumber || !contactInfo?.id) return contactInfo
+  try {
+    const targetBoardId = boardId || await getBoardId({ user, accessToken, operation: 'createLog' })
+    const phoneColumnId = targetBoardId ? await getPhoneColumnId({ accessToken, boardId: targetBoardId, operation: 'createLog' }) : null
+    if (!targetBoardId || !phoneColumnId) return contactInfo
+
+    const existingPhone = await getItemPhoneText({ accessToken, itemId: contactInfo.id, phoneColumnId, operation: 'createLog' })
+    if (existingPhone === null) return contactInfo // couldn't verify → don't risk a duplicate
+    if (!phoneWriteback.isNewNumberForContact(receivedNumber, existingPhone)) return contactInfo // picked item already has it
+
+    // The received number isn't on the picked item. Identity is NAME + number: the user picked a
+    // name (e.g. "emma"), so reuse only an item with that SAME name that already carries this
+    // number — never a different-named contact who happens to own the number (e.g. "freya"). This
+    // both stops duplicate emmas AND stops the log landing on freya. If no same-named item has the
+    // number, we fall through to fill/create so an item of the picked name ends up owning it.
+    const pickedName = String(contactInfo?.name || '').trim().toLowerCase()
+    const existingItems = await searchBoardByPhone({ accessToken, boardId: targetBoardId, phoneColumnId, phone: receivedNumber, operation: 'createLog' })
+    const reusable = (existingItems || []).find(it =>
+      String(it.id) !== String(contactInfo.id) &&
+      String(it.name || '').trim().toLowerCase() === pickedName
+    )
+    if (reusable) {
+      console.log(`${logPrefix} reusing existing same-name item for number:`, reusable.id)
+      return { ...contactInfo, id: reusable.id, name: reusable.name, boardId: String(targetBoardId), phone: receivedNumber, phoneNumber: receivedNumber }
+    }
+
+    // No item has this number yet. If the picked item's phone is empty, fill it in place.
+    if (!String(existingPhone).replace(/\D/g, '')) {
+      try {
+        await updateItemPhone({ accessToken, boardId: targetBoardId, itemId: contactInfo.id, phoneColumnId, phoneNumber: receivedNumber, operation: 'createLog' })
+        console.log(`${logPrefix} filled empty phone on existing item:`, contactInfo.id)
+        return { ...contactInfo, boardId: String(targetBoardId), phone: receivedNumber, phoneNumber: receivedNumber }
+      } catch (err) {
+        console.warn(`${logPrefix} failed to fill empty phone; creating new item instead:`, err.message)
+        // fall through to create a new item
+      }
+    }
+
+    // Picked item holds a different number and none exists for this one: create a new item.
+    const created = await createItemOnBoard({ accessToken, boardId: targetBoardId, phoneColumnId, name: contactInfo?.name, phoneNumber: receivedNumber, operation: 'createLog' })
+    console.log(`${logPrefix} created new item for new number:`, created.id)
+    return { ...contactInfo, id: created.id, name: created.name, boardId: String(targetBoardId), phone: receivedNumber, phoneNumber: receivedNumber }
+  } catch (err) {
+    console.warn(`${logPrefix} failed to resolve log target:`, err.message)
+    return contactInfo
+  }
+}
+
 async function createContact({ phoneNumber, newContactName, accessToken, authHeader, user }) {
   apiLog.logStart('Monday', 'createContact', { phoneNumber, newContactName });
   const licenseError = await validateLicenseOrFail(user, 'createContact');
@@ -1052,54 +1154,15 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
     }
   }
 
-  // Monday "phone"-type columns expect a JSON object { phone, countryShortName }; a
-  // plain string is rejected. Text columns named "Phone" accept a plain string. Try
-  // the structured format first, then fall back to the plain string.
-  const parsed = parsePhoneNumber(phoneNumber || '')
-  const e164 = parsed?.valid ? parsed.number.e164 : (phoneNumber || '')
-  const countryShortName = parsed?.valid ? parsed.regionCode : ''
-  const phoneVariants = [
-    countryShortName ? { phone: e164, countryShortName } : { phone: e164 },
-    e164
-  ]
-
   let created = null
-  let lastError = ''
-  for (const variant of phoneVariants) {
-    const res = await mondayRequest(
-      resolvedAccessToken,
-      `
-      mutation ($name: String!, $values: JSON!) {
-        create_item(
-          board_id: ${boardId},
-          item_name: $name,
-          column_values: $values
-        ) {
-          id
-          name
-        }
-      }
-      `,
-      {
-        name: newContactName,
-        values: JSON.stringify({ [phoneColumnId]: variant })
-      },
-      { operation: 'createContact' }
-    )
-    if (!res?.errors?.length && res?.data?.create_item?.id) {
-      created = res.data.create_item
-      break
-    }
-    lastError = res?.errors?.[0]?.message || 'unknown error'
-    console.warn('[Monday][createContact] create_item attempt failed; trying next phone format', { boardId, variant, error: lastError })
-  }
-
-  if (!created) {
+  try {
+    created = await createItemOnBoard({ accessToken: resolvedAccessToken, boardId, phoneColumnId, name: newContactName, phoneNumber, operation: 'createContact' })
+  } catch (err) {
     return {
       contactInfo: null,
       returnMessage: {
         messageType: 'error',
-        message: `Failed to create contact in Monday: ${lastError}`,
+        message: `Failed to create contact in Monday: ${err.message}`,
         ttl: 3000
       }
     }
@@ -1162,6 +1225,11 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   // the board NAME for display, so it can no longer double as the board id.
   const persistedPai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {};
   const boardId = String(contactInfo?.boardId || persistedPai.boardId || '') || null;
+  // If this call came in on a number the picked contact lacks, log against a NEW item carrying
+  // that number (Monday's phone column holds a single value). `target` is the picked contact
+  // otherwise; everything below logs against target.id.
+  const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ callLog });
+  const target = await resolveLogTarget({ user, accessToken: resolvedAccessToken, contactInfo, boardId, receivedNumber, logPrefix: '[Monday] createCallLog:' });
   // Fall back to a generated subject when no custom subject is supplied — matches every
   // other connector (clio/insightly/netsuite) and avoids the blank "Subject:" line.
   const defaultSubject = `${callLog.direction} Call ${callLog.direction === 'Outbound' ? 'to' : 'from'} ${contactInfo?.name || 'contact'}`
@@ -1248,18 +1316,18 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
     }
     `,
     {
-      itemId: Number(contactInfo.id),
+      itemId: Number(target.id),
       body
     },
     { operation: 'createCallLog' }
   )
-  assertNoGraphqlErrors(res, `createCallLog (create_update itemId=${contactInfo.id})`)
+  assertNoGraphqlErrors(res, `createCallLog (create_update itemId=${target.id})`)
 
   const updateId = res?.data?.create_update?.id
   if (!updateId) {
-    throw new Error(`Monday createCallLog: create_update returned no id for itemId=${contactInfo.id}`)
+    throw new Error(`Monday createCallLog: create_update returned no id for itemId=${target.id}`)
   }
-  apiLog.logSuccess('Monday', 'createCallLog', { logId: updateId, contactId: Number(contactInfo.id), boardId })
+  apiLog.logSuccess('Monday', 'createCallLog', { logId: updateId, contactId: Number(target.id), boardId })
 
   // ---- Recording Upload ----
   // Only here is the board id actually needed. Use the one carried on the contact; resolve
@@ -1279,7 +1347,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
       await uploadToMonday({
         s3Url,
         accessToken: resolvedAccessToken,
-        itemId: Number(contactInfo.id),
+        itemId: Number(target.id),
         fileName,
         boardId: uploadBoardId
       })
@@ -1290,7 +1358,7 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
 
   return {
     logId: updateId,
-    contactId: Number(contactInfo.id),
+    contactId: Number(target.id),
     returnMessage: {
       message: "Call log created",
       messageType: "success",
@@ -1643,13 +1711,12 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, rec
 
   const resolvedAccessToken = accessToken || user?.accessToken
   const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user, operation: 'createMessageLog' });
-  const itemId = Number(contactInfo.id)
-  const callLogsColumnId = await getOrCreateCallLogsColumn({
-    accessToken: resolvedAccessToken,
-    boardId,
-    columnName: 'Call Logs',
-    operation: 'createMessageLog'
-  })
+  // If this message came in on a number the picked contact lacks, log against a NEW item
+  // carrying that number (Monday's phone column holds a single value). `target` is the picked
+  // contact otherwise.
+  const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ message });
+  const target = await resolveLogTarget({ user, accessToken: resolvedAccessToken, contactInfo, boardId, receivedNumber, logPrefix: '[Monday] createMessageLog:' });
+  const itemId = Number(target.id)
   const messageType =
     recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS')
   let body = ""
@@ -1694,31 +1761,6 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, rec
   }
 
   const updateId = res.data.create_update.id
-
-  if (callLogsColumnId) {
-    await mondayRequest(
-      resolvedAccessToken,
-      `
-      mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
-        change_simple_column_value(
-          board_id: $boardId,
-          item_id: $itemId,
-          column_id: $columnId,
-          value: $value
-        ) {
-          id
-        }
-      }
-      `,
-      {
-        boardId,
-        itemId,
-        columnId: callLogsColumnId,
-        value: body
-      },
-      { operation: 'createMessageLog' }
-    )
-  }
 
   if (recordingLink || faxDocLink) {
     // Prefer the tokenized download links — the display links (media-reader pages)
@@ -1770,12 +1812,6 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
   const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user, operation: 'updateMessageLog' });
   const itemId = Number(contactInfo.id)
   const updateId = existingMessageLog.thirdPartyLogId
-  const callLogsColumnId = await getOrCreateCallLogsColumn({
-    accessToken: resolvedAccessToken,
-    boardId,
-    columnName: 'Call Logs',
-    operation: 'updateMessageLog'
-  })
   const messageType =
     recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS')
 
@@ -1932,31 +1968,6 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     } catch (e) {
       console.warn('[Monday][updateMessageLog] failed to repoint thirdPartyLogId', { newThreadId, message: e.message })
     }
-  }
-
-  if (callLogsColumnId) {
-    await mondayRequest(
-      resolvedAccessToken,
-      `
-      mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
-        change_simple_column_value(
-          board_id: $boardId,
-          item_id: $itemId,
-          column_id: $columnId,
-          value: $value
-        ) {
-          id
-        }
-      }
-      `,
-      {
-        boardId,
-        itemId,
-        columnId: callLogsColumnId,
-        value: updatedBody
-      },
-      { operation: 'updateMessageLog' }
-    )
   }
 
   if (recordingLink || faxDocLink) {
