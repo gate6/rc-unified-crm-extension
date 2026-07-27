@@ -1105,7 +1105,6 @@ async function getCallLog({ user, callLogId, authHeader }) {
 }
 
 async function updateCallLog({ user, existingCallLog, authHeader, recordingLink, recordingDownloadLink, subject, note, startTime, duration, result, aiNote, transcript, additionalSubmission }) {
-    console.log("Additional Submission: ", additionalSubmission)
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
