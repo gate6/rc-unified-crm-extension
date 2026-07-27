@@ -5,7 +5,6 @@ const { parsePhoneNumber } = require('awesome-phonenumber');
 const { saveUserInfo } = require('../servicenow-core/auth');
 const { findStateValueByName, findStateValueById, findTypeValueByName, findTypeValueById, getAllAccounts, applyClosedDatesIfNeeded, formatDuration } = require('../servicenow-core/interaction');
 const { UserModel } = require('@app-connect/core/models/userModel');
-const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
 const managedOAuthCore = require('@app-connect/core/handlers/managedOAuth');
 const Op = require('sequelize').Op;
 const { initModels } = require('../servicenow-models/init-models');
@@ -22,6 +21,8 @@ const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
 const apiLog = require('../shared/apiLogger');
+const { trackAnalytics } = require('../shared/analytics');
+const phoneWriteback = require('../shared/phoneWriteback');
 const serviceNowApiClient = axios.create();
 
 function stringifyForLog(value, maxLength = 1200) {
@@ -148,7 +149,27 @@ async function getHostname(hostname) {
     return existingUser;
 }
 
-async function getOauthInfo({ hostname, rcAccountId } = {}) {
+// Managed-OAuth credentials are stored per (rcAccountId, platformName), so resolving the
+// right platform key matters — this connector is registered under several of them
+// (servicenow, gate6.servicenow, ...; see src/index.ts) and a hardcoded key reads another
+// tenant's credentials. The users table already records which key the user connected
+// under, and that is the authoritative source: core resolves managed OAuth itself during
+// login and only calls getOauthInfo on token REFRESH, where the user row always exists.
+async function resolvePlatformName({ hostname, rcAccountId }) {
+    const where = {};
+    if (hostname) where.hostname = hostname;
+    if (rcAccountId) where.rcAccountId = String(rcAccountId);
+    if (Object.keys(where).length === 0) return null;
+    try {
+        const user = await UserModel.findOne({ where, attributes: ['platform'], raw: true });
+        return user?.platform ?? null;
+    } catch (error) {
+        console.error('[ServiceNow][getOauthInfo] failed to resolve platform name:', error.message);
+        return null;
+    }
+}
+
+async function getOauthInfo({ hostname, rcAccountId, platform } = {}) {
     // Credentials are managed via AppConnect admin-managed OAuth (clientId/clientSecret/
     // accessTokenUri live in accountData keyed by rcAccountId). During login the core
     // resolves this before calling us; but the token-REFRESH paths (log/contact handlers)
@@ -163,9 +184,12 @@ async function getOauthInfo({ hostname, rcAccountId } = {}) {
     }
     if (accountId) {
         try {
-            const managed = await managedOAuthCore.resolveManagedOAuthInfo({ rcAccountId: accountId, platform: 'gate6.servicenow' });
-            if (managed?.oauthInfo?.clientId && managed?.oauthInfo?.accessTokenUri) {
-                return managed.oauthInfo;
+            const resolvedPlatform = platform ?? await resolvePlatformName({ hostname, rcAccountId: accountId });
+            if (resolvedPlatform) {
+                const managed = await managedOAuthCore.resolveManagedOAuthInfo({ rcAccountId: accountId, platform: resolvedPlatform });
+                if (managed?.oauthInfo?.clientId && managed?.oauthInfo?.accessTokenUri) {
+                    return managed.oauthInfo;
+                }
             }
         } catch (error) {
             console.error('[ServiceNow][getOauthInfo] failed to resolve managed OAuth:', error.message);
@@ -177,7 +201,7 @@ async function getOauthInfo({ hostname, rcAccountId } = {}) {
     };
 }
 
-async function getUserInfo({ authHeader, hostname, query }) {
+async function getUserInfo({ authHeader, hostname, query, platform }) {
     // OAuth callback already provides `query` with rcAccountId — no framework change needed.
     const rcAccountId = query?.rcAccountId;
     try {
@@ -273,7 +297,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
                         companyId: company.id,
                         email: rcUserEmail || result.email || '',
                         firstname: rcUserName || name || 'ServiceNow User',
-                        platform: 'gate6.servicenow',
+                        platform,
                         hostname,
                         rcAccountId
                     });
@@ -521,24 +545,6 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         }
     }
 
-    // No contacts found in ServiceNow — delete stale cache entry if it exists
-    if (matchedContactInfo.length === 0 && user?.rcAccountId) {
-        try {
-            const deleted = await AccountDataModel.destroy({
-                where: {
-                    rcAccountId: user.rcAccountId,
-                    platformName: 'servicenow',
-                    dataKey: `contact-${phoneNumber}`
-                }
-            });
-            if (deleted > 0) {
-                console.log('[ServiceNow] findContact: deleted stale cache for phone:', phoneNumber);
-            }
-        } catch (err) {
-            console.warn('[ServiceNow] findContact: failed to delete stale cache:', err.message);
-        }
-    }
-
     const accounts = await getAllAccounts(hostname, authHeader);
     const accountOptions = accounts
         .map((account) => ({
@@ -564,6 +570,134 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         successful: true,
         matchedContactInfo
     };
+}
+
+async function findContactWithName({ user, authHeader, name }) {
+    const licenseError = await validateLicenseOrFail(user);
+    if (licenseError) return licenseError;
+
+    apiLog.logStart('ServiceNow', 'findContactWithName', { name });
+
+    const term = (name || '').trim();
+    if (!term) {
+        return { successful: true, matchedContactInfo: [] };
+    }
+
+    const userInfo = await getHostname(user.dataValues.hostname);
+    const hostname = userInfo.hostname;
+
+    const companyData = await findCompany({ rcAccountId: user.rcAccountId, hostname });
+    const contactTable = (companyData?.contactTable?.trim().toLowerCase() == 'user') ? 'table/sys_user' : 'contact';
+
+    // The call log form declares `state` and `type` as contactDependent selections, so every
+    // contact returned here must carry the same option lists findContact attaches. Without them
+    // the form renders empty dropdowns for a manually searched contact.
+    let states = [];
+    let interactionType = [];
+    try {
+        const stateSelection = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
+            { headers: { 'Authorization': authHeader }, _operation: 'findContactWithName' }
+        );
+        states = stateSelection.data.result.length > 0 ? stateSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : [];
+    } catch (err) {
+        console.log('sys_choice state lookup failed, continuing without state options:', err.response?.status);
+    }
+    try {
+        const typeSelection = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
+            { headers: { 'Authorization': authHeader }, _operation: 'findContactWithName' }
+        );
+        interactionType = typeSelection.data.result.length > 0 ? typeSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : [];
+    } catch (err) {
+        console.log('sys_choice type lookup failed, continuing without type options:', err.response?.status);
+    }
+
+    // sys_user carries the display name on `name` and the login on `user_name`; the contact
+    // table only has `name`. Search both on sys_user so either spelling matches.
+    const nameQuery = contactTable == 'table/sys_user'
+        ? `nameLIKE${term}^ORuser_nameLIKE${term}`
+        : `nameLIKE${term}`;
+
+    let results = [];
+    try {
+        const searchRes = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/${contactTable}?sysparm_query=${encodeURIComponent(nameQuery)}&sysparm_fields=sys_id,name,user_name,phone,mobile_phone,email&sysparm_limit=25`,
+            { headers: { 'Authorization': authHeader }, _operation: 'findContactWithName' }
+        );
+        results = searchRes.data?.result || [];
+    } catch (err) {
+        // Degrade to an empty result instead of throwing — the framework surfaces a thrown
+        // error as a generic "Contact search by name failed" with no way for the user to retry.
+        console.warn('[ServiceNow] findContactWithName: search failed', err.response?.status || err.message);
+        return { successful: true, matchedContactInfo: [] };
+    }
+
+    const matchedContactInfo = results.map((result) => {
+        const additionalInfo = {};
+        if (states.length > 0) {
+            additionalInfo.state = states;
+        }
+        if (interactionType.length > 0) {
+            additionalInfo.type = interactionType;
+        }
+        return {
+            id: result.sys_id,
+            name: (contactTable == 'table/sys_user') ? (result.name || result.user_name) : result.name,
+            type: 'Contact',
+            // The interface contract requires the same shape as findContact — including `phone`,
+            // so a manually picked contact can still be reconciled with phone-based lookups.
+            phone: result.phone || result.mobile_phone || '',
+            email: result.email || '',
+            additionalInfo
+        };
+    });
+
+    apiLog.logSuccess('ServiceNow', 'findContactWithName', { name: term, matchedCount: matchedContactInfo.length, apiEndpoint: `https://${hostname}/api/now/${contactTable}` });
+    return {
+        successful: true,
+        matchedContactInfo
+    };
+}
+
+// Write the number this interaction actually came in on into the contact record's `phone`
+// field. ServiceNow has no multi-value phone field, so the number is comma-appended to the
+// existing value; a later lookup then matches it (findContact queries phoneLIKE / mobile_phone
+// with a LIKE, so a comma-joined list still resolves). No-op unless the number is new to the
+// contact, so repeat calls don't keep growing the field.
+//
+// The contact's stored number is NOT available on contactInfo — core builds contactInfo with
+// phoneNumber set to the CALL's number, not the contact's — so we read it from the CRM by id.
+async function appendContactNumberIfNew({ hostname, authHeader, contactTable, contactInfo, receivedNumber, logPrefix }) {
+    if (!contactInfo?.id || !receivedNumber) return;
+
+    // Here `contact` is only a scripted REST endpoint (api/now/contact), NOT a real Table-API
+    // table — GET/PATCH on api/now/table/contact returns "Invalid table contact". Contacts in CSM
+    // live in `customer_contact`, which EXTENDS sys_user, so the base `sys_user` table resolves the
+    // same sys_id for both plain users and contacts, and phone/mobile_phone are sys_user fields.
+    // So always address the record through the sys_user Table API.
+    const recordUrl = `https://${hostname}/api/now/table/sys_user/${contactInfo.id}`;
+    try {
+        const current = await serviceNowApiClient.get(
+            `${recordUrl}?sysparm_fields=phone,mobile_phone`,
+            { headers: { 'Authorization': authHeader }, _operation: 'appendContactNumber' }
+        );
+        const result = current.data?.result || {};
+        const existingPhone = (result.phone || '').toString().trim();
+        // The stored number can live in phone (possibly comma-joined) or mobile_phone; check both
+        // so we neither duplicate a number the record already has nor grow the field on repeats.
+        const knownNumbers = [...existingPhone.split(','), (result.mobile_phone || '').toString()];
+        if (!phoneWriteback.isNewNumberForContact(receivedNumber, knownNumbers)) return;
+        const nextPhone = existingPhone ? `${existingPhone}, ${receivedNumber}` : String(receivedNumber);
+        await serviceNowApiClient.patch(
+            recordUrl,
+            { phone: nextPhone },
+            { headers: { 'Authorization': authHeader }, _operation: 'appendContactNumber' }
+        );
+        console.log(`${logPrefix} appended new number to contact:`, contactInfo.id);
+    } catch (err) {
+        console.warn(`${logPrefix} failed to append contact number:`, err?.response?.data || err.message);
+    }
 }
 
 async function createCallLog({ user, contactInfo, authHeader, callLog, note, additionalSubmission, aiNote, transcript }) {
@@ -683,6 +817,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     }
 
     postBody.u_call_duration = formatDuration(callLog.duration);
+    postBody.u_call_result = callLog.result;
 
     postBody.assigned_to = caller_id.data.result.id;
 
@@ -720,7 +855,14 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     //----------------------------------------------------------------------------
     //---CHECK.4: Open db.sqlite and CRM website to check if call log is saved ---
     //----------------------------------------------------------------------------
+    // Write the number this call came in on into the CRM contact so a later lookup of it resolves
+    // to this contact (findContactWithName never receives a phone number, so the manually picked
+    // contact wouldn't otherwise own the number that was called).
+    const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ callLog });
+    await appendContactNumberIfNew({ hostname, authHeader, contactTable, contactInfo, receivedNumber, logPrefix: '[ServiceNow] createCallLog:' });
+
     apiLog.logSuccess('ServiceNow', 'createCallLog', { logId: addLogRes.data.result.sys_id, contactId: contactInfo?.id, apiEndpoint: `https://${hostname}/api/now/table/interaction` });
+    await trackAnalytics({ user, crm: 'ServiceNow', event: 'callLogCreated' });
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
@@ -731,15 +873,37 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     };
 }
 
-async function upsertCallDisposition({ user, existingCallLog, authHeader, callDisposition }) {
+// The edit form sends state/type through a SEPARATE /callDisposition request (not /callLog), so
+// this — not updateCallLog — is where a changed disposition gets written to the interaction. Core
+// passes them as `dispositions` ({ state, type, note }).
+//
+// Only `state` is patched: the interaction's Type is locked read-only by a ServiceNow Data Policy
+// after creation (PATCHing it returns 403 "The following fields are read only: Type"), and because
+// the request always echoes the current type, including it would fail the whole PATCH and drop the
+// state change too. Type is therefore set once at create time only.
+async function upsertCallDisposition({ user, existingCallLog, authHeader, dispositions }) {
     const existingLogId = existingCallLog.thirdPartyLogId;
-    if (callDisposition?.dispositionItem) {
-        // If has disposition item, check existence. If existing, update it, otherwise create it.
-        console.log("callDisposition", callDisposition?.dispositionItem);
+    if (!existingLogId || !dispositions?.state) {
+        return { logId: existingLogId };
     }
+
+    const userInfo = await getHostname(user.dataValues.hostname);
+    const hostname = userInfo.hostname;
+
+    const returnedState = await findStateValueById(hostname, authHeader, dispositions.state);
+    const patchBody = { state: returnedState ?? await findStateValueByName(hostname, authHeader, dispositions.state) };
+    applyClosedDatesIfNeeded(patchBody, patchBody.state, null);
+
+    await serviceNowApiClient.patch(
+        `https://${hostname}/api/now/table/interaction/${existingLogId}`,
+        patchBody,
+        { headers: { Authorization: authHeader }, _operation: 'upsertCallDisposition' }
+    );
+
     return {
-        logId: existingLogId
-    }
+        logId: existingLogId,
+        returnMessage: { message: 'Disposition updated.', messageType: 'success', ttl: 2000 }
+    };
 }
 
 function upsertCallAgentNote({ body, note }) {
@@ -845,7 +1009,9 @@ function upsertCallDateTime({ body, startTime, duration, user }) {
     if (startTimeRegex.test(body)) {
         body = body.replace(startTimeRegex, `- Start Time: ${formattedStartTime}\n`);
     } else {
-        body += `- Start Time: ${formattedStartTime}\n`;
+        // Leading blank line so the date/time block is visually separated from the fields above
+        // (the previous field already ends with \n, so \n here yields exactly one blank line).
+        body += `\n- Start Time: ${formattedStartTime}\n`;
     }
 
     if (duration != null && duration !== '') {
@@ -958,7 +1124,16 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         {
             headers: { 'Authorization': authHeader }, _operation: 'updateCallLog'
         });
-    const originalNote = getLogRes?.data?.result?.work_notes ?? '';
+    // work_notes is a JOURNAL field — the Table API GET returns it empty, so read the latest
+    // journal entry (the full note body written at create/last edit) the same way getCallLog does.
+    // Without this, originalNote is '' and the body gets rebuilt from scratch, which drops the
+    // Contact Number and RingCentral Username and makes the phone fall back to the extension.
+    const journalRes = await serviceNowApiClient.get(
+        `https://${hostname}/api/now/table/sys_journal_field?sysparm_query=element_id=${existingLogId}^element=work_notes&sysparm_fields=value,sys_created_on`,
+        { headers: { Authorization: authHeader }, _operation: 'updateCallLog' }
+    );
+    const originalNote = journalRes.data.result
+        .sort((a, b) => new Date(b.sys_created_on) - new Date(a.sys_created_on))[0]?.value || '';
     const originalSubject = getLogRes?.data?.result?.short_description || '';
     let patchBody = {};
 
@@ -977,9 +1152,6 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const rcNameFromLog = agentParty?.name;
     const effectiveRcUserName = rcNameFromLog || '';
     if (effectiveRcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) { logBody = upsertRingCentralUserName({ body: logBody, rcUserName: effectiveRcUserName }); }
-    // On update, existingCallLog usually lacks the live to/from phoneNumber, so re-deriving
-    // would fall back to the extension number and overwrite the real RC number written at
-    // create time. Prefer the live value if present, else reuse the one already in the note.
     const existingRcPhoneNumber = originalNote.match(/- RingCentral Phone Number: (.+?)\n/)?.[1]?.trim();
     const rcPhoneNumberFromLog = agentParty?.phoneNumber;
     const effectiveRcPhoneNumber = rcPhoneNumberFromLog || existingRcPhoneNumber || existingCallLog?.extensionNumber;
@@ -995,6 +1167,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 
     patchBody.u_call_duration = formatDuration(duration);
+    patchBody.u_call_result = result;
 
     const patchLog = await serviceNowApiClient.patch(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
@@ -1023,6 +1196,9 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
     //-----------------------------------------------------------------------------------------
     apiLog.logSuccess('ServiceNow', 'updateCallLog', { logId: existingLogId, apiEndpoint: `https://${hostname}/api/now/table/interaction/${existingLogId}` });
+
+    await trackAnalytics({ user, crm: 'ServiceNow', event: 'callLogUpdated' });
+
     return {
         updatedNote: note,
         returnMessage: {
@@ -1138,6 +1314,14 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
     //-------------------------------------------------------------------------------------------------------------
     apiLog.logSuccess('ServiceNow', 'createMessageLog', { logId: addLogRes.data.result.sys_id, contactId: contactInfo?.id, apiEndpoint: `https://${hostname}/api/now/table/interaction` });
+
+    // Same write-back as createCallLog: append the number this message came in on to the CRM contact.
+    const contactTable = (messageLogCompany?.contactTable == 'user') ? 'table/sys_user' : 'contact';
+    const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ message });
+    await appendContactNumberIfNew({ hostname, authHeader, contactTable, contactInfo, receivedNumber, logPrefix: '[ServiceNow] createMessageLog:' });
+
+    await trackAnalytics({ user, crm: 'ServiceNow', event: 'messageLogCreated' });
+
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
@@ -1244,6 +1428,9 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
     //---------------------------------------------------------------------------------------------------------------------------------------------
     apiLog.logSuccess('ServiceNow', 'updateMessageLog', { logId: existingLogId, contactId: contactInfo?.id, apiEndpoint: `https://${hostname}/api/now/table/interaction/${existingLogId}` });
+
+    await trackAnalytics({ user, crm: 'ServiceNow', event: 'messageLogUpdated' });
+
     return {
         logId: existingLogId,
         returnMessage: {
@@ -1320,6 +1507,9 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     //---CHECK.9: In extension, try create a new contact against an unknown number ---
     //--------------------------------------------------------------------------------
     apiLog.logSuccess('ServiceNow', 'createContact', { contactId: contactInfoRes.id, apiEndpoint: createContactEndpoint });
+
+    await trackAnalytics({ user, crm: 'ServiceNow', event: 'contactCreated' });
+
     return {
         contactInfo: {
             id: contactInfoRes.id,
@@ -1416,6 +1606,7 @@ exports.getCallLog = getCallLog;
 exports.createMessageLog = createMessageLog;
 exports.updateMessageLog = updateMessageLog;
 exports.findContact = findContact;
+exports.findContactWithName = findContactWithName;
 exports.createContact = createContact;
 exports.unAuthorize = unAuthorize;
 exports.upsertCallDisposition = upsertCallDisposition;

@@ -5,14 +5,14 @@ const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber');
 const jwt = require('@app-connect/core/lib/jwt');
 const { UserModel } = require('@app-connect/core/models/userModel');
-const { AccountDataModel } = require('@app-connect/core/models/accountDataModel');
+const phoneWriteback = require('../shared/phoneWriteback');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
 const { MessageLogModel } = require('@app-connect/core/models/messageLogModel');
 const { AdminConfigModel } = require('@app-connect/core/models/adminConfigModel');
 const qs = require('qs');
 const { sequelize } = require('../servicenow-models/sequelize');
 const { initModels } = require('../servicenow-models/init-models');
-const { trackAnalytics } = require('../servicenow-core/analytics');
+const { trackAnalytics } = require('../shared/analytics');
 const models = sequelize ? initModels(sequelize) : null;
 const licenseHelper = require('../shared/license');
 const apiLog = require('../shared/apiLogger');
@@ -269,24 +269,6 @@ async function findContact({ user, phoneNumber, isExtension }) {
         }
     }
 
-    // No contacts found in ServiceTitan — delete stale cache entry if it exists
-    if (matchedContactInfo.length === 0 && user?.rcAccountId) {
-        try {
-            const deleted = await AccountDataModel.destroy({
-                where: {
-                    rcAccountId: user.rcAccountId,
-                    platformName: 'gate6.servicetitan',
-                    dataKey: `contact-${phoneNumber}`
-                }
-            });
-            if (deleted > 0) {
-                console.log('[ServiceTitan] findContact: deleted stale cache for phone:', phoneNumber);
-            }
-        } catch (err) {
-            console.warn('[ServiceTitan] findContact: failed to delete stale cache:', err.message);
-        }
-    }
-
     matchedContactInfo.push({
         id: 'createNewContact',
         name: 'Create new contact...',
@@ -456,6 +438,47 @@ async function createContact({ user, phoneNumber, newContactName }) {
     }
 }
 
+// When a call/message is logged against a customer picked by name, the number the interaction
+// actually came in on is not one ServiceTitan has on that customer. Append it to the customer's
+// contact methods (its `contacts` array natively holds multiple typed phones) so a later lookup
+// of that number resolves to this customer instead of prompting a name search.
+//
+// The customer's stored numbers are NOT on contactInfo — core sets contactInfo.phoneNumber to
+// the CALL's number — so read them from the customer by id and only append a genuinely new one.
+async function appendContactNumberIfNew({ user, contactInfo, receivedNumber, auth, tenantId, stAppKey, logPrefix }) {
+    if (!contactInfo?.id || !receivedNumber) return;
+
+    const cleaned = String(receivedNumber).replace(' ', '+');
+    const parsed = parsePhoneNumber(cleaned);
+    const value = parsed.valid ? parsed.number.significant : cleaned;
+    try {
+        const customerUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}`;
+        const existing = await serviceTitanApiClient.get(
+            customerUrl,
+            { headers: { Authorization: `Bearer ${auth}`, 'ST-App-Key': stAppKey }, _operation: 'appendContactNumber' }
+        );
+        // ServiceTitan exposes phones as a `phones` array ({ type, phone }); `contacts` ({ type,
+        // value }) is the write shape. Gather both so an existing number isn't duplicated.
+        const known = [
+            ...(existing.data?.phones || []).map(p => p?.phone),
+            ...(existing.data?.contacts || []).filter(c => String(c?.type || '').toLowerCase().includes('phone')).map(c => c?.value)
+        ].filter(Boolean);
+        if (!phoneWriteback.isNewNumberForContact(receivedNumber, known)) return;
+
+        await serviceTitanApiClient.post(
+            `${customerUrl}/contacts`,
+            { type: 'Phone', value, memo: 'Added by RingCentral App Connect' },
+            {
+                headers: { Authorization: `Bearer ${auth}`, 'ST-App-Key': stAppKey, 'Content-Type': 'application/json' },
+                _operation: 'appendContactNumber'
+            }
+        );
+        console.log(`${logPrefix} appended new number to customer:`, contactInfo.id);
+    } catch (err) {
+        console.warn(`${logPrefix} failed to append contact number:`, err?.response?.data || err.message);
+    }
+}
+
 async function getUserList({ user, authHeader }) {
     apiLog.logStart('ServiceTitan', 'getUserList', {});
 
@@ -615,6 +638,11 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     );
     const logId = `${addNoteRes.data.id}_note`;
     apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, contactId: contactInfo.id, apiEndpoint: createCallLogUrl });
+
+    // Write the number this call came in on into the CRM customer so a later lookup of it resolves
+    // to this customer instead of prompting a name search.
+    const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ callLog });
+    await appendContactNumberIfNew({ user, contactInfo, receivedNumber, auth, tenantId, stAppKey, logPrefix: '[ServiceTitan] createCallLog:' });
 
     await trackAnalytics({ user, crm: 'ServiceTitan', event: 'callLogCreated', eventDate: callLog?.startTime });
 
@@ -928,6 +956,11 @@ ${faxDocLink}
 
     apiLog.logSuccess('ServiceTitan', 'createMessageLog', { logId: addLogRes.data.id, contactId, apiEndpoint: createMessageLogUrl });
 
+    // Same write-back as createCallLog: append the number this message came in on to the CRM customer.
+    const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ message });
+    await appendContactNumberIfNew({ user, contactInfo, receivedNumber, auth, tenantId, stAppKey, logPrefix: '[ServiceTitan] createMessageLog:' });
+    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogCreated', eventDate: message?.creationTime });
+
     return {
         logId: addLogRes.data.id,
         contactId,
@@ -1069,7 +1102,7 @@ ${faxDocLink}
     apiLog.logSuccess('ServiceTitan', 'updateMessageLog', { logId: addLogRes.data.id, contactId, apiEndpoint: updateMessageLogUrl });
 
 
-    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogUpdated', eventDate: message?.creationTime });
+    await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogUpdated' });
 
     return {
         logId: addLogRes.data.id,

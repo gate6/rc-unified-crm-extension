@@ -46,9 +46,9 @@
             "customState": "",
             "scope": "",
             "canOpenLogPage": true,
-            "contactPageUrl": "https://dev294998.service-now.com/now/nav/ui/classic/params/target/sys_user.do?sys_id={contactId}",
-            "logPageUrl": "https://dev294998.service-now.com/interaction.do?sys_id={logId}",
-            "callPopUrl": "https://dev294998.service-now.com/interaction_list.do?sysparm_query=opened_for={contactId}",
+            "contactPageUrl": "https://{hostname}/now/nav/ui/classic/params/target/sys_user.do?sys_id={contactId}",
+            "logPageUrl": "https://{hostname}/interaction.do?sys_id={logId}",
+            "callPopUrl": "https://{hostname}/interaction_list.do?sysparm_query=opened_for={contactId}",
             "embeddedOnCrmPage": {
                 "welcomePage": {
                     "docLink": "https://ringcentral.github.io/rc-unified-crm-extension/",
@@ -132,6 +132,7 @@
                 }
             ],
             "page": {
+                "useContactSearch": true,
                 "newContact": {
                     "additionalFields": [
                         {

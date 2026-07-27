@@ -158,6 +158,7 @@
         }
       ],
       "page": {
+        "useContactSearch": true,
         "callLog": {
           "additionalFields": [
             {
