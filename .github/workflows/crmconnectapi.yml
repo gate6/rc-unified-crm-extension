@@ -1,0 +1,50 @@
+name: Deploy code to API server
+
+on:
+  push:
+    branches:
+      - test-gate6
+
+jobs:
+  preview:
+    name: Deploy to Test Environment
+    runs-on: runner-253.106
+
+    # 👇 Add this block
+    environment:
+      name: crmconnectapi
+    
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # Creating API zip archive
+      - name: Create zip archive
+        run: |
+          rm -rf api.zip
+          zip -r api.zip ./* -x ".git/*"
+
+      # Deploying api.zip to the API server
+      - name: Copy file via SSH
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ vars.API_HOST_CRMCONNECTAPI }}
+          username: ${{ vars.SSH_USER_CRMCONNECTAPI }}
+          key: ${{ secrets.SSH_USER_KEY_CRMCONNECTAPI }}
+          port: ${{ vars.PORT }}
+          source: "api.zip"
+          target: "crmconnectapi.gate6.com"
+
+      - name: Execute remote SSH commands
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.API_HOST_CRMCONNECTAPI }}
+          username: ${{ vars.SSH_USER_CRMCONNECTAPI }}
+          key: ${{ secrets.SSH_USER_KEY_CRMCONNECTAPI }}
+          port: ${{ vars.PORT }}
+          script: |
+            cd /home/crmconnectapi/crmconnectapi.gate6.com
+            unzip -o api.zip
+            rm -rf api.zip
+            npm install
+            pm2 stop src/server.js || true
