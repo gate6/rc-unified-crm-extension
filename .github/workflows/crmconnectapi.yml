@@ -46,5 +46,9 @@ jobs:
             cd /home/crmconnectapi/crmconnectapi.gate6.com
             unzip -o api.zip
             rm -rf api.zip
-            npm install
-            pm2 stop src/server.js || true
+            npm install --include=dev
+            # compiles src + packages/core into .ts-build/ and packages/core/dist/
+            npm run build:ts
+            pm2 delete crmconnectapi || true
+            pm2 start .ts-build/src/server.js --name crmconnectapi --update-env
+            pm2 save
