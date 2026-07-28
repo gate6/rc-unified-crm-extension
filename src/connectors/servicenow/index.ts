@@ -770,47 +770,50 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
 
     const callKeyParts = [
-        callLog?.telephonySessionId || callLog?.id,
-        callLog?.startTime,
-        contactInfo?.id
+        callLog?.telephonySessionId,
+        callLog?.sessionId,
+        callLog?.id,
+        callLog?.startTime
     ]
         .map((value) => (value ?? '').toString().trim())
         .filter(Boolean);
 
-    const uniqueCallId = callKeyParts.length > 0
+    // A session or record id is required. startTime alone is not distinctive enough to key
+    // on, and hashing a partial key would make unrelated calls look like the same one.
+    const hasCallIdentifier = [callLog?.telephonySessionId, callLog?.sessionId, callLog?.id]
+        .some((value) => !!(value ?? '').toString().trim());
+
+    // Stored in client_session_id: a stock Interaction Management string column (40 chars by
+    // default, so 'rc_' + 32 hex fits), read only by the chat/Virtual Agent stack, which never
+    // touches the interactions this connector creates. It replaces correlation_id, which does
+    // not exist on interaction — that table is a base table and does not extend task.
+    const uniqueCallId = hasCallIdentifier
         ? `rc_${crypto.createHash('sha1').update(callKeyParts.join('|')).digest('hex').slice(0, 32)}`
         : '';
     if (uniqueCallId) {
-        const queryParts = [`correlation_id=${uniqueCallId}`];
-        if (contactInfo?.id) {
-            queryParts.push(`opened_for=${contactInfo.id}`);
-        }
         const existing = await serviceNowApiClient.get(
-            `https://${hostname}/api/now/table/interaction?sysparm_query=${encodeURIComponent(queryParts.join('^'))}&sysparm_fields=sys_id,short_description,opened_for,sys_created_on&sysparm_limit=1`,
+            `https://${hostname}/api/now/table/interaction?sysparm_query=${encodeURIComponent(`client_session_id=${uniqueCallId}`)}&sysparm_fields=sys_id,client_session_id&sysparm_limit=1`,
             { headers: { 'Authorization': authHeader }, _operation: 'createCallLog' }
         );
-        if (existing.data?.result?.length > 0) {
-            const existingLog = existing.data.result[0];
-            const existingOpenedFor = (existingLog?.opened_for?.value || existingLog?.opened_for || '').toString().trim();
-            const isSameContact = !!contactInfo?.id && existingOpenedFor === contactInfo.id.toString().trim();
-            const isSameSubject = (existingLog?.short_description || '').toString().trim() === (subject || '').toString().trim();
-            const existingCreatedAt = Date.parse(existingLog?.sys_created_on || '');
-            const isRecent = Number.isFinite(existingCreatedAt) && (Date.now() - existingCreatedAt) <= 10 * 60 * 1000;
-
-            if (isSameContact && isSameSubject && isRecent) {
-                apiLog.logSuccess('ServiceNow', 'createCallLog', { logId: existingLog.sys_id, contactId: contactInfo?.id, deduped: true, apiEndpoint: `https://${hostname}/api/now/table/interaction` });
-                return {
-                    logId: existingLog.sys_id,
-                    returnMessage: { message: 'Call log already exists.', messageType: 'warning', ttl: 3000 }
-                };
-            }
+        const existingLog = existing.data?.result?.[0];
+        // Verify the key on the returned record instead of trusting the query filter.
+        // ServiceNow drops a condition naming a column the table does not have rather than
+        // erroring, so such a query silently widens to match everything. Comparing the value
+        // back means an instance without client_session_id disables dedup instead of matching
+        // the wrong record — which is exactly how the previous correlation_id version failed.
+        if (existingLog && (existingLog.client_session_id || '').toString().trim() === uniqueCallId) {
+            apiLog.logSuccess('ServiceNow', 'createCallLog', { logId: existingLog.sys_id, contactId: contactInfo?.id, deduped: true, apiEndpoint: `https://${hostname}/api/now/table/interaction` });
+            return {
+                logId: existingLog.sys_id,
+                returnMessage: { message: 'Call log already exists.', messageType: 'warning', ttl: 3000 }
+            };
         }
     }
 
     const postBody = {
         short_description: subject,
         work_notes: body,
-        ...(uniqueCallId && { correlation_id: uniqueCallId })
+        ...(uniqueCallId && { client_session_id: uniqueCallId })
     }
     if (callLog?.startTime) {
         postBody.opened_at = callLog.startTime;
@@ -1482,7 +1485,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             }
         }
 
-        postBody.name = newContactName?.toLowerCase();
+        postBody.name = newContactName;
         createContactEndpoint = `https://${hostname}/api/now/contact`;
         contactInfoRes = await serviceNowApiClient.post(
             createContactEndpoint,
