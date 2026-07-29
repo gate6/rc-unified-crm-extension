@@ -19,11 +19,48 @@ const apiLog = require('../shared/apiLogger');
 
 const serviceTitanApiClient = axios.create();
 
-// Env-driven so the same connector works in integration and production (the token URL is
-// already env-driven via SERVICETITAN_ACCESS_TOKEN_URI). Defaults to the integration/sandbox
-// host so existing behaviour is unchanged. For production set SERVICETITAN_CRM_URL to the
-// api.servicetitan.io equivalent (and matching prod creds).
-const SERVICE_TITAN_CRM_URL = process.env.SERVICETITAN_CRM_URL || "https://api-integration.servicetitan.io/crm/v2/tenant"
+// The QA/testing tenant runs against ServiceTitan's integration environment. Credentials are not
+// interchangeable between integration and production, so the tenant decides which host to call —
+// everyone else uses the env-configured hosts (production values on prod).
+const INTEGRATION_TENANT_ID = '985994799';
+const INTEGRATION_CRM_URI = 'https://api-integration.servicetitan.io/crm/v2/tenant';
+const INTEGRATION_ACCESS_TOKEN_URI = 'https://auth-integration.servicetitan.io/connect/token';
+
+// The manifest pins a fixed hostname (https://go.servicetitan.com/), so every user — QA included —
+// arrives with the production hostname. The QA company row is provisioned against the integration
+// hostname, so the integration tenant gets this value stored on both the user and customer rows;
+// otherwise the licence lookup (shared/license.ts) searches with the prod hostname and misses.
+const INTEGRATION_HOSTNAME = 'integration.servicetitan.com';
+
+function resolveHostname({ tenantId, hostname }) {
+    return isIntegrationTenant(tenantId) ? INTEGRATION_HOSTNAME : hostname;
+}
+
+// Normalize a hostname to the bare host the companies table stores:
+// strips scheme (http/https), any path/query, port, and trailing slash; lowercased.
+// Same helper as servicenow/monday — the fixed manifest hostname arrives as a full URL
+// ("https://go.servicetitan.com/"), which never `=`-matches a bare-host row.
+function normalizeHostname(raw) {
+    if (!raw) return raw;
+    let host = String(raw).trim();
+    host = host.replace(/^https?:\/\//i, '');   // drop scheme
+    host = host.split('/')[0];                   // drop path / trailing slash
+    host = host.split('?')[0];                   // drop query
+    host = host.split(':')[0];                   // drop port
+    return host.toLowerCase();
+}
+
+function isIntegrationTenant(tenantId) {
+    return String(tenantId ?? '').trim() === INTEGRATION_TENANT_ID;
+}
+
+function getCrmBaseUrl(tenantId) {
+    return isIntegrationTenant(tenantId) ? INTEGRATION_CRM_URI : process.env.SERVICE_TITAN_CRM_URI;
+}
+
+function getAccessTokenUrl(tenantId) {
+    return isIntegrationTenant(tenantId) ? INTEGRATION_ACCESS_TOKEN_URI : process.env.SERVICE_TITAN_ACCESS_TOKEN_URI;
+}
 
 
 apiLog.installErrorInterceptor(serviceTitanApiClient, 'ServiceTitan');
@@ -58,8 +95,7 @@ function getBasicAuth({ apiKey }) {
     return Buffer.from(`${apiKey}`).toString('base64');
 }
 
-async function getUserInfo({ hostname, additionalInfo, authHeader }) {
-    console.log("Authheader: ", authHeader)
+async function getUserInfo({ hostname, additionalInfo, authHeader, platform }) {
     // RC identity arrives via the manifest's rcAdditionalSubmission (auto-pulled from RC
     // cached data — no user prompt, no framework change). ServiceTitan API auth is
     // app-level (client_credentials); the email field has been removed.
@@ -105,14 +141,40 @@ async function getUserInfo({ hostname, additionalInfo, authHeader }) {
         userId
     });
 
-    apiLog.logStart('ServiceTitan', 'getUserInfo', { userId, tenantId, rcAccountId });
+    // The QA tenant is licensed against the integration hostname, not the manifest's fixed one.
+    const resolvedHostname = resolveHostname({ tenantId, hostname });
+
+    apiLog.logStart('ServiceTitan', 'getUserInfo', { userId, tenantId, rcAccountId, hostname: resolvedHostname });
 
     if (models && models.companies && models.customer && rcAccountId) {
         try {
-            const company = await models.companies.findOne({
-                where: { rcAccountId: String(rcAccountId), tenantId: String(tenantId), status: true },
-                raw: true
-            });
+            // Resolve the company by RC account + hostname + active status (not tenantId — the ST
+            // tenant is an app-level credential, not the licensing key). Tiered so it works
+            // whichever form the row was provisioned with:
+            //   1. hostname exactly as received ("https://go.servicetitan.com/")
+            //   2. the bare host ("go.servicetitan.com") — the table's convention
+            //   3. rcAccountId + status — rows provisioned without a hostname
+            const rawHostname = resolvedHostname ? String(resolvedHostname).trim().toLowerCase() : '';
+            const bareHostname = normalizeHostname(rawHostname) || '';
+            let company = null;
+            if (rawHostname) {
+                company = await models.companies.findOne({
+                    where: { rcAccountId: String(rcAccountId), hostname: rawHostname, status: true },
+                    raw: true
+                });
+            }
+            if (!company && bareHostname && bareHostname !== rawHostname) {
+                company = await models.companies.findOne({
+                    where: { rcAccountId: String(rcAccountId), hostname: bareHostname, status: true },
+                    raw: true
+                });
+            }
+            if (!company) {
+                company = await models.companies.findOne({
+                    where: { rcAccountId: String(rcAccountId), status: true },
+                    raw: true
+                });
+            }
             if (!company) {
                 return {
                     successful: false,
@@ -151,8 +213,8 @@ async function getUserInfo({ hostname, additionalInfo, authHeader }) {
                     companyId: company.id,
                     email: rcUserEmail || '',
                     firstname: rcUserName || 'ServiceTitan User',
-                    platform: 'gate6.servicetitan',
-                    hostname,
+                    platform: platform || 'gate6.servicetitan',
+                    hostname: resolvedHostname,
                     rcAccountId
                 });
             }
@@ -162,9 +224,9 @@ async function getUserInfo({ hostname, additionalInfo, authHeader }) {
     }
 
     try {
-        const accessToken = await generateServiceTitanToken(clientId, clientSecret);
+        const accessToken = await generateServiceTitanToken(clientId, clientSecret, tenantId);
 
-        apiLog.logSuccess('ServiceTitan', 'getUserInfo', { userId, tenantId, apiEndpoint: process.env.SERVICE_TITAN_ACCESS_TOKEN_URI });
+        apiLog.logSuccess('ServiceTitan', 'getUserInfo', { userId, tenantId, apiEndpoint: getAccessTokenUrl(tenantId) });
 
         return {
             successful: true,
@@ -193,9 +255,37 @@ async function getUserInfo({ hostname, additionalInfo, authHeader }) {
 }
 
 
-// Helper function to generate ServiceTitan token
-async function generateServiceTitanToken(clientId, clientSecret) {
-    const tokenUrl = process.env.SERVICE_TITAN_ACCESS_TOKEN_URI;
+// Core's apiKey login path writes the user's hostname straight from the request (the manifest's
+// fixed https://go.servicetitan.com/) and ignores platformUserInfo.overridingHostname — only the
+// OAuth path honours that. So correct it here, right after the row is saved, for the QA tenant:
+// license.ts resolves the company by user.hostname, which must match the integration row.
+async function postSaveUserInfo({ userInfo }) {
+    try {
+        const userId = userInfo?.id;
+        if (userId) {
+            // saveUserInfo returns only { id, name } — not the Sequelize instance — so re-fetch.
+            const user = await UserModel.findByPk(userId);
+            const pai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {};
+            if (user && isIntegrationTenant(pai.tenant) && user.hostname !== INTEGRATION_HOSTNAME) {
+                const previousHostname = user.hostname;
+                user.hostname = INTEGRATION_HOSTNAME;
+                await user.save();
+                licenseHelper.clearLicenseCache(userId);
+                console.log('[ServiceTitan][postSaveUserInfo] stored integration hostname', {
+                    userId, previousHostname, hostname: INTEGRATION_HOSTNAME
+                });
+            }
+        }
+    } catch (e) {
+        console.warn('[ServiceTitan][postSaveUserInfo] failed to store integration hostname:', e.message);
+    }
+    return userInfo;
+}
+
+// Helper function to generate ServiceTitan token. The tenant decides which auth host to use —
+// integration credentials only authenticate against the integration host, and vice versa.
+async function generateServiceTitanToken(clientId, clientSecret, tenantId) {
+    const tokenUrl = getAccessTokenUrl(tenantId);
     const tokenPayload = {
         grant_type: "client_credentials",
         client_id: clientId,
@@ -246,7 +336,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
     if (phoneNumberObj.valid) {
         phoneNumberWithoutCountryCode = phoneNumberObj.number.significant;
     }
-    const findContactUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}&active=true`;
+    const findContactUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers?phone=${phoneNumberWithoutCountryCode}&active=true`;
     const personInfo = await serviceTitanApiClient.get(
         findContactUrl,
         {
@@ -299,7 +389,7 @@ async function findContactWithName({ user, name }) {
     apiLog.logStart('ServiceTitan', 'findContactWithName', { name });
 
     try {
-        const findContactWithNameUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers?name=${name}&active=true`;
+        const findContactWithNameUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers?name=${name}&active=true`;
         const personInfo = await serviceTitanApiClient.get(
             findContactWithNameUrl,
             {
@@ -394,7 +484,7 @@ async function createContact({ user, phoneNumber, newContactName }) {
             ],
         };
 
-        const createContactUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers`;
+        const createContactUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers`;
         const response = await serviceTitanApiClient.post(
             createContactUrl,
             payload,
@@ -452,7 +542,7 @@ async function appendContactNumberIfNew({ user, contactInfo, receivedNumber, aut
     const parsed = parsePhoneNumber(cleaned);
     const value = parsed.valid ? parsed.number.significant : cleaned;
     try {
-        const customerUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}`;
+        const customerUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactInfo.id}`;
         const existing = await serviceTitanApiClient.get(
             customerUrl,
             { headers: { Authorization: `Bearer ${auth}`, 'ST-App-Key': stAppKey }, _operation: 'appendContactNumber' }
@@ -487,7 +577,7 @@ async function getUserList({ user, authHeader }) {
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     try {
-        const getUserListUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers`;
+        const getUserListUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers`;
         const userListResp = await serviceTitanApiClient.get(
             getUserListUrl,
             {
@@ -623,7 +713,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     if (footerLines.length > 0) noteText += `\n\n${footerLines.join("\n")}`;
 
     // Always log to the customer-level note.
-    const createCallLogUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactInfo.id}/notes`;
+    const createCallLogUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactInfo.id}/notes`;
     const addNoteRes = await serviceTitanApiClient.post(
         createCallLogUrl,
         { text: noteText },
@@ -692,7 +782,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     // ---------------- FETCH OLD DATA ----------------
     let body = "";
     const getLogRes = await serviceTitanApiClient.get(
-        `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
+        `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`,
         {
             headers: {
                 Authorization: `Bearer ${auth}`,
@@ -826,7 +916,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     // leave a duplicate. Order matters — create first so a delete failure never loses the
     // edited content (worst case is a leftover duplicate, not data loss).
     const addNoteRes = await serviceTitanApiClient.post(
-        `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
+        `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`,
         { text: noteText },
         {
             headers: {
@@ -843,7 +933,7 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     if (realId && String(addNoteRes.data.id) !== String(realId)) {
         try {
             await serviceTitanApiClient.delete(
-                `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes/${realId}`,
+                `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes/${realId}`,
                 {
                     headers: { Authorization: `Bearer ${auth}`, "ST-App-Key": stAppKey },
                     _operation: 'updateCallLog'
@@ -940,7 +1030,7 @@ ${faxDocLink}
 `.trim();
     }
 
-    const createMessageLogUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`;
+    const createMessageLogUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`;
     const addLogRes = await serviceTitanApiClient.post(
         createMessageLogUrl,
         { text: noteText },
@@ -993,7 +1083,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     if (messageType === "SMS") {
 
         const getLogRes = await serviceTitanApiClient.get(
-            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
+            `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`,
             {
                 headers: {
                     Authorization: `Bearer ${auth}`,
@@ -1074,7 +1164,7 @@ ${faxDocLink}
 `.trim();
     }
 
-    const updateMessageLogUrl = `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`;
+    const updateMessageLogUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`;
     const addLogRes = await serviceTitanApiClient.post(
         updateMessageLogUrl,
         { text: noteText },
@@ -1114,6 +1204,7 @@ ${faxDocLink}
     };
 }
 async function getCallLog({ user, callLogId }) {
+    console.log(user.hostname, "hostname in getCallLog")
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
@@ -1148,7 +1239,7 @@ async function getCallLog({ user, callLogId }) {
         const contactId = existingCallLogDetails.contactId;
 
         const getLogRes = await serviceTitanApiClient.get(
-            `${SERVICE_TITAN_CRM_URL}/${tenantId}/customers/${contactId}/notes`,
+            `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`,
             {
                 headers: {
                     Authorization: `Bearer ${auth}`,
@@ -1214,13 +1305,14 @@ function formatContact(rawContactInfo) {
 
 async function getRefreshedAuthToken(user) {
     const { platformAdditionalInfo } = user.dataValues;
-    const { client_id, client_secret, expiresAt } = platformAdditionalInfo;
+    const { client_id, client_secret, expiresAt, tenant } = platformAdditionalInfo;
 
     if (Date.now() < expiresAt) {
         return user.dataValues.accessToken;
     }
 
-    const tokenUrl = process.env.SERVICE_TITAN_ACCESS_TOKEN_URI;
+    // Same host the login used — a refresh against the other environment fails with invalid_client.
+    const tokenUrl = getAccessTokenUrl(tenant);
     const data = {
         grant_type: 'client_credentials',
         client_id: client_id,
@@ -1259,6 +1351,7 @@ function getLogFormatType() {
 exports.getAuthType = getAuthType;
 exports.getBasicAuth = getBasicAuth;
 exports.getUserInfo = getUserInfo;
+exports.postSaveUserInfo = postSaveUserInfo;
 exports.getLogFormatType = getLogFormatType;
 exports.getUserList = getUserList;
 exports.createCallLog = createCallLog;
