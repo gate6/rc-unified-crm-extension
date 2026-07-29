@@ -110,6 +110,7 @@ nav:
   - 'Pipedrive': crm/pipedrive.md
   - 'Redtail CRM': crm/redtail.md
   - 'ServiceNow': crm/servicenow.md
+  - 'ServiceTitan': crm/servicetitan.md
   - 'Smokeball': crm/smokeball.md
   - 'Zoho': crm/zoho.md
 - 'Solutions':
