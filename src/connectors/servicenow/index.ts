@@ -50,17 +50,56 @@ function formatDateTime({ user, time }) {
     return momentTime.format(user?.userSettings?.logDateFormat?.value || 'YYYY-MM-DD hh:mm:ss A');
 }
 
+// Pick a human-readable agent name out of whatever the scripted REST resource returns. The shape
+// is NOT fixed — it is customer-authored per instance — so this reads the fields in descending
+// order of friendliness rather than demanding one. Observed on dev388800:
+//   {result:{id, user_name:'admin', email, first_name:'System', last_name:'Administrator', ...}}
+// `name` is preferred but often absent; first/last is the readable form; user_name is the last
+// resort because it shows the login ('admin') to end users in the work note.
+function pickAgentName(result: any = {}) {
+    const direct = (result.name ?? '').toString().trim();
+    if (direct) return direct;
+    const fullName = [result.first_name, result.last_name]
+        .map(part => (part ?? '').toString().trim())
+        .filter(Boolean)
+        .join(' ');
+    if (fullName) return fullName;
+    return (result.user_name ?? '').toString().trim();
+}
+
+// Resolve the ServiceNow user behind the connection — the same scripted REST endpoint
+// (companies.userDetailsPath) that createCallLog/createMessageLog already use to fill `assigned_to`
+// from `result.id`. Here we want a display name, so outbound messages are attributed to the agent
+// who sent them instead of a generic "You". Non-fatal: the name is cosmetic, so a missing path or
+// a failing call falls back rather than breaking the log.
+async function fetchAgentName({ hostname, authHeader, userDetailsPath, operation }) {
+    if (!userDetailsPath) return '';
+    try {
+        const res = await serviceNowApiClient.get(
+            `https://${hostname}/api/${userDetailsPath}`,
+            { headers: { Authorization: authHeader }, _operation: operation }
+        );
+        return pickAgentName(res.data?.result);
+    } catch (e) {
+        console.warn(`[ServiceNow] ${operation}: could not resolve the agent name (status ${e?.response?.status ?? 'n/a'}) — falling back to "You" on outbound messages.`);
+        return '';
+    }
+}
+
 // Build a message-log work note in the same format as the Monday connector, adapted to
-// ServiceNow's plain-text journal field (\n instead of <br>). Each message is written as
-// its own work note (journal entry) — callers PATCH work_notes with just this text.
-function buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, includeHeader = true }) {
+// ServiceNow's plain-text journal field (\n instead of <br>). Create writes this as the first
+// work note; update appends the line into that same entry via writeWorkNote.
+// Sender naming: inbound lines are attributed to the contact, outbound to the agent who sent them
+// (`agentName`, from the same scripted REST lookup that fills `assigned_to`), falling back to "You"
+// only when that lookup yields nothing.
+function buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, includeHeader = true, agentName = '' }) {
     if (messageType === 'Voicemail') {
         return `Voicemail from ${contactInfo.name}\n\nRecording:\n${recordingLink}`;
     }
     if (messageType === 'Fax') {
         return `Fax from ${contactInfo.name}\n\nDocument:\n${faxDocLink}`;
     }
-    const sender = message.direction === 'Inbound' ? contactInfo.name : 'You';
+    const sender = message.direction === 'Inbound' ? contactInfo.name : (agentName || 'You');
     const text = message.subject || message.text || '';
     const line = `[${formatDateTime({ user, time: message.creationTime || Date.now() })}] ${sender}: ${text}`;
     return includeHeader ? `SMS conversation with ${contactInfo.name}\n${line}` : line;
@@ -909,20 +948,28 @@ async function upsertCallDisposition({ user, existingCallLog, authHeader, dispos
     };
 }
 
+// The agent note is what people read first, so it is pinned to the TOP of the body: any existing
+// block is stripped and re-inserted at the front. That also lifts notes back up on logs written
+// before this rule existed, where adding a note to an already-populated body appended it last.
+//
+// `note` distinguishes two cases that used to be conflated:
+//   null/undefined -> not submitted (e.g. a recording- or transcript-only update). Leave as is.
+//   '' (empty)     -> the user CLEARED the field. The block must be removed, not preserved.
+// The old `if (!!!note) return body` treated both as "leave as is", so clearing a note silently
+// kept the previous text.
 function upsertCallAgentNote({ body, note }) {
-    if (!!!note) {
+    if (note == null) {
         return body;
     }
-    // Labeled block like the AI Note, with a blank line above and below.
-    const block = `\n- Agent Note:\n${note}\n\n`;
+    // Drop the existing block wherever it currently sits — top, middle or bottom.
     const noteRegex = RegExp('\\n?- Agent Note:\\n[\\s\\S]*?\\n\\n');
-    if (noteRegex.test(body)) {
-        body = body.replace(noteRegex, block);
+    const rest = body.replace(noteRegex, '').replace(/^\n+/, '');
+    const trimmedNote = note.toString().trim();
+    if (!trimmedNote) {
+        return rest;
     }
-    else {
-        body += block;
-    }
-    return body;
+    // Labeled block like the AI Note, with a blank line below separating it from the fields.
+    return `- Agent Note:\n${trimmedNote}\n\n${rest}`;
 }
 
 function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
@@ -1061,6 +1108,76 @@ function upsertTranscript({ body, transcript }) {
     return body;
 }
 
+// work_notes is a JOURNAL field, not a column: every PATCH of interaction.work_notes appends a
+// NEW row to sys_journal_field, and the Table API GET on interaction returns the field empty.
+// So the current body has to be read back from sys_journal_field — newest entry first.
+async function getLatestWorkNote({ hostname, authHeader, recordId, operation }) {
+    const journalRes = await serviceNowApiClient.get(
+        `https://${hostname}/api/now/table/sys_journal_field?sysparm_query=element_id=${recordId}^element=work_notes^ORDERBYDESCsys_created_on&sysparm_fields=sys_id,value,sys_created_on`,
+        { headers: { Authorization: authHeader }, _operation: operation }
+    );
+    const latest = (journalRes.data?.result ?? [])
+        .sort((a, b) => new Date(b.sys_created_on) - new Date(a.sys_created_on))[0];
+    return { sysId: latest?.sys_id ?? null, value: latest?.value ?? '' };
+}
+
+// The form does NOT render work notes from sys_journal_field. The Activity formatter reads
+// sys_history_line — a denormalized cache built on demand and keyed by a sys_history_set row —
+// which materializes a COPY of the journal text when the entry is first written. So editing the
+// journal entry updates the data (getCallLog reads it back correctly) while the record keeps
+// displaying the pre-edit note. Dropping the history set makes ServiceNow rebuild it from source
+// on the next view, which picks up the edit.
+// Best-effort by design: the connector user may lack delete rights on sys_history_set, and a stale
+// display cache is a cosmetic problem, not a data one — never fail a log update over it.
+async function invalidateHistorySet({ hostname, authHeader, recordId, operation }) {
+    try {
+        const setRes = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/sys_history_set?sysparm_query=id=${recordId}&sysparm_fields=sys_id`,
+            { headers: { Authorization: authHeader }, _operation: operation }
+        );
+        for (const historySet of setRes.data?.result ?? []) {
+            await serviceNowApiClient.delete(
+                `https://${hostname}/api/now/table/sys_history_set/${historySet.sys_id}`,
+                { headers: { Authorization: authHeader }, _operation: operation }
+            );
+        }
+    } catch (e) {
+        console.warn(`[ServiceNow] ${operation}: could not invalidate the activity cache for ${recordId} (status ${e?.response?.status ?? 'n/a'}) — the edited work note may keep showing its previous text on the form until ServiceNow rebuilds the cache itself.`);
+    }
+}
+
+// Write the log body by EDITING the existing journal entry in place rather than appending another
+// one — sys_journal_field is a normal table, so the entry can be PATCHed by sys_id. Editing a log
+// used to leave a trail of near-identical work notes; now it rewrites the single one.
+// Falls back to the appending PATCH on interaction.work_notes when there is no entry yet (first
+// write), or when the instance has not granted write access on sys_journal_field: a missing ACL
+// has to degrade to a duplicate note, never to a lost log.
+async function writeWorkNote({ hostname, authHeader, recordId, journalSysId, body, operation }) {
+    if (journalSysId) {
+        try {
+            await serviceNowApiClient.patch(
+                `https://${hostname}/api/now/table/sys_journal_field/${journalSysId}`,
+                { value: body },
+                { headers: { Authorization: authHeader }, _operation: operation }
+            );
+            await invalidateHistorySet({ hostname, authHeader, recordId, operation });
+            return { updatedInPlace: true };
+        } catch (e) {
+            const status = e?.response?.status ?? null;
+            // Only an access/existence problem is recoverable by appending; anything else is a real
+            // failure and must surface.
+            if (![401, 403, 404].includes(status)) { throw e; }
+            console.warn(`[ServiceNow] ${operation}: cannot edit journal entry ${journalSysId} (status ${status}) — appending a new work note instead. Grant write access on sys_journal_field to update notes in place.`);
+        }
+    }
+    await serviceNowApiClient.patch(
+        `https://${hostname}/api/now/table/interaction/${recordId}`,
+        { work_notes: body },
+        { headers: { Authorization: authHeader }, _operation: operation }
+    );
+    return { updatedInPlace: false };
+}
+
 async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
     // ---TODO.5: Implement call log fetching---
@@ -1080,14 +1197,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
             headers: { 'Authorization': authHeader }, _operation: 'getCallLog'
         });
 
-    const journalRes = await serviceNowApiClient.get(
-        `https://${hostname}/api/now/table/sys_journal_field?sysparm_query=element_id=${callLogId}^element=work_notes&sysparm_fields=value,sys_created_on`,
-        {
-            headers: { Authorization: authHeader }, _operation: 'getCallLog'
-        });
-
-    const latestNote = journalRes.data.result
-        .sort((a, b) => new Date(b.sys_created_on) - new Date(a.sys_created_on))[0]?.value || '';
+    const { value: latestNote } = await getLatestWorkNote({ hostname, authHeader, recordId: callLogId, operation: 'getCallLog' });
     const agentNoteMatch = latestNote.match(/- Agent note:\s*([\s\S]*?)(?=\n- |$)/i);
     const agentNote = agentNoteMatch ? agentNoteMatch[1].trim() : '';
 
@@ -1127,16 +1237,11 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         {
             headers: { 'Authorization': authHeader }, _operation: 'updateCallLog'
         });
-    // work_notes is a JOURNAL field — the Table API GET returns it empty, so read the latest
-    // journal entry (the full note body written at create/last edit) the same way getCallLog does.
-    // Without this, originalNote is '' and the body gets rebuilt from scratch, which drops the
+    // Read the latest journal entry (the full note body written at create/last edit). Its sys_id is
+    // what lets the update rewrite that same entry instead of appending a second one.
+    // Without the body, originalNote is '' and it gets rebuilt from scratch, which drops the
     // Contact Number and RingCentral Username and makes the phone fall back to the extension.
-    const journalRes = await serviceNowApiClient.get(
-        `https://${hostname}/api/now/table/sys_journal_field?sysparm_query=element_id=${existingLogId}^element=work_notes&sysparm_fields=value,sys_created_on`,
-        { headers: { Authorization: authHeader }, _operation: 'updateCallLog' }
-    );
-    const originalNote = journalRes.data.result
-        .sort((a, b) => new Date(b.sys_created_on) - new Date(a.sys_created_on))[0]?.value || '';
+    const { sysId: journalSysId, value: originalNote } = await getLatestWorkNote({ hostname, authHeader, recordId: existingLogId, operation: 'updateCallLog' });
     const originalSubject = getLogRes?.data?.result?.short_description || '';
     let patchBody = {};
 
@@ -1147,7 +1252,9 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 
     let logBody = originalNote;
-    if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
+    // `note != null` not `!!note`: an empty string is a real edit (the user cleared the field) and
+    // has to reach upsertCallAgentNote so the block gets removed. Only an absent note is skipped.
+    if (note != null && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
     if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
     if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
     if (existingCallLog?.sessionId && (user.userSettings?.addCallSessionId?.value ?? true)) { logBody = upsertCallSessionId({ body: logBody, sessionId: existingCallLog.sessionId }); }
@@ -1164,9 +1271,10 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
 
+    // work_notes is deliberately NOT in this patch — it goes through writeWorkNote, which edits the
+    // existing journal entry instead of appending a new one.
     patchBody = {
-        short_description: subjectToUse,
-        work_notes: logBody
+        short_description: subjectToUse
     }
 
     patchBody.u_call_duration = formatDuration(duration);
@@ -1179,6 +1287,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             headers: { 'Authorization': authHeader }, _operation: 'updateCallLog'
         }
     );
+
+    await writeWorkNote({ hostname, authHeader, recordId: existingLogId, journalSysId, body: logBody, operation: 'updateCallLog' });
 
     if (recordingDownloadLink) {
         console.log("Downloading Recorded File...");
@@ -1256,7 +1366,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // detect message type (SMS / Voicemail / Fax)
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
 
-    const workNotes = buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink });
+    // Same response that supplies assigned_to below also carries the agent's name fields.
+    const workNotes = buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, agentName: pickAgentName(caller_id.data?.result) });
 
     const postBody = {
         short_description: `[${messageType}] ${message.direction} ${messageType} - ${contactInfo.name}`,
@@ -1362,25 +1473,29 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         };
     }
 
-    const getLogRes = await serviceNowApiClient.get(
-        `https://${hostname}/api/now/table/interaction/${existingLogId}`,
-        { headers: { 'Authorization': authHeader }, _operation: 'updateMessageLog' }
-    );
+    // Every appended line names its sender, so the agent has to be resolved here too — via the same
+    // userDetailsPath lookup createMessageLog uses for assigned_to. Unlike create, a missing path is
+    // NOT fatal here: the message still logs, the outbound line just reads "You".
+    const messageLogCompany = await findCompany({ rcAccountId: user.rcAccountId, hostname });
+    const agentName = await fetchAgentName({ hostname, authHeader, userDetailsPath: messageLogCompany?.userDetailsPath, operation: 'updateMessageLog' });
 
-    let originalNote = getLogRes?.data?.result?.work_notes ?? '';
+    // Read the running conversation from sys_journal_field, not from the interaction record — the
+    // Table API GET returns the journal field empty, so reading it there yielded '' every time and
+    // every message restarted the thread in a brand-new work note.
+    const { sysId: journalSysId, value: originalNote } = await getLatestWorkNote({ hostname, authHeader, recordId: existingLogId, operation: 'updateMessageLog' });
 
     // detect message type
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
 
     // Same append flow as before — just Monday-style formatting. Only add the "SMS
     // conversation with…" header when starting a fresh note; otherwise append the line.
-    const updatedText = buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, includeHeader: !originalNote });
+    const updatedText = buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, includeHeader: !originalNote, agentName });
 
     const updatedWorkNotes = originalNote ? `${originalNote}\n${updatedText}` : updatedText;
 
+    // work_notes goes through writeWorkNote so the thread keeps growing inside the one entry.
     const patchBody = {
-        short_description: `[${messageType}] ${message.direction} ${messageType} - ${existingMessageLog.contactName ?? ''}`,
-        work_notes: updatedWorkNotes
+        short_description: `[${messageType}] ${message.direction} ${messageType} - ${existingMessageLog.contactName ?? ''}`
     };
 
     if (additionalSubmission?.state) {
@@ -1400,6 +1515,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         {
             headers: { 'Authorization': authHeader }, _operation: 'updateMessageLog'
         });
+
+    await writeWorkNote({ hostname, authHeader, recordId: existingLogId, journalSysId, body: updatedWorkNotes, operation: 'updateMessageLog' });
 
     if (recordingLink || faxDocLink) {
 
