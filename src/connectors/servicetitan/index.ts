@@ -16,6 +16,7 @@ const { trackAnalytics } = require('../shared/analytics');
 const models = sequelize ? initModels(sequelize) : null;
 const licenseHelper = require('../shared/license');
 const apiLog = require('../shared/apiLogger');
+const jobs = require('../servicetitan-core/jobs');
 
 const serviceTitanApiClient = axios.create();
 
@@ -62,7 +63,6 @@ function getAccessTokenUrl(tenantId) {
     return isIntegrationTenant(tenantId) ? INTEGRATION_ACCESS_TOKEN_URI : process.env.SERVICE_TITAN_ACCESS_TOKEN_URI;
 }
 
-
 apiLog.installErrorInterceptor(serviceTitanApiClient, 'ServiceTitan');
 
 // Format a timestamp with the user's chosen date format from the extension settings
@@ -77,6 +77,30 @@ function formatDateTime({ user, time }) {
             : momentTime.utcOffset(Number(tz));
     }
     return momentTime.format(user?.userSettings?.logDateFormat?.value || 'YYYY-MM-DD hh:mm:ss A');
+}
+
+// The log id is the ServiceTitan page path (see jobs.parseLogId), so it no longer carries the
+// customer note id. The note is found by the call session id it records instead — that is stable
+// across every update of a call, where the note id changes each time the note is replaced.
+const CALL_SESSION_LINE = 'Call Session ID:';
+
+function findCallLogNote(notes, sessionId, legacyNoteId) {
+    const byRecency = [...(notes ?? [])].sort(
+        (a, b) => new Date(b.createdOn ?? 0).getTime() - new Date(a.createdOn ?? 0).getTime()
+    );
+    if (sessionId) {
+        const bySession = byRecency.find(note => String(note.text ?? '').includes(`${CALL_SESSION_LINE} ${sessionId}`));
+        if (bySession) return bySession;
+    }
+    // Logs written before the path scheme still carry a real note id in the log id.
+    return legacyNoteId ? (byRecency.find(note => String(note.id) === String(legacyNoteId)) ?? null) : null;
+}
+
+// Summary written onto a job raised from an interaction, so a dispatcher opening the job can see
+// where it came from.
+function newJobSummaryFor(interactionKind, direction) {
+    const directionPrefix = direction ? `${String(direction).toLowerCase()} ` : '';
+    return `Opened from a ${directionPrefix}RingCentral ${interactionKind}.`;
 }
 
 async function getLicenseStatus({ userId }) {
@@ -355,6 +379,15 @@ async function findContact({ user, phoneNumber, isExtension }) {
 
             rawPersonInfo['phoneNumber'] = phoneNumber;
             const contact = formatContact(rawPersonInfo);
+            contact.additionalInfo = await jobs.buildJobAdditionalInfo({
+                user,
+                crmBaseUrl: getCrmBaseUrl(tenantId),
+                tenantId,
+                auth,
+                stAppKey: user.dataValues.platformAdditionalInfo.st_app_key,
+                customerId: contact.id,
+                logPrefix: '[ServiceTitan] findContact:'
+            });
             matchedContactInfo.push(contact);
         }
     }
@@ -410,6 +443,15 @@ async function findContactWithName({ user, name }) {
                 const phone = rawPersonInfo.phones?.find(p => p.type === 'Primary')?.phone ?? '';
                 rawPersonInfo['phoneNumber'] = phone;
                 const contact = formatContact(rawPersonInfo);
+                contact.additionalInfo = await jobs.buildJobAdditionalInfo({
+                    user,
+                    crmBaseUrl: getCrmBaseUrl(tenantId),
+                    tenantId,
+                    auth,
+                    stAppKey,
+                    customerId: contact.id,
+                    logPrefix: '[ServiceTitan] findContactWithName:'
+                });
                 matchedContactInfo.push(contact);
             }
         }
@@ -681,8 +723,11 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
         headerLines.push(`Duration: ${callLog.duration} sec`);
     }
 
-    if (callLog.sessionId && (user.userSettings?.addCallSessionId?.value ?? true)) {
-        headerLines.push(`Call Session ID: ${callLog.sessionId}`);
+    // Structural, not decorative: this line is how a later update or read finds this note again,
+    // now that the log id is the ServiceTitan page path. It is written unconditionally so a setting
+    // can never make a call log unfindable.
+    if (callLog.sessionId) {
+        headerLines.push(`${CALL_SESSION_LINE} ${callLog.sessionId}`);
     }
 
     const rcUserName = additionalSubmission?.rcUserName;
@@ -712,7 +757,18 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     if (optionalSections) noteText += `\n\n${optionalSections}`;
     if (footerLines.length > 0) noteText += `\n\n${footerLines.join("\n")}`;
 
-    // Always log to the customer-level note.
+    const targetJob = await jobs.resolveTargetJob({
+        user,
+        crmBaseUrl: getCrmBaseUrl(tenantId),
+        tenantId, auth, stAppKey,
+        customerId: contactInfo.id,
+        additionalSubmission,
+        newJobSummary: newJobSummaryFor('call', callLog?.direction)
+    });
+
+    // The customer's notes always get the call, so a customer's full communication history stays in
+    // one place regardless of which job each call was about. It is also written first because its
+    // response carries the only real note id ServiceTitan gives us.
     const createCallLogUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactInfo.id}/notes`;
     const addNoteRes = await serviceTitanApiClient.post(
         createCallLogUrl,
@@ -726,8 +782,24 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
             _operation: 'createCallLog'
         }
     );
-    const logId = `${addNoteRes.data.id}_note`;
-    apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, contactId: contactInfo.id, apiEndpoint: createCallLogUrl });
+    const customerNoteId = addNoteRes.data.id;
+
+    let logId = jobs.buildCustomerLogId(contactInfo.id);
+    let placement = 'Call log created';
+
+    // A selected job additionally gets the call, filed where dispatchers and technicians read.
+    const { jobId, warning: jobNoteWarning } = await writeJobNote({
+        targetJob, tenantId, auth, stAppKey, customerNoteId, noteText, operation: 'createCallLog'
+    });
+    if (jobId) {
+        // The id points at the job so "view log" lands on the job page rather than the customer.
+        logId = jobs.buildJobLogId(jobId);
+        placement = targetJob.createdJobNumber
+            ? `Call log created on new job #${targetJob.createdJobNumber} and the customer`
+            : 'Call log created on the job and the customer';
+    }
+
+    apiLog.logSuccess('ServiceTitan', 'createCallLog', { logId, contactId: contactInfo.id, jobId: jobId ?? null, apiEndpoint: createCallLogUrl });
 
     // Write the number this call came in on into the CRM customer so a later lookup of it resolves
     // to this customer instead of prompting a name search.
@@ -736,13 +808,17 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
     await trackAnalytics({ user, crm: 'ServiceTitan', event: 'callLogCreated', eventDate: callLog?.startTime });
 
+    // A job that could not be used is worth telling the agent about — the log still saved, just not
+    // everywhere they asked for it.
+    const warning = targetJob.warning ?? jobNoteWarning;
+
     return {
         logId,
         contactId: contactInfo.id,
         returnMessage: {
-            message: "Call log created",
-            messageType: "success",
-            ttl: 2000
+            message: warning ? `${placement}. ${warning}` : placement,
+            messageType: warning ? "warning" : "success",
+            ttl: warning ? 5000 : 2000
         }
     };
 }
@@ -760,7 +836,9 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     const contactId = existingCallLog.contactId;
 
-    const [realId] = existingCallLog.thirdPartyLogId.split("_");
+    const { jobId: currentJobId, legacyNoteId } = jobs.parseLogId(existingCallLog.thirdPartyLogId);
+    // The call session id is the handle on the customer note; the log id is a page path now.
+    const sessionId = existingCallLog.sessionId;
 
     let direction = "";
     let startTime = "";
@@ -780,9 +858,11 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     let oldTranscript = "";
 
     // ---------------- FETCH OLD DATA ----------------
+    // Every call is written to the customer's notes whether or not it is also on a job, so the
+    // customer note is the log's system of record and the previous content always comes from there.
     let body = "";
     const getLogRes = await serviceTitanApiClient.get(
-        `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`,
+        `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes?pageSize=100`,
         {
             headers: {
                 Authorization: `Bearer ${auth}`,
@@ -792,7 +872,10 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         }
     );
 
-    const targetLog = getLogRes.data.data.find(log => log.id == realId);
+    const targetLog = findCallLogNote(getLogRes.data?.data, sessionId, legacyNoteId);
+    // The note actually read is the one replaced below, so a stale or missing id cannot delete
+    // somebody else's note.
+    const previousNoteId = targetLog?.id ?? null;
 
     if (targetLog) {
         body = targetLog.text || "";
@@ -881,8 +964,9 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
     if (duration && (user.userSettings?.addCallLogDuration?.value ?? true)) {
         headerLines.push(`Duration: ${duration} sec`);
     }
-    if (callSessionId && (user.userSettings?.addCallSessionId?.value ?? true)) {
-        headerLines.push(`Call Session ID: ${callSessionId}`);
+    // Carried forward for the same reason it is written on create — see createCallLog.
+    if (callSessionId) {
+        headerLines.push(`${CALL_SESSION_LINE} ${callSessionId}`);
     }
     if (rcUsername && (user.userSettings?.addRingCentralUserName?.value ?? true)) {
         headerLines.push(`RingCentral Username: ${rcUsername}`);
@@ -909,7 +993,13 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
 
     let newLogId;
 
-    // ---------------- UPDATE NOTE ----------------
+    // ---------------- UPDATE NOTES ----------------
+
+    // The job is settled when the log is created and never changes afterwards. The edit form still
+    // submits the Job dropdown, but acting on it would file the update against a different job and
+    // strand the original — which would still show a call whose latest version lives elsewhere. So
+    // updates always go to the job the log was created against, and to no other.
+    const targetJob = { jobId: currentJobId };
 
     // ServiceTitan customer notes have no in-place update endpoint, so an edit is a
     // create-then-delete: post the replacement note, then delete the original so we don't
@@ -928,21 +1018,27 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         }
     );
 
-    newLogId = `${addNoteRes.data.id}_note`;
+    const newCustomerNoteId = addNoteRes.data.id;
 
-    if (realId && String(addNoteRes.data.id) !== String(realId)) {
+    if (previousNoteId && String(newCustomerNoteId) !== String(previousNoteId)) {
         try {
             await serviceTitanApiClient.delete(
-                `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes/${realId}`,
+                `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes/${previousNoteId}`,
                 {
                     headers: { Authorization: `Bearer ${auth}`, "ST-App-Key": stAppKey },
                     _operation: 'updateCallLog'
                 }
             );
         } catch (e) {
-            console.warn('[ServiceTitan][updateCallLog] could not delete the old note — a duplicate may remain', { oldNoteId: realId, status: e?.response?.status, message: e?.message });
+            console.warn('[ServiceTitan][updateCallLog] could not delete the old note — a duplicate may remain', { oldNoteId: previousNoteId, status: e?.response?.status, message: e?.message });
         }
     }
+
+    const { jobId, warning: jobNoteWarning } = await writeJobNote({
+        targetJob, tenantId, auth, stAppKey, customerNoteId: newCustomerNoteId, noteText, operation: 'updateCallLog'
+    });
+    // The id is a page path, so it does not change as the note behind it is replaced.
+    newLogId = jobId ? jobs.buildJobLogId(jobId) : jobs.buildCustomerLogId(contactId);
 
     const logID_db = await CallLogModel.findOne({
         where: {
@@ -956,16 +1052,18 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         await logID_db.save();
     }
 
-    apiLog.logSuccess('ServiceTitan', 'updateCallLog', { logId: newLogId, contactId });
+    apiLog.logSuccess('ServiceTitan', 'updateCallLog', { logId: newLogId, contactId, jobId: jobId ?? null });
 
     await trackAnalytics({ user, crm: 'ServiceTitan', event: 'callLogUpdated' });
+
+    const updatePlacement = jobId ? 'Call log updated on the job and the customer' : 'Call log updated';
 
     return {
         logId: newLogId,
         returnMessage: {
-            message: "Call log updated",
-            messageType: "success",
-            ttl: 2000
+            message: jobNoteWarning ? `${updatePlacement}. ${jobNoteWarning}` : updatePlacement,
+            messageType: jobNoteWarning ? "warning" : "success",
+            ttl: jobNoteWarning ? 5000 : 2000
         }
     };
 }
@@ -980,7 +1078,89 @@ async function upsertCallDisposition({ user, existingCallLog, authHeader, dispos
     };
 }
 
-async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink }) {
+// An SMS thread is found by its own content rather than by the stored log id.
+//
+// ServiceTitan has no in-place note update, so every appended message replaces the note and changes
+// its id. Core does not carry that new id forward: on the update path it stamps each message's row
+// with the id as it was BEFORE the update (handlers/log.ts) and writes one row per message, all
+// sharing a conversationLogId. Its unordered `findOne` then hands us whichever of those rows it
+// likes — often one holding a note id that has since been replaced and deleted. Looking that id up
+// finds nothing, and the thread silently restarts as a one-message note.
+//
+// So the id is not trusted. The thread is the newest note on the customer that this connector wrote
+// for this counterparty, which stays correct no matter which row core passes in.
+const CONVERSATION_HEADER = 'Conversation';
+
+// The number is in the header because it both identifies the thread for the lookup below and tells
+// a reader which number the exchange was with — a customer can have more than one.
+function buildConversationHeader(counterpartyNumber) {
+    return counterpartyNumber
+        ? `${CONVERSATION_HEADER} with ${counterpartyNumber}:`
+        : `${CONVERSATION_HEADER}:`;
+}
+
+// Matches both header forms so a thread started before the number was recorded still continues.
+const CONVERSATION_BODY = /Conversation(?: with [^:\n]*)?:\s*([\s\S]*)/;
+
+// Picks the thread note to continue: the most recent one for this counterparty, falling back to an
+// un-numbered thread note when none carries the number yet.
+function findConversationNote(notes, counterpartyNumber) {
+    const byRecency = [...(notes ?? [])].sort(
+        (a, b) => new Date(b.createdOn ?? 0).getTime() - new Date(a.createdOn ?? 0).getTime()
+    );
+    const header = buildConversationHeader(counterpartyNumber);
+    return byRecency.find(note => String(note.text ?? '').trimStart().startsWith(header))
+        ?? byRecency.find(note => String(note.text ?? '').trimStart().startsWith(`${CONVERSATION_HEADER}:`))
+        ?? null;
+}
+
+// An SMS thread is rebuilt into a single note on every message, so it is capped and restarted
+// rather than growing without limit. The overlap repeats the tail of the old thread at the top of
+// the new note so the new one does not open mid-conversation.
+const MAX_THREAD_MESSAGES = 10;
+const THREAD_OVERLAP_MESSAGES = 1;
+// Backstop for threads whose messages are long enough to outgrow a note before hitting the count.
+const MAX_NOTE_SIZE = 30000;
+
+// Each message starts with a bracketed timestamp: "[03/08/2026 10:00:00 AM] Jane Smith: text".
+const CONVERSATION_MESSAGE_LINE = /^\[[^\]]+\]\s+[^:]+:/;
+
+// Splits a stored conversation back into messages. A text can itself contain line breaks, so the
+// split is on the timestamped line that opens each message rather than on every newline —
+// counting raw lines would restart threads early and truncate multi-line texts on restart.
+function splitConversationMessages(conversation) {
+    const messages = [];
+    for (const line of String(conversation ?? '').split('\n')) {
+        if (CONVERSATION_MESSAGE_LINE.test(line)) {
+            messages.push(line);
+        } else if (messages.length > 0) {
+            messages[messages.length - 1] += `\n${line}`;
+        }
+    }
+    return messages;
+}
+
+// Mirrors the job note the call log path writes. Returns the job actually written to, or a warning
+// when it could not be — the interaction is already safe on the customer either way, so a job note
+// failure is never worth failing the log over.
+async function writeJobNote({ targetJob, tenantId, auth, stAppKey, customerNoteId, noteText, operation }) {
+    if (!targetJob.jobId) return { jobId: null };
+    try {
+        await jobs.postJobNote({
+            crmBaseUrl: getCrmBaseUrl(tenantId),
+            tenantId, auth, stAppKey,
+            jobId: targetJob.jobId,
+            text: noteText,
+            operation
+        });
+        return { jobId: targetJob.jobId };
+    } catch (err) {
+        console.warn(`[ServiceTitan][${operation}] could not write the job note:`, err?.response?.data || err.message);
+        return { jobId: null, warning: 'It could not be written to the job, so it is on the customer notes only.' };
+    }
+}
+
+async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink, additionalSubmission }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
@@ -1006,8 +1186,10 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
         const line =
             `[${formatDateTime({ user, time: message.creationTime })}] ${direction}: ${message.subject}`;
 
+        // The header carries the counterparty number so follow-up messages can find this thread
+        // again — see findConversationNote.
         noteText = `
-Conversation:
+${buildConversationHeader(phoneWriteback.resolveCounterpartyNumber({ message }))}
 ${line}
 `.trim();
 
@@ -1030,6 +1212,17 @@ ${faxDocLink}
 `.trim();
     }
 
+    const targetJob = await jobs.resolveTargetJob({
+        user,
+        crmBaseUrl: getCrmBaseUrl(tenantId),
+        tenantId, auth, stAppKey,
+        customerId: contactId,
+        additionalSubmission,
+        newJobSummary: newJobSummaryFor(messageType.toLowerCase(), message?.direction)
+    });
+
+    // As with calls, the customer's notes always get the message and are written first — their
+    // response carries the only real note id ServiceTitan returns.
     const createMessageLogUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`;
     const addLogRes = await serviceTitanApiClient.post(
         createMessageLogUrl,
@@ -1043,26 +1236,42 @@ ${faxDocLink}
             _operation: 'createMessageLog'
         }
     );
+    const customerNoteId = addLogRes.data.id;
 
-    apiLog.logSuccess('ServiceTitan', 'createMessageLog', { logId: addLogRes.data.id, contactId, apiEndpoint: createMessageLogUrl });
+    // A message log with no job keeps its bare numeric id, exactly as before this feature — only a
+    // job-linked log takes the suffixed form.
+    let logId = jobs.buildCustomerLogId(contactId);
+    let placement = 'Message logged as a note';
+    const { jobId, warning } = await writeJobNote({
+        targetJob, tenantId, auth, stAppKey, customerNoteId, noteText, operation: 'createMessageLog'
+    });
+    if (jobId) {
+        logId = jobs.buildJobLogId(jobId);
+        placement = targetJob.createdJobNumber
+            ? `Message logged on new job #${targetJob.createdJobNumber} and the customer`
+            : 'Message logged on the job and the customer';
+    }
+
+    apiLog.logSuccess('ServiceTitan', 'createMessageLog', { logId, contactId, jobId: jobId ?? null, apiEndpoint: createMessageLogUrl });
 
     // Same write-back as createCallLog: append the number this message came in on to the CRM customer.
     const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ message });
     await appendContactNumberIfNew({ user, contactInfo, receivedNumber, auth, tenantId, stAppKey, logPrefix: '[ServiceTitan] createMessageLog:' });
     await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogCreated', eventDate: message?.creationTime });
 
+    const messageWarning = targetJob.warning ?? warning;
     return {
-        logId: addLogRes.data.id,
+        logId,
         contactId,
         returnMessage: {
-            message: "Message logged as a note",
-            messageType: "success",
-            ttl: 1000
+            message: messageWarning ? `${placement}. ${messageWarning}` : placement,
+            messageType: messageWarning ? "warning" : "success",
+            ttl: messageWarning ? 5000 : 1000
         }
     };
 }
 
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink, additionalSubmission }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
@@ -1073,17 +1282,25 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     const stAppKey = user.dataValues.platformAdditionalInfo.st_app_key;
 
     const contactId = contactInfo.id;
-    const noteId = existingMessageLog.thirdPartyLogId;
+    // Message logs predate job support and stored a bare note id; parseLogId reads both that and the
+    // job-linked `{customerNoteId}_{jobId}_jobnote` form.
+    const { jobId: currentJobId, legacyNoteId } = jobs.parseLogId(existingMessageLog.thirdPartyLogId);
 
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
 
     let noteText = "";
+    // The replacement note normally carries the whole conversation forward, making the note it
+    // replaces redundant. The one exception is an SMS thread restart — see below.
+    let supersedesPreviousNote = true;
+    // The note this update replaces. Resolved from the thread's own content rather than the stored
+    // log id — core hands back ids of notes that have since been replaced and deleted.
+    let previousNoteId = legacyNoteId;
 
     // ---------------- SMS CASE ----------------
     if (messageType === "SMS") {
 
         const getLogRes = await serviceTitanApiClient.get(
-            `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`,
+            `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes?pageSize=100`,
             {
                 headers: {
                     Authorization: `Bearer ${auth}`,
@@ -1093,12 +1310,14 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
             }
         );
 
-        const targetLog = getLogRes.data.data.find(log => log.id == noteId);
+        const counterpartyNumber = phoneWriteback.resolveCounterpartyNumber({ message });
+        const targetLog = findConversationNote(getLogRes.data?.data, counterpartyNumber);
+        previousNoteId = targetLog?.id ?? null;
 
         let previousConversation = "";
 
         if (targetLog?.text) {
-            const match = targetLog.text.match(/Conversation:\s*([\s\S]*)/);
+            const match = targetLog.text.match(CONVERSATION_BODY);
             if (match) {
                 previousConversation = match[1].trim();
             }
@@ -1117,25 +1336,30 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
                 ? `${previousConversation}\n${newLine}`
                 : newLine;
 
-        const MAX_NOTE_SIZE = 30000;
+        const previousMessages = splitConversationMessages(previousConversation);
 
-        if (updatedConversation.length > MAX_NOTE_SIZE) {
+        // The note is capped by message count so a thread breaks at a predictable point. The size
+        // cap stays as a backstop: ten unusually long texts could still outgrow a ServiceTitan
+        // note, and a rejected note would lose the message outright.
+        if (previousMessages.length >= MAX_THREAD_MESSAGES || updatedConversation.length > MAX_NOTE_SIZE) {
 
-            const lines = previousConversation.trim().split("\n");
-            const lastMessage = lines[lines.length - 1] || "";
-
+            // Carry the tail of the old thread into the new note so it does not open without context.
             const newThreadConversation =
-                `${lastMessage}\n${newLine}`;
+                [...previousMessages.slice(-THREAD_OVERLAP_MESSAGES), newLine].join("\n");
 
             noteText = `
-Conversation:
+${buildConversationHeader(counterpartyNumber)}
 ${newThreadConversation}
 `.trim();
+
+            // The thread has been restarted rather than carried forward, so the previous note is
+            // the only copy of the conversation up to this point — it must be kept as history.
+            supersedesPreviousNote = false;
 
         } else {
 
             noteText = `
-Conversation:
+${buildConversationHeader(counterpartyNumber)}
 ${updatedConversation}
 `.trim();
         }
@@ -1164,6 +1388,10 @@ ${faxDocLink}
 `.trim();
     }
 
+    // As with call logs, the job is settled when the thread is first logged. Later messages continue
+    // on that job and are never re-filed against a different one.
+    const targetJob = { jobId: currentJobId };
+
     const updateMessageLogUrl = `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`;
     const addLogRes = await serviceTitanApiClient.post(
         updateMessageLogUrl,
@@ -1177,6 +1405,32 @@ ${faxDocLink}
             _operation: 'updateMessageLog'
         }
     );
+    const newCustomerNoteId = addLogRes.data.id;
+
+    // The replacement note carries the whole conversation, so the one it supersedes is a strictly
+    // shorter copy of it — remove it rather than leaving a note per message on the customer. Create
+    // first, so a failed delete costs a duplicate and never the conversation itself.
+    if (supersedesPreviousNote && previousNoteId && String(newCustomerNoteId) !== String(previousNoteId)) {
+        try {
+            await serviceTitanApiClient.delete(
+                `${updateMessageLogUrl}/${previousNoteId}`,
+                {
+                    headers: { Authorization: `Bearer ${auth}`, "ST-App-Key": stAppKey },
+                    _operation: 'updateMessageLog'
+                }
+            );
+        } catch (e) {
+            console.warn('[ServiceTitan][updateMessageLog] could not delete the superseded note — a duplicate may remain', { oldNoteId: previousNoteId, status: e?.response?.status, message: e?.message });
+        }
+    }
+
+    let newLogId = jobs.buildCustomerLogId(contactId);
+    const { jobId, warning } = await writeJobNote({
+        targetJob, tenantId, auth, stAppKey, customerNoteId: newCustomerNoteId, noteText, operation: 'updateMessageLog'
+    });
+    if (jobId) {
+        newLogId = jobs.buildJobLogId(jobId);
+    }
 
     const messageLogID_db = await MessageLogModel.findOne({
         where: {
@@ -1185,32 +1439,33 @@ ${faxDocLink}
     });
 
     if (messageLogID_db) {
-        messageLogID_db.thirdPartyLogId = addLogRes.data.id;
+        messageLogID_db.thirdPartyLogId = newLogId;
         await messageLogID_db.save();
     }
 
-    apiLog.logSuccess('ServiceTitan', 'updateMessageLog', { logId: addLogRes.data.id, contactId, apiEndpoint: updateMessageLogUrl });
+    apiLog.logSuccess('ServiceTitan', 'updateMessageLog', { logId: newLogId, contactId, jobId: jobId ?? null, apiEndpoint: updateMessageLogUrl });
 
 
     await trackAnalytics({ user, crm: 'ServiceTitan', event: 'messageLogUpdated' });
 
     return {
-        logId: addLogRes.data.id,
+        logId: newLogId,
         returnMessage: {
-            message: "Message log updated",
-            messageType: "success",
-            ttl: 1000
+            message: warning
+                ? `Message log updated. ${warning}`
+                : (jobId ? 'Message log updated on the job and the customer' : 'Message log updated'),
+            messageType: warning ? "warning" : "success",
+            ttl: warning ? 5000 : 1000
         }
     };
 }
-async function getCallLog({ user, callLogId }) {
-    console.log(user.hostname, "hostname in getCallLog")
+async function getCallLog({ user, callLogId, telephonySessionId, contactId }) {
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
     apiLog.logStart('ServiceTitan', 'getCallLog', { logId: callLogId });
 
-    const [realId] = callLogId.split("_");
+    const { legacyNoteId } = jobs.parseLogId(callLogId);
 
     const auth = await getRefreshedAuthToken(user);
     const tenantId = user.dataValues.platformAdditionalInfo.tenant;
@@ -1222,9 +1477,12 @@ async function getCallLog({ user, callLogId }) {
 
     try {
 
-        const existingCallLogDetails = await CallLogModel.findOne({
-            where: { thirdPartyLogId: callLogId }
-        });
+        // Several calls can share a log id now that it is a page path (every call on one job reads
+        // `Job/Index/{jobId}`), so the log is resolved by telephonySessionId — CallLogModel's
+        // primary key — rather than by the log id, which would match an arbitrary one of them.
+        const existingCallLogDetails = telephonySessionId
+            ? await CallLogModel.findByPk(telephonySessionId)
+            : await CallLogModel.findOne({ where: { thirdPartyLogId: callLogId } });
 
         if (!existingCallLogDetails) {
             return {
@@ -1236,10 +1494,13 @@ async function getCallLog({ user, callLogId }) {
             };
         }
 
-        const contactId = existingCallLogDetails.contactId;
+        const resolvedContactId = contactId ?? existingCallLogDetails.contactId;
 
+        // Read from the customer note: it holds the same content as the job note and, unlike a job
+        // note, it can be located and re-read.
+        let rawBody = null;
         const getLogRes = await serviceTitanApiClient.get(
-            `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${contactId}/notes`,
+            `${getCrmBaseUrl(tenantId)}/${tenantId}/customers/${resolvedContactId}/notes?pageSize=100`,
             {
                 headers: {
                     Authorization: `Bearer ${auth}`,
@@ -1249,11 +1510,14 @@ async function getCallLog({ user, callLogId }) {
             }
         );
 
-        const targetLog = getLogRes.data.data.find(log => log.id == realId);
-
+        const targetLog = findCallLogNote(getLogRes.data?.data, existingCallLogDetails.sessionId, legacyNoteId);
         if (targetLog) {
+            rawBody = targetLog.text || "";
+        }
 
-            const body = targetLog.text || "";
+        if (rawBody !== null) {
+
+            const body = rawBody;
             const normalized = body.replace(/\r\n/g, '\n');
 
             const subjectMatch = normalized.match(/Subject:\s*(.*?)(?:\n|$)/);
