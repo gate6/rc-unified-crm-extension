@@ -673,8 +673,6 @@ function sanitizeNoteText(text) {
 }
 
 async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript, additionalSubmission }) {
-    console.log("Additional submission1: ", additionalSubmission)
-    console.log("Call Log details: ", callLog)
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
@@ -1462,7 +1460,6 @@ ${faxDocLink}
     };
 }
 async function getCallLog({ user, callLogId, telephonySessionId, contactId }) {
-    console.log(user.hostname, "hostname in getCallLog")
     const licenseError = await validateLicenseOrFail(user);
     if (licenseError) return licenseError;
 
