@@ -87,7 +87,7 @@
                     "scope": ""
                 }
             },
-            "canOpenLogPage": false,
+            "canOpenLogPage": true,
             "contactTypes": [
                 {
                     "display": "Customer",
@@ -105,7 +105,7 @@
                 }
             },
             "contactPageUrl": "https://integration.servicetitan.com/#/customer/{contactId}",
-            "logPageUrl": "https://integration.servicetitan.com/#/customer/{contactId}",
+            "logPageUrl": "https://integration.servicetitan.com/#/{logId}",
             "callPopUrl": "https://integration.servicetitan.com/#/customer/{contactId}",
             "settings": [
                 {
@@ -156,6 +156,81 @@
                             "defaultValue": true
                         }
                     ]
+                },
+                {
+                    "id": "jobManagement",
+                    "type": "section",
+                    "name": "Job management",
+                    "items": [
+                        {
+                            "id": "logCallToJob",
+                            "type": "boolean",
+                            "name": "Log calls to jobs",
+                            "description": "Show a Job dropdown when logging a call, so the call can be written to one of the customer's open jobs as well as their customer notes.",
+                            "defaultValue": true
+                        },
+                        {
+                            "id": "allowCreateJob",
+                            "type": "boolean",
+                            "name": "Can create a new job",
+                            "description": "Add a \"Create new job...\" entry to the Job dropdown and populate the Job type dropdown, so a call can raise new work for the customer.",
+                            "defaultValue": false
+                        },
+                        {
+                            "id": "defaultJobName",
+                            "type": "inputField",
+                            "name": "Default job",
+                            "description": "Job type used when no job is picked, including every automatically logged call. The customer's open job of this type is reused, or a new one is opened. Leave blank to log those to the customer only.",
+                            "placeholder": "e.g. Service Call"
+                        },
+                        {
+                            "id": "defaultJobNameMatchWarning",
+                            "type": "warning",
+                            "name": "Info: default job matching",
+                            "value": "The default job must name a job type that exists in ServiceTitan. Matching ignores case and spaces."
+                        }
+                    ]
+                },
+                {
+                    "id": "jobDefaults",
+                    "type": "section",
+                    "name": "New job defaults",
+                    "visibleToUsers": false,
+                    "items": [
+                        {
+                            "id": "newJobBusinessUnitId",
+                            "type": "inputField",
+                            "name": "Business unit ID",
+                            "description": "Business unit assigned to jobs created from a call. Leave blank to reuse the business unit of the customer's existing work, falling back to the tenant's first active business unit."
+                        },
+                        {
+                            "id": "newJobCampaignId",
+                            "type": "inputField",
+                            "name": "Campaign ID",
+                            "description": "Campaign assigned to jobs created from a call. Leave blank to use the tenant's first active campaign."
+                        },
+                        {
+                            "id": "newJobPriority",
+                            "type": "option",
+                            "name": "Priority",
+                            "description": "Priority assigned to jobs created from a call.",
+                            "options": [
+                                { "id": "Low", "name": "Low" },
+                                { "id": "Normal", "name": "Normal" },
+                                { "id": "High", "name": "High" },
+                                { "id": "Urgent", "name": "Urgent" }
+                            ],
+                            "defaultValue": "Normal"
+                        },
+                        {
+                            "id": "newJobAppointmentDuration",
+                            "type": "inputField",
+                            "name": "Appointment length (minutes)",
+                            "description": "Length of the initial appointment booked on a job created from a call. It starts at the time the call is logged.",
+                            "placeholder": "60",
+                            "defaultValue": "60"
+                        }
+                    ]
                 }
             ],
             "page": {
@@ -163,20 +238,40 @@
                 "callLog": {
                     "additionalFields": [
                         {
-                            "const": "associatedDeal",
-                            "title": "Deals",
+                            "const": "associatedJob",
+                            "title": "Job",
                             "type": "selection",
-                            "contactDependent": true
+                            "contactDependent": true,
+                            "allowCustomValue": false,
+                            "description": "Also log this call to one of the customer's open jobs."
+                        },
+                        {
+                            "const": "newJobType",
+                            "title": "Job type",
+                            "type": "selection",
+                            "contactDependent": true,
+                            "allowCustomValue": false,
+                            "description": "Used only when Job is set to \"Create new job...\"."
                         }
                     ]
                 },
                 "messageLog": {
                     "additionalFields": [
                         {
-                            "const": "associatedDeal",
-                            "title": "Deals",
+                            "const": "associatedJob",
+                            "title": "Job",
                             "type": "selection",
-                            "contactDependent": true
+                            "contactDependent": true,
+                            "allowCustomValue": false,
+                            "description": "Also log this conversation to one of the customer's open jobs."
+                        },
+                        {
+                            "const": "newJobType",
+                            "title": "Job type",
+                            "type": "selection",
+                            "contactDependent": true,
+                            "allowCustomValue": false,
+                            "description": "Used only when Job is set to \"Create new job...\"."
                         }
                     ]
                 }
