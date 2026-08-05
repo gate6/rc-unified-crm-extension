@@ -1,10 +1,10 @@
 /* eslint-disable no-param-reassign */
-
 const axios = require("axios");
-const moment = require("moment");
+const moment = require("moment-timezone");
 const { encode, decoded } = require("@app-connect/core/lib/encode");
 const { parsePhoneNumber } = require("awesome-phonenumber");
 const { UserModel } = require('@app-connect/core/models/userModel');
+const jwt = require('@app-connect/core/lib/jwt');
 const phoneWriteback = require('../shared/phoneWriteback');
 const { CallLogModel } = require('@app-connect/core/models/callLogModel');
 const { sequelize } = require('../servicenow-models/sequelize');
@@ -58,12 +58,29 @@ function buildNoteIndex(notes) {
 
 /* ---------------- NOTE FORMATTING (mirrors ServiceTitan) ---------------- */
 
-// Respect the user's timezone offset + preferred log date format, exactly like ServiceTitan's
-// formatDateTime (which mirrors core's callLogComposer). Falls back to a sensible default.
+// The RC extension hands us an IANA zone name (e.g. 'US/Pacific'); moment-timezone turns it
+// into a real offset. Returns null for anything it does not recognise so callers can fall back
+// rather than silently formatting in the wrong zone.
+function resolveTimezoneName(timezoneName) {
+  const name = typeof timezoneName === 'string' ? timezoneName.trim() : '';
+  return (name && moment.tz.zone(name)) ? name : null;
+}
+
+// Respect the user's timezone + preferred log date format.
+// `timezoneName` is preferred over `timezoneOffset` because a stored offset is frozen at the
+// moment it was captured, so a user who connected in winter would keep getting standard time
+// all summer. Resolving the zone per timestamp keeps DST correct; the offset is only a fallback
+// for rows that carry one without a name. Without either, moment would format in the *server's*
+// local zone (UTC in our deployments) — which is the bug this fixes.
 function formatDateTime({ user, time }) {
   let momentTime = moment(time);
+  const zone = resolveTimezoneName(user?.timezoneName);
   const tz = user?.timezoneOffset;
-  if (tz) {
+  if (zone) {
+    momentTime = momentTime.tz(zone);
+  } else if (tz !== null && tz !== undefined && tz !== '') {
+    // A legitimate offset of 0 / '+00:00' must survive the guard, so test for empty rather
+    // than falsy.
     momentTime = (typeof tz === 'string' && tz.includes(':'))
       ? momentTime.utcOffset(tz)
       : momentTime.utcOffset(Number(tz));
@@ -101,7 +118,7 @@ function looksLikeFullNumber(value) {
 // ServiceTitan-style layout — header lines, a blank line, optional sections (each separated
 // by a blank line), a blank line, then the start/end time footer. Every optional/field entry
 // respects the matching user setting (defaulting on when the setting is absent).
-function composeCallLogNote({ user, logId, subject, direction, result, duration, callSessionId, rcUserName, rcPhone, contactPhone, note, recording, transcript, aiNote, startTimeText, endTimeText }) {
+function composeCallLogNote({ user, logId, subject, direction, result, duration, callSessionId, rcUserName, rcPhone, contactPhone, note, recording, transcript, aiNote, startTimeText, endTimeText, loggedBy }) {
   const headerLines = [];
   if (subject) headerLines.push(`Subject: ${subject}`);
   if (direction) headerLines.push(`Direction: ${direction}`);
@@ -109,6 +126,11 @@ function composeCallLogNote({ user, logId, subject, direction, result, duration,
   if (duration && (user.userSettings?.addCallLogDuration?.value ?? true)) headerLines.push(`Duration: ${duration} sec`);
   if (callSessionId && (user.userSettings?.addCallSessionId?.value ?? true)) headerLines.push(`Call Session ID: ${callSessionId}`);
   if (rcUserName && (user.userSettings?.addRingCentralUserName?.value ?? true)) headerLines.push(`RingCentral Username: ${rcUserName}`);
+  // Names the AgencyZoom user the admin mapped to this call's extension. AgencyZoom stamps its own
+  // `createdBy` from whoever's token posts the note, but every edit re-posts a *new* note (there is
+  // no update-note API), so an update made by the connected user would otherwise erase the agent's
+  // name. Carrying it in the body keeps attribution stable across the whole life of the log.
+  if (loggedBy) headerLines.push(`Logged By: ${loggedBy}`);
   if (rcPhone && looksLikeFullNumber(rcPhone) && (user.userSettings?.addRingCentralNumber?.value ?? true)) headerLines.push(`RingCentral Phone Number: ${rcPhone}`);
   if (contactPhone && looksLikeFullNumber(contactPhone) && (user.userSettings?.addCallLogContactNumber?.value ?? true)) headerLines.push(`Contact Number: ${contactPhone}`);
 
@@ -199,9 +221,10 @@ async function getRefreshedAuthToken(user) {
 /* ---------------- USER INFO ---------------- */
 
 async function getUserInfo({ hostname, additionalInfo }) {
-  // rcAccountId, rcExtensionId, rcUserName, rcUserEmail arrive via the manifest's
+  // rcAccountId, rcExtensionId, rcUserName, rcUserEmail, rcTimezoneName arrive via the manifest's
   // rcAdditionalSubmission (auto from RC cached data — no user prompt, no framework change).
-  const { username, password, useVertaforeSso, rcAccountId, rcExtensionId, rcUserName, rcUserEmail } = additionalInfo ?? {};
+  const { username, password, useVertaforeSso, rcAccountId, rcExtensionId, rcUserName, rcUserEmail, rcTimezoneName } = additionalInfo ?? {};
+  console.log("Time zone : ", rcTimezoneName);
 
   if (!hostname || !username || !password) {
     return {
@@ -310,6 +333,11 @@ async function getUserInfo({ hostname, additionalInfo }) {
 
     apiLog.logSuccess('AgencyZoom', 'getUserInfo', { userId, apiEndpoint: `${AZ_BASE_URL}/auth/${isVertaforeSso(useVertaforeSso) ? 'ssologin' : 'login'}` });
 
+    // AgencyZoom's API exposes no per-user timezone (login only returns a JWT), so the RC
+    // extension's own zone is the source of truth. Leaving these undefined is what made note
+    // timestamps come out in UTC.
+    const timezoneName = resolveTimezoneName(rcTimezoneName);
+
     return {
       successful: true,
       platformUserInfo: {
@@ -317,6 +345,11 @@ async function getUserInfo({ hostname, additionalInfo }) {
         name: displayName,
         email: username,
         overridingApiKey: token,
+        // If RC gave us no recognisable zone these stay null and note timestamps fall back to
+        // the server's zone, so a connector upgrade that changes the source path needs the user
+        // to reconnect before it takes effect.
+        timezoneName,
+        timezoneOffset: timezoneName ? moment.tz(timezoneName).format('Z') : null,
         platformAdditionalInfo: {
           username,
           password: encode(password),
@@ -637,6 +670,103 @@ async function createContact({ user, phoneNumber, newContactName }) {
   };
 }
 
+/* ---------------- USER MAPPING (LOG IDENTITY) ---------------- */
+
+// Server-side logging writes every note with the credentials of whoever enabled the feature, so by
+// default an entire agency's logs read as the admin. The manifest's `useAdminAssignedUserToken`
+// makes the framework hand us a token identifying the App Connect user the admin mapped to the
+// RingCentral extension that handled this call (the mapping table is populated from `getUserList`).
+// AgencyZoom has no owner field on a note and acts strictly on behalf of the logged-in user, so
+// re-authenticating as that agent is the only way to make AgencyZoom stamp the note's `createdBy`
+// with the person who actually took the call.
+//
+// Returns `agentAuth` when we can act as the agent, plus `agentName` — always set when a mapping
+// exists — so the note body can record who the call belonged to even if impersonation is not
+// possible. `auth` is the connected user's session, used as the fallback.
+async function resolveLoggingIdentity({ user, auth, additionalSubmission }) {
+  const identity = { auth, agentAuth: null, agentName: '', assignedUser: null };
+
+  if (!additionalSubmission?.isAssignedToUser || !additionalSubmission?.adminAssignedUserToken) {
+    return identity;
+  }
+
+  let assignedUser = null;
+  try {
+    const unAuthData = jwt.decodeJwt(additionalSubmission.adminAssignedUserToken);
+    assignedUser = unAuthData?.id ? await UserModel.findByPk(unAuthData.id) : null;
+  } catch (err) {
+    console.error('[AgencyZoom] could not decode admin assigned user token:', err.message);
+    return identity;
+  }
+
+  // Nothing to switch to when the mapped user is unknown, is already the session we hold, or
+  // belongs to another CRM (a stale mapping row can outlive a platform change).
+  if (!assignedUser || assignedUser.id === user.id || assignedUser.platform !== user.platform) {
+    return identity;
+  }
+
+  // UserModel has no name column, so the AgencyZoom login is the only human-readable identity we
+  // hold for the mapped agent — and it is the one an agency will recognise in the note.
+  identity.agentName = assignedUser.platformAdditionalInfo?.username || '';
+  identity.assignedUser = assignedUser;
+
+  // Users who connected before credentials were stored have nothing to re-authenticate with; the
+  // `Logged By` line still carries their name.
+  if (!assignedUser.platformAdditionalInfo?.username || !assignedUser.platformAdditionalInfo?.password) {
+    return identity;
+  }
+
+  try {
+    identity.agentAuth = await getRefreshedAuthToken(assignedUser);
+  } catch (err) {
+    console.warn('[AgencyZoom] could not authenticate as mapped agent, logging as connected user:', err?.response?.data || err.message);
+  }
+
+  return identity;
+}
+
+function isAuthRejection(err) {
+  const status = err?.response?.status;
+  return status === 401 || status === 403;
+}
+
+// Write a log note as the mapped agent when we hold their session, otherwise as the connected
+// user. A stored AgencyZoom token can be stale — a mapped agent may not have opened the extension
+// in weeks — so a rejected token is minted afresh from their saved credentials and retried once
+// before we give up on acting as them. Falling back never loses the log itself: the note body
+// already carries `Logged By`.
+async function postLogNote({ identity, contactId, note, operation }) {
+  const url = `${AZ_BASE_URL}/customers/${contactId}/notes`;
+  const postAs = (auth) => agencyZoomApiClient.post(
+    url,
+    { note },
+    { headers: { Authorization: `Bearer ${auth}` }, _operation: operation }
+  );
+
+  if (identity.agentAuth) {
+    try {
+      await postAs(identity.agentAuth);
+      return { postedAsAgent: true };
+    } catch (err) {
+      if (isAuthRejection(err) && identity.assignedUser) {
+        try {
+          identity.assignedUser.accessToken = "";
+          await identity.assignedUser.save();
+          await postAs(await getRefreshedAuthToken(identity.assignedUser));
+          return { postedAsAgent: true };
+        } catch (retryErr) {
+          console.warn(`[AgencyZoom] ${operation}: re-auth as mapped agent failed, logging as connected user:`, retryErr?.response?.data || retryErr.message);
+        }
+      } else {
+        console.warn(`[AgencyZoom] ${operation}: could not log as mapped agent, logging as connected user:`, err?.response?.data || err.message);
+      }
+    }
+  }
+
+  await postAs(identity.auth);
+  return { postedAsAgent: false };
+}
+
 /* ---------------- CREATE CALL LOG ---------------- */
 
 async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcript, additionalSubmission }) {
@@ -651,6 +781,10 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
   // the picked contact otherwise.
   const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ callLog });
   const target = await resolveLogTarget({ auth, contactInfo, receivedNumber, logPrefix: '[AgencyZoom] createCallLog:' });
+
+  // Contact lookup/creation stays on the connected session; only the note itself is written as the
+  // mapped agent, so a mapping can never change which customer a call lands on.
+  const identity = await resolveLoggingIdentity({ user, auth, additionalSubmission });
 
   apiLog.logStart('AgencyZoom', 'createCallLog', { contactId: target?.id, logId, direction: callLog?.direction, duration: callLog?.duration });
 
@@ -689,16 +823,13 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     transcript,
     aiNote,
     startTimeText,
-    endTimeText
+    endTimeText,
+    loggedBy: identity.agentName
   });
 
-  await agencyZoomApiClient.post(
-    `${AZ_BASE_URL}/customers/${target.id}/notes`,
-    { note: noteBody },
-    { headers: { Authorization: `Bearer ${auth}` }, _operation: 'createCallLog' }
-  );
+  const { postedAsAgent } = await postLogNote({ identity, contactId: target.id, note: noteBody, operation: 'createCallLog' });
 
-  apiLog.logSuccess('AgencyZoom', 'createCallLog', { logId, contactId: Number(target.id), apiEndpoint: `${AZ_BASE_URL}/customers/${target.id}/notes` });
+  apiLog.logSuccess('AgencyZoom', 'createCallLog', { logId, contactId: Number(target.id), postedAsAgent, apiEndpoint: `${AZ_BASE_URL}/customers/${target.id}/notes` });
 
   await trackAnalytics({ user, crm: 'AgencyZoom', event: 'callLogCreated' });
 
@@ -715,7 +846,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
 
 /* ---------------- UPDATE CALL LOG ---------------- */
 
-async function updateCallLog({ user, existingCallLog, subject, startTime, duration, result, note, aiNote, transcript, recordingLink, composedLogDetails, existingCallLogDetails }) {
+async function updateCallLog({ user, existingCallLog, subject, startTime, duration, result, note, aiNote, transcript, recordingLink, composedLogDetails, existingCallLogDetails, additionalSubmission }) {
   const licenseError = await validateLicenseOrFail(user);
   if (licenseError) return licenseError;
 
@@ -734,6 +865,11 @@ async function updateCallLog({ user, existingCallLog, subject, startTime, durati
 
   const contactId = existingCallLog.contactId;
   const logId = existingCallLog.thirdPartyLogId;
+
+  // AgencyZoom has no update-note API, so an update posts a replacement note — which means it also
+  // re-decides `createdBy`. Resolve the mapping here too, or every edit would silently hand the
+  // log back to whoever's session performed the update.
+  const identity = await resolveLoggingIdentity({ user, auth, additionalSubmission });
 
   apiLog.logStart('AgencyZoom', 'updateCallLog', { contactId, logId, duration });
 
@@ -765,6 +901,7 @@ async function updateCallLog({ user, existingCallLog, subject, startTime, durati
   const oldCallSessionId = normalized.match(/^\s*Call Session ID:\s*(.*)$/m)?.[1]?.trim() || "";
   const oldRcUserName = normalized.match(/^\s*RingCentral Username:\s*(.*)$/m)?.[1]?.trim() || "";
   const oldRcPhone = normalized.match(/^\s*RingCentral Phone Number:\s*(.*)$/m)?.[1]?.trim() || "";
+  const oldLoggedBy = normalized.match(/^\s*Logged By:\s*(.*)$/m)?.[1]?.trim() || "";
   const oldContactPhone = normalized.match(/^\s*Contact Number:\s*(.*)$/m)?.[1]?.trim() || "";
   const oldNote = normalized.match(/Agent Notes:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
   const oldRecording = normalized.match(/Recording:\s*([\s\S]*?)(?:\n\s*[A-Z][^\n]*:|$)/)?.[1]?.trim() || "";
@@ -821,16 +958,15 @@ async function updateCallLog({ user, existingCallLog, subject, startTime, durati
     transcript: effTranscript,
     aiNote: effAiNote,
     startTimeText,
-    endTimeText
+    endTimeText,
+    // An update re-posts the whole note, so a mapping that has since been resolved wins and the
+    // name parsed off the original note is kept otherwise.
+    loggedBy: identity.agentName || oldLoggedBy
   });
 
-  await agencyZoomApiClient.post(
-    `${AZ_BASE_URL}/customers/${contactId}/notes`,
-    { note: noteBody },
-    { headers: { Authorization: `Bearer ${auth}` }, _operation: 'updateCallLog' }
-  );
+  const { postedAsAgent } = await postLogNote({ identity, contactId, note: noteBody, operation: 'updateCallLog' });
 
-  apiLog.logSuccess('AgencyZoom', 'updateCallLog', { logId, contactId, apiEndpoint: `${AZ_BASE_URL}/customers/${contactId}/notes` });
+  apiLog.logSuccess('AgencyZoom', 'updateCallLog', { logId, contactId, postedAsAgent, apiEndpoint: `${AZ_BASE_URL}/customers/${contactId}/notes` });
 
   await trackAnalytics({ user, crm: 'AgencyZoom', event: 'callLogUpdated' });
 
@@ -945,7 +1081,7 @@ async function getCallLog({ user, callLogId }) {
 
 /* ---------------- MESSAGE LOG ---------------- */
 
-async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink }) {
+async function createMessageLog({ user, contactInfo, message, recordingLink, faxDocLink, additionalSubmission }) {
   const licenseError = await validateLicenseOrFail(user);
   if (licenseError) return licenseError;
 
@@ -971,6 +1107,8 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
   const receivedNumber = phoneWriteback.resolveCounterpartyNumber({ message });
   const target = await resolveLogTarget({ auth, contactInfo, receivedNumber, logPrefix: '[AgencyZoom] createMessageLog:' });
 
+  const identity = await resolveLoggingIdentity({ user, auth, additionalSubmission });
+
   apiLog.logStart('AgencyZoom', 'createMessageLog', { contactId: target?.id, logId, messageType, direction: message?.direction });
 
   let subject = "";
@@ -995,23 +1133,21 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, fax
       break;
   }
 
+  const loggedByLine = identity.agentName ? `Logged By: ${identity.agentName}\n` : "";
+
   const noteBody = `
 [RingCentral Message Log]
 RC_LOG_ID: ${logId}
 
 Subject: ${subject}
-
+${loggedByLine}
 Conversation:
 ${description}
 `;
 
-  await agencyZoomApiClient.post(
-    `${AZ_BASE_URL}/customers/${target.id}/notes`,
-    { note: noteBody },
-    { headers: { Authorization: `Bearer ${auth}` }, _operation: 'createMessageLog' }
-  );
+  const { postedAsAgent } = await postLogNote({ identity, contactId: target.id, note: noteBody, operation: 'createMessageLog' });
 
-  apiLog.logSuccess('AgencyZoom', 'createMessageLog', { logId, contactId: Number(target.id), apiEndpoint: `${AZ_BASE_URL}/customers/${target.id}/notes` });
+  apiLog.logSuccess('AgencyZoom', 'createMessageLog', { logId, contactId: Number(target.id), postedAsAgent, apiEndpoint: `${AZ_BASE_URL}/customers/${target.id}/notes` });
 
   await trackAnalytics({ user, crm: 'AgencyZoom', event: 'messageLogCreated' });
 
@@ -1026,7 +1162,7 @@ ${description}
   };
 }
 
-async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink }) {
+async function updateMessageLog({ user, contactInfo, existingMessageLog, message, recordingLink, faxDocLink, additionalSubmission }) {
   const licenseError = await validateLicenseOrFail(user);
   if (licenseError) return licenseError;
 
@@ -1082,20 +1218,22 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
   switch (messageType) {
 
+    // Same formatter as the call-log footer, so conversation lines land in the user's zone and
+    // honour their chosen log date format instead of a hardcoded UTC stamp.
     case "SMS":
       newLine =
-        `[${moment(message.creationTime).format("YYYY-MM-DD HH:mm:ss")}] SMS ${message.direction === "Inbound" ? "from" : "to"
+        `[${formatDateTime({ user, time: message.creationTime })}] SMS ${message.direction === "Inbound" ? "from" : "to"
         } ${contactInfo.name}: ${message.subject}`;
       break;
 
     case "Voicemail":
       newLine =
-        `[${moment(message.creationTime).format("YYYY-MM-DD HH:mm:ss")}] Voicemail recording link: ${recordingLink}`;
+        `[${formatDateTime({ user, time: message.creationTime })}] Voicemail recording link: ${recordingLink}`;
       break;
 
     case "Fax":
       newLine =
-        `[${moment(message.creationTime).format("YYYY-MM-DD HH:mm:ss")}] Fax document link: ${faxDocLink}`;
+        `[${formatDateTime({ user, time: message.creationTime })}] Fax document link: ${faxDocLink}`;
       break;
   }
 
@@ -1109,21 +1247,23 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
   const updatedConversation = `${conversation}\n${newLine}`;
 
+  // Same reason as the call log: this posts a replacement note, so the mapped agent has to be
+  // resolved again, and the name already on the note is kept when this update carries no mapping.
+  const identity = await resolveLoggingIdentity({ user, auth, additionalSubmission });
+  const loggedBy = identity.agentName || matchedNote?.body?.match(/^\s*Logged By:\s*(.*)$/m)?.[1]?.trim() || "";
+  const loggedByLine = loggedBy ? `Logged By: ${loggedBy}\n` : "";
+
   const noteBody = `
 [RingCentral Message Log]
 RC_LOG_ID: ${logId}
-
+${loggedByLine}
 Conversation:
 ${updatedConversation}
 `;
 
-  await agencyZoomApiClient.post(
-    `${AZ_BASE_URL}/customers/${contactId}/notes`,
-    { note: noteBody },
-    { headers: { Authorization: `Bearer ${auth}` }, _operation: 'updateMessageLog' }
-  );
+  const { postedAsAgent } = await postLogNote({ identity, contactId, note: noteBody, operation: 'updateMessageLog' });
 
-  apiLog.logSuccess('AgencyZoom', 'updateMessageLog', { logId, contactId, apiEndpoint: `${AZ_BASE_URL}/customers/${contactId}/notes` });
+  apiLog.logSuccess('AgencyZoom', 'updateMessageLog', { logId, contactId, postedAsAgent, apiEndpoint: `${AZ_BASE_URL}/customers/${contactId}/notes` });
 
   await trackAnalytics({ user, crm: 'AgencyZoom', event: 'messageLogUpdated' });
 
@@ -1145,11 +1285,44 @@ async function upsertCallDisposition({ existingCallLog }) {
 
 /* ---------------- USER LIST ---------------- */
 
-async function getUserList() {
-  return {
-    successful: true,
-    userList: []
-  };
+// AgencyZoom's "employees" are the agency's own users (owners, producers, CSRs) — they are the
+// CRM side of the admin user-mapping table, which core pairs against RingCentral extensions by
+// email/name. Core hands us an `authHeader` built from the apiKey auth type (`Basic <base64>`),
+// which AgencyZoom rejects, so mint a real bearer token the same way every other call here does.
+// Returning an array is part of the contract: core iterates the result with `for...of`.
+async function getUserList({ user }) {
+  apiLog.logStart('AgencyZoom', 'getUserList', {});
+
+  const getUserListUrl = `${AZ_BASE_URL}/employees`;
+
+  try {
+    const auth = await getRefreshedAuthToken(user);
+
+    const res = await agencyZoomApiClient.get(
+      getUserListUrl,
+      { headers: { Authorization: `Bearer ${auth}` }, _operation: 'getUserList' }
+    );
+
+    const employees = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+
+    // Deactivated employees can't own new records, and listing them only clutters the mapping
+    // table. `isActive` is absent on older payloads, so only drop an explicit false.
+    const userList = employees
+      .filter(employee => employee?.isActive !== false)
+      .map(employee => ({
+        id: employee.id,
+        name: `${employee.firstname ?? ''} ${employee.lastname ?? ''}`.trim() || employee.email || `Employee ${employee.id}`,
+        email: employee.email ?? ''
+      }));
+
+    apiLog.logSuccess('AgencyZoom', 'getUserList', { count: userList.length, apiEndpoint: getUserListUrl });
+
+    return userList;
+  } catch (err) {
+    // A failed lookup must not break the admin page — an empty list just renders no CRM users.
+    console.error('[AgencyZoom] getUserList failed:', err?.response?.data || err.message);
+    return [];
+  }
 }
 
 /* ---------------- LOG FORMAT ---------------- */

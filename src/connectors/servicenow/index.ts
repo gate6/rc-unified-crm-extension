@@ -50,17 +50,56 @@ function formatDateTime({ user, time }) {
     return momentTime.format(user?.userSettings?.logDateFormat?.value || 'YYYY-MM-DD hh:mm:ss A');
 }
 
+// Pick a human-readable agent name out of whatever the scripted REST resource returns. The shape
+// is NOT fixed — it is customer-authored per instance — so this reads the fields in descending
+// order of friendliness rather than demanding one. Observed on dev388800:
+//   {result:{id, user_name:'admin', email, first_name:'System', last_name:'Administrator', ...}}
+// `name` is preferred but often absent; first/last is the readable form; user_name is the last
+// resort because it shows the login ('admin') to end users in the work note.
+function pickAgentName(result: any = {}) {
+    const direct = (result.name ?? '').toString().trim();
+    if (direct) return direct;
+    const fullName = [result.first_name, result.last_name]
+        .map(part => (part ?? '').toString().trim())
+        .filter(Boolean)
+        .join(' ');
+    if (fullName) return fullName;
+    return (result.user_name ?? '').toString().trim();
+}
+
+// Resolve the ServiceNow user behind the connection — the same scripted REST endpoint
+// (companies.userDetailsPath) that createCallLog/createMessageLog already use to fill `assigned_to`
+// from `result.id`. Here we want a display name, so outbound messages are attributed to the agent
+// who sent them instead of a generic "You". Non-fatal: the name is cosmetic, so a missing path or
+// a failing call falls back rather than breaking the log.
+async function fetchAgentName({ hostname, authHeader, userDetailsPath, operation }) {
+    if (!userDetailsPath) return '';
+    try {
+        const res = await serviceNowApiClient.get(
+            `https://${hostname}/api/${userDetailsPath}`,
+            { headers: { Authorization: authHeader }, _operation: operation }
+        );
+        return pickAgentName(res.data?.result);
+    } catch (e) {
+        console.warn(`[ServiceNow] ${operation}: could not resolve the agent name (status ${e?.response?.status ?? 'n/a'}) — falling back to "You" on outbound messages.`);
+        return '';
+    }
+}
+
 // Build a message-log work note in the same format as the Monday connector, adapted to
-// ServiceNow's plain-text journal field (\n instead of <br>). Each message is written as
-// its own work note (journal entry) — callers PATCH work_notes with just this text.
-function buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, includeHeader = true }) {
+// ServiceNow's plain-text journal field (\n instead of <br>). Create writes this as the first
+// work note; update appends the line into that same entry via writeWorkNote.
+// Sender naming: inbound lines are attributed to the contact, outbound to the agent who sent them
+// (`agentName`, from the same scripted REST lookup that fills `assigned_to`), falling back to "You"
+// only when that lookup yields nothing.
+function buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, includeHeader = true, agentName = '' }) {
     if (messageType === 'Voicemail') {
         return `Voicemail from ${contactInfo.name}\n\nRecording:\n${recordingLink}`;
     }
     if (messageType === 'Fax') {
         return `Fax from ${contactInfo.name}\n\nDocument:\n${faxDocLink}`;
     }
-    const sender = message.direction === 'Inbound' ? contactInfo.name : 'You';
+    const sender = message.direction === 'Inbound' ? contactInfo.name : (agentName || 'You');
     const text = message.subject || message.text || '';
     const line = `[${formatDateTime({ user, time: message.creationTime || Date.now() })}] ${sender}: ${text}`;
     return includeHeader ? `SMS conversation with ${contactInfo.name}\n${line}` : line;
@@ -419,6 +458,249 @@ function buildFallbackTokens(digits) {
     return Array.from(tokens).filter((t) => t.length >= 2);
 }
 
+// ---------------------------------------------------------------------------
+// Related records: tying a call to the work item it was actually about
+// ---------------------------------------------------------------------------
+// The caller almost always phones ABOUT something that already exists — INC0010023, a case, a work
+// order — not to open a fresh one. Offering those on the log form lets the interaction be tied to
+// the record whose assignee actually needs to know the customer called.
+//
+// `field` is the column on that table that points at the person. It can be compared directly with
+// contactInfo.id because every one of these references sys_user, exactly like interaction.opened_for
+// which createCallLog already sets — customer_contact (CSM) extends sys_user, so a contact sys_id is
+// a valid sys_user sys_id too.
+//
+// Each source is queried independently and failures are swallowed: an instance without CSM has no
+// sn_customerservice_case, one without FSM has no wm_order, and ServiceNow answers a query naming a
+// missing table or column with a 400 rather than an empty result set. A missing source has to
+// degrade to "no options from that table", never to a failed contact lookup.
+//
+// incident.caller_id and sn_customerservice_case.contact are confirmed. The sc_req_item and wm_order
+// entries are best-effort — if an instance names those columns differently the query 400s and the
+// source is simply skipped, so a wrong guess here costs nothing but a log line.
+// `creatable` marks a source the connector may also INSERT into from the call log form. Only
+// incident is enabled: its person column (caller_id) is writable directly, whereas sc_req_item's is
+// a dot-walked read-only path (request.requested_for) and a case usually needs an `account` that the
+// call alone cannot supply. Adding another creatable source is a one-line change once its mandatory
+// fields are known — but a wrong guess raises real tickets in someone's queue, so keep it narrow.
+const RELATED_RECORD_SOURCES = [
+    { table: 'incident', field: 'caller_id', label: 'Incident', creatable: true },
+    { table: 'sn_customerservice_case', field: 'contact', label: 'Case' },
+    { table: 'sc_req_item', field: 'request.requested_for', label: 'Requested item' },
+    { table: 'wm_order', field: 'contact', label: 'Work order' }
+];
+
+// Sentinel prefix for the "create a new one instead" entries in the Related record dropdown.
+// Distinct from the `table:sys_id` form so createCallLog can tell "link this" from "make one".
+const RELATED_RECORD_NEW_PREFIX = '__new__:';
+
+const RELATED_RECORD_LIMIT = 20;
+
+// Sources this instance has already rejected with a 400, keyed `hostname:table`. A 400 from the
+// Table API means the table or a column named in the query does not exist ("Invalid table wm_order")
+// — a permanent fact about the instance, not a transient failure, so probing it again on every
+// single contact lookup just buys a guaranteed-failing round trip. Deliberately NOT populated on
+// 403: that is an ACL gap, which an admin can grant without restarting the connector.
+const missingRelatedRecordSources = new Set();
+
+async function fetchRelatedRecords({ hostname, authHeader, contactId, operation, allowCreate = false }) {
+    if (!contactId || contactId === 'createNewContact') {
+        console.log(`[ServiceNow][relatedRecord] ${operation}: skipped lookup — no usable contact id`, { contactId });
+        return [];
+    }
+
+    console.log(`[ServiceNow][relatedRecord] ${operation}: looking up open work records for contact ${contactId} across ${RELATED_RECORD_SOURCES.length} source(s)`);
+
+    const options = [];
+    // Tables that answered without error, i.e. that actually exist and are readable here. Only these
+    // get a "create new" entry — offering to raise an incident on an instance that just 400'd on the
+    // incident table would fail at save time instead of at render time.
+    const availableTables = new Set();
+    for (const source of RELATED_RECORD_SOURCES) {
+        const sourceKey = `${hostname}:${source.table}`;
+        if (missingRelatedRecordSources.has(sourceKey)) {
+            console.log(`[ServiceNow][relatedRecord] ${operation}:   -- skipping ${source.table}, already known missing on ${hostname}`);
+            continue;
+        }
+        const query = `${source.field}=${contactId}^active=true^ORDERBYDESCsys_updated_on`;
+        // display_value=true so `state` comes back as its label ("In Progress") rather than the raw
+        // integer the Table API returns by default. sys_id is not a reference field, so it is
+        // unaffected and still returns the real sys_id.
+        const url = `https://${hostname}/api/now/table/${source.table}?sysparm_query=${encodeURIComponent(query)}&sysparm_fields=sys_id,number,short_description,state&sysparm_display_value=true&sysparm_limit=${RELATED_RECORD_LIMIT}`;
+        try {
+            console.log(`[ServiceNow][relatedRecord] ${operation}:   -> querying ${source.table} where ${query}`);
+            const res = await serviceNowApiClient.get(
+                url,
+                { headers: { 'Authorization': authHeader }, _operation: operation }
+            );
+            const records = res.data?.result ?? [];
+            availableTables.add(source.table);
+            const before = options.length;
+            for (const record of records) {
+                if (!record?.sys_id) {
+                    continue;
+                }
+                options.push({
+                    // The table travels WITH the id: a sys_id on its own does not say which table to
+                    // write into interaction_related_record.document_table.
+                    const: `${source.table}:${record.sys_id}`,
+                    title: record.number || `${source.label} ${String(record.sys_id).slice(0, 8)}`,
+                    description: [record.state, (record.short_description || '').toString().trim()]
+                        .filter(Boolean)
+                        .join(' — ')
+                });
+            }
+            console.log(`[ServiceNow][relatedRecord] ${operation}:   <- ${source.table} returned ${records.length} row(s), ${options.length - before} usable`, stringifyForLog(options.slice(before)));
+        } catch (e) {
+            const status = e?.response?.status ?? null;
+            if (status === 400) {
+                missingRelatedRecordSources.add(sourceKey);
+            }
+            console.log(`[ServiceNow][relatedRecord] ${operation}:   xx skipping ${source.table} (status ${status ?? 'n/a'}${status === 400 ? ', will not retry on this instance' : ''}) — that table or its "${source.field}" column is not available on this instance. Detail: ${stringifyForLog(e?.response?.data ?? e.message, 300)}`);
+        }
+    }
+
+    // "Create new" entries go LAST, after every existing record, so the common case (link the ticket
+    // the caller is phoning about) stays at the top of the list and raising a new one is a deliberate
+    // scroll rather than a mis-click.
+    if (allowCreate) {
+        for (const source of RELATED_RECORD_SOURCES) {
+            if (!source.creatable || !availableTables.has(source.table)) {
+                continue;
+            }
+            options.push({
+                const: `${RELATED_RECORD_NEW_PREFIX}${source.table}`,
+                title: `+ Create new ${source.label.toLowerCase()}`,
+                description: 'A new record will be raised for this caller and linked to the call'
+            });
+        }
+    }
+
+    console.log(`[ServiceNow][relatedRecord] ${operation}: contact ${contactId} -> ${options.length} option(s) offered (create enabled: ${allowCreate})`, stringifyForLog(options.map(o => `${o.title} (${o.const})`)));
+    return options;
+}
+
+// Attach the related-record options to every matched contact. Run as a pass over the finished list
+// rather than inside the matching loops so the phone/name matching logic stays untouched, and so the
+// "Create new contact..." sentinel is skipped instead of triggering four pointless queries.
+async function attachRelatedRecords({ hostname, authHeader, contacts, operation, allowCreate = false }) {
+    const candidates = (contacts ?? []).filter(c => c && !c.isNewContact);
+    console.log(`[ServiceNow][relatedRecord] ${operation}: attaching options to ${candidates.length} matched contact(s)`);
+
+    for (const contact of candidates) {
+        const relatedRecord = await fetchRelatedRecords({ hostname, authHeader, contactId: contact.id, operation, allowCreate });
+        if (relatedRecord.length > 0) {
+            contact.additionalInfo = { ...(contact.additionalInfo ?? {}), relatedRecord };
+            console.log(`[ServiceNow][relatedRecord] ${operation}: attached ${relatedRecord.length} option(s) to contact "${contact.name}" (${contact.id}); additionalInfo keys now: ${Object.keys(contact.additionalInfo).join(', ')}`);
+        } else {
+            // Not an error: a caller with no open tickets simply gets an empty dropdown. Logged so a
+            // blank field on the form can be told apart from the lookup never having run at all.
+            console.log(`[ServiceNow][relatedRecord] ${operation}: no open records for contact "${contact.name}" (${contact.id}) — dropdown will be empty`);
+        }
+    }
+}
+
+// Whether this user may raise new records from the log form. Off unless the admin turns it on:
+// every save would otherwise be one mis-click away from a real ticket in someone's queue.
+function canCreateRelatedRecord(user) {
+    return (user?.userSettings?.serviceNowAllowCreateRelatedRecord?.value ?? false) === true;
+}
+
+// Raise a new record for this caller. Deliberately minimal: `short_description` is the call's
+// subject and `description` carries ONLY the agent's typed note — the recording link, transcript and
+// AI summary stay on the interaction, which remains the single full record of the call. The incident
+// describes the problem; the interaction describes the conversation.
+//
+// Returns null rather than throwing on failure. An instance can reject the insert for reasons the
+// call log knows nothing about (a mandatory `category`/`cmdb_ci`, a Data Policy, a missing ACL), and
+// none of those may cost the user their call log. The caller surfaces the failure in returnMessage
+// so the agent is never left believing a ticket exists when it does not.
+async function createRelatedRecord({ hostname, authHeader, table, contactId, subject, note, operation }) {
+    const source = RELATED_RECORD_SOURCES.find(s => s.table === table);
+    if (!source?.creatable) {
+        console.warn(`[ServiceNow][relatedRecord] ${operation}: refusing to create in "${table}" — not a creatable source.`);
+        return null;
+    }
+
+    const postBody = {
+        [source.field]: contactId,
+        short_description: subject,
+        // ServiceNow's own field for how the record came in — a phone call is exactly what this is.
+        contact_type: 'phone'
+    };
+    if (note) {
+        postBody.description = note;
+    }
+
+    console.log(`[ServiceNow][relatedRecord] ${operation}: POST /api/now/table/${table}`, stringifyForLog(postBody));
+    try {
+        const res = await serviceNowApiClient.post(
+            `https://${hostname}/api/now/table/${table}`,
+            postBody,
+            { headers: { 'Authorization': authHeader }, _operation: operation }
+        );
+        const created = res.data?.result ?? {};
+        if (!created.sys_id) {
+            console.warn(`[ServiceNow][relatedRecord] ${operation}: ${table} insert returned no sys_id — treating as failed.`);
+            return null;
+        }
+        console.log(`[ServiceNow][relatedRecord] ${operation}: CREATED ${table} ${created.number ?? created.sys_id} for caller ${contactId}`);
+        return { sysId: created.sys_id, number: created.number ?? created.sys_id, table };
+    } catch (e) {
+        console.warn(`[ServiceNow][relatedRecord] ${operation}: FAILED to create ${table} for caller ${contactId} (status ${e?.response?.status ?? 'n/a'}) — the call log itself was unaffected. Response: ${stringifyForLog(e?.response?.data ?? e.message, 600)}`);
+        return null;
+    }
+}
+
+// Tie the interaction to the work record the call was about. interaction_related_record is
+// ServiceNow's own join table for exactly this — Agent Workspace writes the same row when an agent
+// opens a case during a conversation — so the call details stay in ONE place (the interaction) and
+// the task merely gains a pointer to them under its Related Records tab. Nothing is duplicated.
+//
+// Best-effort by design: the interaction is the log of record, and a user whose role does not grant
+// insert on interaction_related_record must still get their call logged. A failed association is a
+// missing cross-reference, not a lost log, so it warns and returns rather than throwing.
+async function linkInteractionToRecord({ hostname, authHeader, interactionSysId, relatedRecord, operation }) {
+    if (!interactionSysId || !relatedRecord) {
+        console.log(`[ServiceNow][relatedRecord] ${operation}: nothing to link`, { interactionSysId: interactionSysId ?? null, relatedRecord: relatedRecord ?? null });
+        return;
+    }
+
+    const raw = String(relatedRecord);
+    const separatorIndex = raw.indexOf(':');
+    if (separatorIndex < 1) {
+        console.warn(`[ServiceNow][relatedRecord] ${operation}: ignoring related record "${raw}" — expected "table:sys_id".`);
+        return;
+    }
+    const documentTable = raw.slice(0, separatorIndex);
+    const documentId = raw.slice(separatorIndex + 1);
+    if (!documentTable || !documentId) {
+        console.warn(`[ServiceNow][relatedRecord] ${operation}: ignoring related record "${raw}" — table or sys_id half is empty.`);
+        return;
+    }
+
+    const postBody = {
+        interaction: interactionSysId,
+        document_table: documentTable,
+        document_id: documentId
+    };
+    console.log(`[ServiceNow][relatedRecord] ${operation}: POST /api/now/table/interaction_related_record`, stringifyForLog(postBody));
+
+    try {
+        const linkRes = await serviceNowApiClient.post(
+            `https://${hostname}/api/now/table/interaction_related_record`,
+            postBody,
+            { headers: { 'Authorization': authHeader }, _operation: operation }
+        );
+        console.log(`[ServiceNow][relatedRecord] ${operation}: LINKED interaction ${interactionSysId} -> ${documentTable}/${documentId} (join row ${linkRes?.data?.result?.sys_id ?? 'n/a'})`);
+    } catch (e) {
+        // The interaction is the log of record — a failed association is a missing cross-reference,
+        // not a lost log. Dump the response body: a 400 here usually means the column names on this
+        // instance differ from interaction/document_table/document_id.
+        console.warn(`[ServiceNow][relatedRecord] ${operation}: FAILED to link interaction ${interactionSysId} -> ${documentTable}/${documentId} (status ${e?.response?.status ?? 'n/a'}) — the log was saved, but it will not appear under that record's Related Records. Response: ${stringifyForLog(e?.response?.data ?? e.message, 600)}`);
+    }
+}
+
 async function findContact({ user, authHeader, phoneNumber, overridingFormat, isExtension }) {
     // ----------------------------------------
     // ---TODO.3: Implement contact matching---
@@ -545,6 +827,10 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         }
     }
 
+    // Offer each matched contact's open work records on the log form, so the call can be tied to
+    // the incident/case/work order it was about.
+    await attachRelatedRecords({ hostname, authHeader, contacts: matchedContactInfo, operation: 'findContact', allowCreate: canCreateRelatedRecord(user) });
+
     const accounts = await getAllAccounts(hostname, authHeader);
     const accountOptions = accounts
         .map((account) => ({
@@ -565,6 +851,13 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     //-----------------------------------------------------
     //---CHECK.3: In console, if contact info is printed---
     //-----------------------------------------------------
+    // The exact payload the core handler hands to the extension. If `relatedRecord` is missing here
+    // the dropdown cannot render — and note the core serves a CACHED contact without calling this
+    // function at all, so seeing nothing in the log means the cache answered, not that this failed.
+    console.log('[ServiceNow][relatedRecord] findContact: returning contacts ->', stringifyForLog(
+        matchedContactInfo.map(c => ({ id: c.id, name: c.name, additionalInfoKeys: Object.keys(c.additionalInfo ?? {}), relatedRecordCount: (c.additionalInfo?.relatedRecord ?? []).length }))
+    ));
+
     apiLog.logSuccess('ServiceNow', 'findContact', { phoneNumber, matchedCount: matchedContactInfo.length, apiEndpoint: `https://${hostname}/api/now/${contactTable}` });
     return {
         successful: true,
@@ -652,6 +945,14 @@ async function findContactWithName({ user, authHeader, name }) {
             additionalInfo
         };
     });
+
+    // Same contactDependent contract as findContact — a manually searched contact must carry the
+    // related-record options too, or its dropdown renders empty.
+    await attachRelatedRecords({ hostname, authHeader, contacts: matchedContactInfo, operation: 'findContactWithName', allowCreate: canCreateRelatedRecord(user) });
+
+    console.log('[ServiceNow][relatedRecord] findContactWithName: returning contacts ->', stringifyForLog(
+        matchedContactInfo.map(c => ({ id: c.id, name: c.name, additionalInfoKeys: Object.keys(c.additionalInfo ?? {}), relatedRecordCount: (c.additionalInfo?.relatedRecord ?? []).length }))
+    ));
 
     apiLog.logSuccess('ServiceNow', 'findContactWithName', { name: term, matchedCount: matchedContactInfo.length, apiEndpoint: `https://${hostname}/api/now/${contactTable}` });
     return {
@@ -824,7 +1125,9 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
     postBody.assigned_to = caller_id.data.result.id;
 
-    console.log("additionalSubmission", additionalSubmission)
+    // Everything the log form submitted: state/type feed the interaction's own fields below,
+    // relatedRecord is consumed after the insert to write the interaction_related_record join row.
+    console.log('[ServiceNow] createCallLog: additionalSubmission =', stringifyForLog(additionalSubmission))
 
     if (additionalSubmission?.state) {
         const returnedState = await findStateValueById(hostname, authHeader, additionalSubmission.state);
@@ -846,6 +1149,57 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
             headers: { 'Authorization': authHeader }, _operation: 'createCallLog'
         }
     );
+
+    console.log(`[ServiceNow][relatedRecord] createCallLog: interaction ${addLogRes?.data?.result?.sys_id} created; submitted relatedRecord = ${additionalSubmission?.relatedRecord ?? '(none)'}`);
+
+    // Resolved outcome of the related-record choice, folded into returnMessage at the end. A silent
+    // failure here is the dangerous one: the agent walks away believing a ticket was raised.
+    let relatedRecordNote = '';
+    let relatedRecordFailed = false;
+
+    if (additionalSubmission?.relatedRecord) {
+        let relatedRecordValue = additionalSubmission.relatedRecord;
+
+        if (String(relatedRecordValue).startsWith(RELATED_RECORD_NEW_PREFIX)) {
+            const table = String(relatedRecordValue).slice(RELATED_RECORD_NEW_PREFIX.length);
+            if (!canCreateRelatedRecord(user)) {
+                // The option is only rendered when the setting is on, so reaching here means a stale
+                // cached contact still carried it. Refuse rather than create against a disabled setting.
+                console.warn(`[ServiceNow][relatedRecord] createCallLog: ignoring "+ create ${table}" — record creation is disabled for this user.`);
+                relatedRecordValue = null;
+                relatedRecordNote = ' Creating records is turned off, so no record was raised.';
+                relatedRecordFailed = true;
+            } else {
+                const created = await createRelatedRecord({
+                    hostname,
+                    authHeader,
+                    table,
+                    contactId: contactInfo.id,
+                    subject: subject || `${callLog.direction} call from ${contactInfo.name || 'caller'}`,
+                    note,
+                    operation: 'createCallLog'
+                });
+                if (created) {
+                    relatedRecordValue = `${created.table}:${created.sysId}`;
+                    relatedRecordNote = ` ${created.number} created.`;
+                } else {
+                    relatedRecordValue = null;
+                    relatedRecordNote = ` Could not create the ${table.replace(/_/g, ' ')} — the call log was still saved.`;
+                    relatedRecordFailed = true;
+                }
+            }
+        }
+
+        if (relatedRecordValue) {
+            await linkInteractionToRecord({
+                hostname,
+                authHeader,
+                interactionSysId: addLogRes?.data?.result?.sys_id,
+                relatedRecord: relatedRecordValue,
+                operation: 'createCallLog'
+            });
+        }
+    }
 
     if (callLog?.recording?.downloadUrl) {
         const timestamp = moment().format("DD-MM-YYYY_HH_MM_SS");
@@ -869,9 +1223,11 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
-            message: 'Call log added.',
-            messageType: 'success',
-            ttl: 3000
+            message: `Call log added.${relatedRecordNote}`,
+            // A record the agent asked for and did not get has to be visible, not buried in a green
+            // toast that reads as total success.
+            messageType: relatedRecordFailed ? 'warning' : 'success',
+            ttl: relatedRecordFailed ? 6000 : 3000
         }
     };
 }
@@ -909,20 +1265,28 @@ async function upsertCallDisposition({ user, existingCallLog, authHeader, dispos
     };
 }
 
+// The agent note is what people read first, so it is pinned to the TOP of the body: any existing
+// block is stripped and re-inserted at the front. That also lifts notes back up on logs written
+// before this rule existed, where adding a note to an already-populated body appended it last.
+//
+// `note` distinguishes two cases that used to be conflated:
+//   null/undefined -> not submitted (e.g. a recording- or transcript-only update). Leave as is.
+//   '' (empty)     -> the user CLEARED the field. The block must be removed, not preserved.
+// The old `if (!!!note) return body` treated both as "leave as is", so clearing a note silently
+// kept the previous text.
 function upsertCallAgentNote({ body, note }) {
-    if (!!!note) {
+    if (note == null) {
         return body;
     }
-    // Labeled block like the AI Note, with a blank line above and below.
-    const block = `\n- Agent Note:\n${note}\n\n`;
+    // Drop the existing block wherever it currently sits — top, middle or bottom.
     const noteRegex = RegExp('\\n?- Agent Note:\\n[\\s\\S]*?\\n\\n');
-    if (noteRegex.test(body)) {
-        body = body.replace(noteRegex, block);
+    const rest = body.replace(noteRegex, '').replace(/^\n+/, '');
+    const trimmedNote = note.toString().trim();
+    if (!trimmedNote) {
+        return rest;
     }
-    else {
-        body += block;
-    }
-    return body;
+    // Labeled block like the AI Note, with a blank line below separating it from the fields.
+    return `- Agent Note:\n${trimmedNote}\n\n${rest}`;
 }
 
 function upsertContactPhoneNumber({ body, phoneNumber, direction }) {
@@ -1061,6 +1425,76 @@ function upsertTranscript({ body, transcript }) {
     return body;
 }
 
+// work_notes is a JOURNAL field, not a column: every PATCH of interaction.work_notes appends a
+// NEW row to sys_journal_field, and the Table API GET on interaction returns the field empty.
+// So the current body has to be read back from sys_journal_field — newest entry first.
+async function getLatestWorkNote({ hostname, authHeader, recordId, operation }) {
+    const journalRes = await serviceNowApiClient.get(
+        `https://${hostname}/api/now/table/sys_journal_field?sysparm_query=element_id=${recordId}^element=work_notes^ORDERBYDESCsys_created_on&sysparm_fields=sys_id,value,sys_created_on`,
+        { headers: { Authorization: authHeader }, _operation: operation }
+    );
+    const latest = (journalRes.data?.result ?? [])
+        .sort((a, b) => new Date(b.sys_created_on) - new Date(a.sys_created_on))[0];
+    return { sysId: latest?.sys_id ?? null, value: latest?.value ?? '' };
+}
+
+// The form does NOT render work notes from sys_journal_field. The Activity formatter reads
+// sys_history_line — a denormalized cache built on demand and keyed by a sys_history_set row —
+// which materializes a COPY of the journal text when the entry is first written. So editing the
+// journal entry updates the data (getCallLog reads it back correctly) while the record keeps
+// displaying the pre-edit note. Dropping the history set makes ServiceNow rebuild it from source
+// on the next view, which picks up the edit.
+// Best-effort by design: the connector user may lack delete rights on sys_history_set, and a stale
+// display cache is a cosmetic problem, not a data one — never fail a log update over it.
+async function invalidateHistorySet({ hostname, authHeader, recordId, operation }) {
+    try {
+        const setRes = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/sys_history_set?sysparm_query=id=${recordId}&sysparm_fields=sys_id`,
+            { headers: { Authorization: authHeader }, _operation: operation }
+        );
+        for (const historySet of setRes.data?.result ?? []) {
+            await serviceNowApiClient.delete(
+                `https://${hostname}/api/now/table/sys_history_set/${historySet.sys_id}`,
+                { headers: { Authorization: authHeader }, _operation: operation }
+            );
+        }
+    } catch (e) {
+        console.warn(`[ServiceNow] ${operation}: could not invalidate the activity cache for ${recordId} (status ${e?.response?.status ?? 'n/a'}) — the edited work note may keep showing its previous text on the form until ServiceNow rebuilds the cache itself.`);
+    }
+}
+
+// Write the log body by EDITING the existing journal entry in place rather than appending another
+// one — sys_journal_field is a normal table, so the entry can be PATCHed by sys_id. Editing a log
+// used to leave a trail of near-identical work notes; now it rewrites the single one.
+// Falls back to the appending PATCH on interaction.work_notes when there is no entry yet (first
+// write), or when the instance has not granted write access on sys_journal_field: a missing ACL
+// has to degrade to a duplicate note, never to a lost log.
+async function writeWorkNote({ hostname, authHeader, recordId, journalSysId, body, operation }) {
+    if (journalSysId) {
+        try {
+            await serviceNowApiClient.patch(
+                `https://${hostname}/api/now/table/sys_journal_field/${journalSysId}`,
+                { value: body },
+                { headers: { Authorization: authHeader }, _operation: operation }
+            );
+            await invalidateHistorySet({ hostname, authHeader, recordId, operation });
+            return { updatedInPlace: true };
+        } catch (e) {
+            const status = e?.response?.status ?? null;
+            // Only an access/existence problem is recoverable by appending; anything else is a real
+            // failure and must surface.
+            if (![401, 403, 404].includes(status)) { throw e; }
+            console.warn(`[ServiceNow] ${operation}: cannot edit journal entry ${journalSysId} (status ${status}) — appending a new work note instead. Grant write access on sys_journal_field to update notes in place.`);
+        }
+    }
+    await serviceNowApiClient.patch(
+        `https://${hostname}/api/now/table/interaction/${recordId}`,
+        { work_notes: body },
+        { headers: { Authorization: authHeader }, _operation: operation }
+    );
+    return { updatedInPlace: false };
+}
+
 async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
     // ---TODO.5: Implement call log fetching---
@@ -1080,14 +1514,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
             headers: { 'Authorization': authHeader }, _operation: 'getCallLog'
         });
 
-    const journalRes = await serviceNowApiClient.get(
-        `https://${hostname}/api/now/table/sys_journal_field?sysparm_query=element_id=${callLogId}^element=work_notes&sysparm_fields=value,sys_created_on`,
-        {
-            headers: { Authorization: authHeader }, _operation: 'getCallLog'
-        });
-
-    const latestNote = journalRes.data.result
-        .sort((a, b) => new Date(b.sys_created_on) - new Date(a.sys_created_on))[0]?.value || '';
+    const { value: latestNote } = await getLatestWorkNote({ hostname, authHeader, recordId: callLogId, operation: 'getCallLog' });
     const agentNoteMatch = latestNote.match(/- Agent note:\s*([\s\S]*?)(?=\n- |$)/i);
     const agentNote = agentNoteMatch ? agentNoteMatch[1].trim() : '';
 
@@ -1127,16 +1554,11 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         {
             headers: { 'Authorization': authHeader }, _operation: 'updateCallLog'
         });
-    // work_notes is a JOURNAL field — the Table API GET returns it empty, so read the latest
-    // journal entry (the full note body written at create/last edit) the same way getCallLog does.
-    // Without this, originalNote is '' and the body gets rebuilt from scratch, which drops the
+    // Read the latest journal entry (the full note body written at create/last edit). Its sys_id is
+    // what lets the update rewrite that same entry instead of appending a second one.
+    // Without the body, originalNote is '' and it gets rebuilt from scratch, which drops the
     // Contact Number and RingCentral Username and makes the phone fall back to the extension.
-    const journalRes = await serviceNowApiClient.get(
-        `https://${hostname}/api/now/table/sys_journal_field?sysparm_query=element_id=${existingLogId}^element=work_notes&sysparm_fields=value,sys_created_on`,
-        { headers: { Authorization: authHeader }, _operation: 'updateCallLog' }
-    );
-    const originalNote = journalRes.data.result
-        .sort((a, b) => new Date(b.sys_created_on) - new Date(a.sys_created_on))[0]?.value || '';
+    const { sysId: journalSysId, value: originalNote } = await getLatestWorkNote({ hostname, authHeader, recordId: existingLogId, operation: 'updateCallLog' });
     const originalSubject = getLogRes?.data?.result?.short_description || '';
     let patchBody = {};
 
@@ -1147,7 +1569,9 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     }
 
     let logBody = originalNote;
-    if (!!note && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
+    // `note != null` not `!!note`: an empty string is a real edit (the user cleared the field) and
+    // has to reach upsertCallAgentNote so the block gets removed. Only an absent note is skipped.
+    if (note != null && (user.userSettings?.addCallLogNote?.value ?? true)) { logBody = upsertCallAgentNote({ body: logBody, note }); }
     if (!!duration && (user.userSettings?.addCallLogDuration?.value ?? true)) { logBody = upsertCallDuration({ body: logBody, duration }); }
     if (!!result && (user.userSettings?.addCallLogResult?.value ?? true)) { logBody = upsertCallResult({ body: logBody, result }); }
     if (existingCallLog?.sessionId && (user.userSettings?.addCallSessionId?.value ?? true)) { logBody = upsertCallSessionId({ body: logBody, sessionId: existingCallLog.sessionId }); }
@@ -1164,9 +1588,10 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     if (!!aiNote && (user.userSettings?.addCallLogAiNote?.value ?? true)) { logBody = upsertAiNote({ body: logBody, aiNote }); }
     if (!!transcript && (user.userSettings?.addCallLogTranscript?.value ?? true)) { logBody = upsertTranscript({ body: logBody, transcript }); }
 
+    // work_notes is deliberately NOT in this patch — it goes through writeWorkNote, which edits the
+    // existing journal entry instead of appending a new one.
     patchBody = {
-        short_description: subjectToUse,
-        work_notes: logBody
+        short_description: subjectToUse
     }
 
     patchBody.u_call_duration = formatDuration(duration);
@@ -1179,6 +1604,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
             headers: { 'Authorization': authHeader }, _operation: 'updateCallLog'
         }
     );
+
+    await writeWorkNote({ hostname, authHeader, recordId: existingLogId, journalSysId, body: logBody, operation: 'updateCallLog' });
 
     if (recordingDownloadLink) {
         console.log("Downloading Recorded File...");
@@ -1256,7 +1683,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // detect message type (SMS / Voicemail / Fax)
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
 
-    const workNotes = buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink });
+    // Same response that supplies assigned_to below also carries the agent's name fields.
+    const workNotes = buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, agentName: pickAgentName(caller_id.data?.result) });
 
     const postBody = {
         short_description: `[${messageType}] ${message.direction} ${messageType} - ${contactInfo.name}`,
@@ -1286,6 +1714,25 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         {
             headers: { 'Authorization': authHeader }, _operation: 'createMessageLog'
         });
+
+    console.log(`[ServiceNow][relatedRecord] createMessageLog: interaction ${addLogRes?.data?.result?.sys_id} created; submitted relatedRecord = ${additionalSubmission?.relatedRecord ?? '(none)'}`);
+    if (additionalSubmission?.relatedRecord) {
+        // The option list is built once per contact and shared by both log forms, so the "+ Create
+        // new ..." entries surface here too. Raising a ticket off an SMS is a separate product
+        // decision — skip it explicitly rather than letting the sentinel reach the link call, where
+        // it would parse as table "__new__" and POST garbage.
+        if (String(additionalSubmission.relatedRecord).startsWith(RELATED_RECORD_NEW_PREFIX)) {
+            console.log(`[ServiceNow][relatedRecord] createMessageLog: ignoring "${additionalSubmission.relatedRecord}" — creating records is supported on call logs only.`);
+        } else {
+            await linkInteractionToRecord({
+                hostname,
+                authHeader,
+                interactionSysId: addLogRes?.data?.result?.sys_id,
+                relatedRecord: additionalSubmission.relatedRecord,
+                operation: 'createMessageLog'
+            });
+        }
+    }
 
     if (recordingLink || faxDocLink) {
 
@@ -1362,25 +1809,29 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         };
     }
 
-    const getLogRes = await serviceNowApiClient.get(
-        `https://${hostname}/api/now/table/interaction/${existingLogId}`,
-        { headers: { 'Authorization': authHeader }, _operation: 'updateMessageLog' }
-    );
+    // Every appended line names its sender, so the agent has to be resolved here too — via the same
+    // userDetailsPath lookup createMessageLog uses for assigned_to. Unlike create, a missing path is
+    // NOT fatal here: the message still logs, the outbound line just reads "You".
+    const messageLogCompany = await findCompany({ rcAccountId: user.rcAccountId, hostname });
+    const agentName = await fetchAgentName({ hostname, authHeader, userDetailsPath: messageLogCompany?.userDetailsPath, operation: 'updateMessageLog' });
 
-    let originalNote = getLogRes?.data?.result?.work_notes ?? '';
+    // Read the running conversation from sys_journal_field, not from the interaction record — the
+    // Table API GET returns the journal field empty, so reading it there yielded '' every time and
+    // every message restarted the thread in a brand-new work note.
+    const { sysId: journalSysId, value: originalNote } = await getLatestWorkNote({ hostname, authHeader, recordId: existingLogId, operation: 'updateMessageLog' });
 
     // detect message type
     const messageType = recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS');
 
     // Same append flow as before — just Monday-style formatting. Only add the "SMS
     // conversation with…" header when starting a fresh note; otherwise append the line.
-    const updatedText = buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, includeHeader: !originalNote });
+    const updatedText = buildMessageLogBody({ user, message, contactInfo, messageType, recordingLink, faxDocLink, includeHeader: !originalNote, agentName });
 
     const updatedWorkNotes = originalNote ? `${originalNote}\n${updatedText}` : updatedText;
 
+    // work_notes goes through writeWorkNote so the thread keeps growing inside the one entry.
     const patchBody = {
-        short_description: `[${messageType}] ${message.direction} ${messageType} - ${existingMessageLog.contactName ?? ''}`,
-        work_notes: updatedWorkNotes
+        short_description: `[${messageType}] ${message.direction} ${messageType} - ${existingMessageLog.contactName ?? ''}`
     };
 
     if (additionalSubmission?.state) {
@@ -1400,6 +1851,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         {
             headers: { 'Authorization': authHeader }, _operation: 'updateMessageLog'
         });
+
+    await writeWorkNote({ hostname, authHeader, recordId: existingLogId, journalSysId, body: updatedWorkNotes, operation: 'updateMessageLog' });
 
     if (recordingLink || faxDocLink) {
 

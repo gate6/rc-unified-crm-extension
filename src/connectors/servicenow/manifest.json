@@ -57,6 +57,19 @@
             },
             "settings": [
                 {
+                    "id": "serviceNowRelatedRecord",
+                    "type": "section",
+                    "name": "serviceNow Related Record Options",
+                    "items": [
+                        {
+                            "id": "serviceNowAllowCreateRelatedRecord",
+                            "type": "boolean",
+                            "name": "Allow creating a new incident from the call log",
+                            "defaultValue": false
+                        }
+                    ]
+                },
+                {
                     "id": "serviceNowState",
                     "type": "section",
                     "name": "serviceNow Interaction State Options",
@@ -146,6 +159,13 @@
                 "callLog": {
                     "additionalFields": [
                         {
+                            "const": "relatedRecord",
+                            "title": "Related record",
+                            "type": "selection",
+                            "contactDependent": true,
+                            "allowCustomValue": false
+                        },
+                        {
                             "const": "state",
                             "title": "State",
                             "type": "selection",
@@ -182,10 +202,11 @@
                 "messageLog": {
                     "additionalFields": [
                         {
-                            "const": "matters",
-                            "title": "Matter",
+                            "const": "relatedRecord",
+                            "title": "Related record",
                             "type": "selection",
-                            "contactDependent": true
+                            "contactDependent": true,
+                            "allowCustomValue": false
                         },
                         {
                             "const": "state",

@@ -22,6 +22,11 @@
       "embedUrls": [
         "https://*.agencyzoom.com/*"
       ],
+      "serverSideLogging": {
+        "url": "https://crm-logging.labs.ringcentral.com",
+        "useAdminAssignedUserToken": true,
+        "enableUserMapping": true
+      },
       "auth": {
         "type": "apiKey",
         "apiKey": {
@@ -200,6 +205,10 @@
         {
           "id": "rcUserEmail",
           "path": "cachedData.extensionInfo.contact.email"
+        },
+        {
+          "id": "rcTimezoneName",
+          "path": "cachedData.extensionInfo.regionalSettings.timezone.name"
         }
       ]
     }
