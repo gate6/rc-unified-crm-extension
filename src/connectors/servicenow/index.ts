@@ -461,33 +461,76 @@ function buildFallbackTokens(digits) {
 // ---------------------------------------------------------------------------
 // Related records: tying a call to the work item it was actually about
 // ---------------------------------------------------------------------------
-// The caller almost always phones ABOUT something that already exists — INC0010023, a case, a work
-// order — not to open a fresh one. Offering those on the log form lets the interaction be tied to
-// the record whose assignee actually needs to know the customer called.
+// The caller almost always phones ABOUT something that already exists — INC0010023, a case — not to
+// open a fresh one. Offering those on the log form lets the interaction be tied to the record whose
+// assignee actually needs to know the customer called.
 //
 // `field` is the column on that table that points at the person. It can be compared directly with
-// contactInfo.id because every one of these references sys_user, exactly like interaction.opened_for
-// which createCallLog already sets — customer_contact (CSM) extends sys_user, so a contact sys_id is
-// a valid sys_user sys_id too.
+// contactInfo.id because both of these reference sys_user, exactly like interaction.opened_for which
+// createCallLog already sets — customer_contact (CSM) extends sys_user, so a contact sys_id is a
+// valid sys_user sys_id too.
 //
-// Each source is queried independently and failures are swallowed: an instance without CSM has no
-// sn_customerservice_case, one without FSM has no wm_order, and ServiceNow answers a query naming a
-// missing table or column with a 400 rather than an empty result set. A missing source has to
-// degrade to "no options from that table", never to a failed contact lookup.
+// Scope is deliberately incidents and cases only. Both column names are confirmed
+// (incident.caller_id, sn_customerservice_case.contact), so a query here fails only when the table
+// genuinely is not installed. Earlier revisions also probed sc_req_item and wm_order on the guess
+// that their person columns were `request.requested_for` and `contact`; on instances without SPM/FSM
+// — or with those columns named differently — every contact lookup paid two guaranteed 400s
+// ("Invalid table wm_order") before returning. Extending this list again means confirming the table
+// AND its person column on a real instance first, not guessing.
 //
-// incident.caller_id and sn_customerservice_case.contact are confirmed. The sc_req_item and wm_order
-// entries are best-effort — if an instance names those columns differently the query 400s and the
-// source is simply skipped, so a wrong guess here costs nothing but a log line.
+// Each source is still queried independently with failures swallowed: an instance without CSM has no
+// sn_customerservice_case, and ServiceNow answers a query naming a missing table or column with a
+// 400 rather than an empty result set. A missing source has to degrade to "no options from that
+// table", never to a failed contact lookup.
+//
 // `creatable` marks a source the connector may also INSERT into from the call log form. Only
-// incident is enabled: its person column (caller_id) is writable directly, whereas sc_req_item's is
-// a dot-walked read-only path (request.requested_for) and a case usually needs an `account` that the
-// call alone cannot supply. Adding another creatable source is a one-line change once its mandatory
-// fields are known — but a wrong guess raises real tickets in someone's queue, so keep it narrow.
+// incident is, and that is a deliberate product decision rather than a technical limit: the API
+// creates a case perfectly well, but ONE record type for every caller is simpler to run than two,
+// and an incident can carry an external caller.
+//
+// It can because `incident.caller_id` references sys_user and CSM's `customer_contact` EXTENDS
+// sys_user, sharing its sys_id — so a customer contact is a valid caller. ServiceNow's own
+// case-to-incident flow relies on the same thing, mapping the case's Contact to the incident's
+// Caller and its Account to the incident's Company.
+//
+// Two things to know before anyone leans on this. ServiceNow's own guidance is cases for external
+// customers, because incidents carry internal work notes and CI detail that a customer portal must
+// not leak. And any reference qualifier restricting caller_id to internal staff is UI-only — the
+// Table API ignores it, so this code can set a caller the ServiceNow form itself would refuse.
+//
+// Cases remain LINKABLE, just not creatable: a caller ringing about an existing CS0001001 can still
+// tie the call to it, which costs nothing and needs no configuration. Re-enabling case creation
+// means restoring createSettingId/categoryField/referenceFields here — see git history.
+//
+// `choiceTables` exists because ServiceNow stores a choice list against the table where the column is
+// DEFINED, not every table that inherits it. `category` is defined on incident, but `impact` and
+// `urgency` come from `task` — so a query for name=incident^element=impact returns nothing at all,
+// and the chain has to be walked most-specific-first to find where the choices actually live.
 const RELATED_RECORD_SOURCES = [
-    { table: 'incident', field: 'caller_id', label: 'Incident', creatable: true },
-    { table: 'sn_customerservice_case', field: 'contact', label: 'Case' },
-    { table: 'sc_req_item', field: 'request.requested_for', label: 'Requested item' },
-    { table: 'wm_order', field: 'contact', label: 'Work order' }
+    {
+        table: 'incident',
+        field: 'caller_id',
+        label: 'Incident',
+        creatable: true,
+        createSettingId: 'serviceNowAllowCreateRelatedRecord',
+        choiceTables: ['incident', 'task'],
+        categoryField: 'incidentCategory',
+        subcategoryField: 'incidentSubcategory',
+        impactSettingId: 'serviceNowIncidentImpact',
+        urgencySettingId: 'serviceNowIncidentUrgency',
+        // Which customer the incident is for. Only meaningful once external callers raise incidents:
+        // without it an incident for an outside caller records WHO rang but not WHICH account, and
+        // every per-customer report loses them. Read off the contact record, mirroring ServiceNow's
+        // own case-to-incident mapping. `customer_account` extends `core_company`, so the account
+        // sys_id is a valid `company` value. Silently skipped for internal callers, who have no
+        // customer_contact row to read it from.
+        accountField: 'company'
+    },
+    {
+        table: 'sn_customerservice_case',
+        field: 'contact',
+        label: 'Case'
+    }
 ];
 
 // Sentinel prefix for the "create a new one instead" entries in the Related record dropdown.
@@ -497,13 +540,14 @@ const RELATED_RECORD_NEW_PREFIX = '__new__:';
 const RELATED_RECORD_LIMIT = 20;
 
 // Sources this instance has already rejected with a 400, keyed `hostname:table`. A 400 from the
-// Table API means the table or a column named in the query does not exist ("Invalid table wm_order")
-// — a permanent fact about the instance, not a transient failure, so probing it again on every
+// Table API means the table or a column named in the query does not exist ("Invalid table
+// sn_customerservice_case" on an instance without CSM, say) — a permanent fact about the instance,
+// not a transient failure, so probing it again on every
 // single contact lookup just buys a guaranteed-failing round trip. Deliberately NOT populated on
 // 403: that is an ACL gap, which an admin can grant without restarting the connector.
 const missingRelatedRecordSources = new Set();
 
-async function fetchRelatedRecords({ hostname, authHeader, contactId, operation, allowCreate = false }) {
+async function fetchRelatedRecords({ hostname, authHeader, contactId, operation, creatableTables = new Set() }) {
     if (!contactId || contactId === 'createNewContact') {
         console.log(`[ServiceNow][relatedRecord] ${operation}: skipped lookup — no usable contact id`, { contactId });
         return [];
@@ -563,32 +607,290 @@ async function fetchRelatedRecords({ hostname, authHeader, contactId, operation,
     // "Create new" entries go LAST, after every existing record, so the common case (link the ticket
     // the caller is phoning about) stays at the top of the list and raising a new one is a deliberate
     // scroll rather than a mis-click.
-    if (allowCreate) {
-        for (const source of RELATED_RECORD_SOURCES) {
-            if (!source.creatable || !availableTables.has(source.table)) {
-                continue;
+    for (const source of RELATED_RECORD_SOURCES) {
+        if (!source.creatable || !creatableTables.has(source.table) || !availableTables.has(source.table)) {
+            continue;
+        }
+        options.push({
+            const: `${RELATED_RECORD_NEW_PREFIX}${source.table}`,
+            title: `+ Create new ${source.label.toLowerCase()}`,
+            description: 'A new record will be raised for this caller and linked to the call'
+        });
+    }
+
+    console.log(`[ServiceNow][relatedRecord] ${operation}: contact ${contactId} -> ${options.length} option(s) offered (creatable: ${[...creatableTables].join(', ') || 'none'})`, stringifyForLog(options.map(o => `${o.title} (${o.const})`)));
+    return options;
+}
+
+// ---------------------------------------------------------------------------
+// Fields on a newly created incident or case
+// ---------------------------------------------------------------------------
+// A bare insert of the person column + short_description produces a record carrying nothing but the
+// dictionary defaults — for an incident on a stock instance that means category "Inquiry / Help", no
+// subcategory, impact and urgency both "3 - Low", and no assignee.
+//
+// Category and subcategory are per-call decisions and live on the log form. Impact and urgency are
+// not: they are a policy an admin sets once ("calls raise Medium tickets"), so they come from
+// settings only and stay off the form, which keeps the call log short.
+//
+// PRIORITY IS DELIBERATELY ABSENT, and adding it would not work. On `incident` priority is derived,
+// not stored input: the Priority Lookup rules recompute it from impact x urgency during the insert,
+// so a `priority` in the POST body is overwritten before the record is saved — the incident form
+// greys the field out to say exactly that. Raising priority means sending a stronger impact and
+// urgency and letting the instance's own matrix do the arithmetic, which also keeps the connector
+// honest if an admin has retuned it.
+//
+// (This is NOT true of every task table. A CSM case has an editable priority and ServiceNow ships no
+// priority lookup for Case Management at all, so a case would need priority sent directly. That
+// mattered while cases were creatable; it is recorded here because it is exactly the sort of thing
+// that gets wrongly generalised from "incident" to "every record type".)
+const RECORD_CHOICE_ELEMENTS = ['category', 'subcategory', 'impact', 'urgency'];
+
+// Choice lists change about as often as the schema does, but findContact runs on every single call,
+// so an uncached read would add four sys_choice round trips per creatable table to every incoming
+// ring. A failed fetch is cached only briefly: a 403 usually means an ACL an admin is in the middle
+// of granting, and it should not stay broken for the full TTL after they fix it.
+const RECORD_CHOICE_CACHE_TTL_MS = 10 * 60 * 1000;
+const RECORD_CHOICE_FAILURE_TTL_MS = 30 * 1000;
+const recordChoiceCache = new Map(); // `hostname:table` -> { choices, expiresAt }
+
+async function fetchRecordChoices({ hostname, authHeader, source, operation }) {
+    const cacheKey = `${hostname}:${source.table}`;
+    const cached = recordChoiceCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+        return cached.choices;
+    }
+
+    const choices = {};
+    let anyFailed = false;
+    const elements = RECORD_CHOICE_ELEMENTS;
+    for (const element of elements) {
+        // Ask every table in the inheritance chain at once rather than guessing which one owns the
+        // column. ORDERBYsequence so the dropdown reads in the same order the ServiceNow form does.
+        const query = `element=${element}^nameIN${source.choiceTables.join(',')}^inactive=false^ORDERBYsequence`;
+        try {
+            const res = await serviceNowApiClient.get(
+                `https://${hostname}/api/now/table/sys_choice?sysparm_query=${encodeURIComponent(query)}&sysparm_fields=sys_id,name,label,value,dependent_value&sysparm_limit=500`,
+                { headers: { 'Authorization': authHeader }, _operation: operation }
+            );
+
+            // A table that overrides an inherited choice list has rows under BOTH its own name and
+            // its parent's, and only the override is correct for it. Take the most specific table
+            // that returned anything and ignore the rest — mixing the two would offer choices the
+            // form itself would reject.
+            const rowsByTable = new Map();
+            for (const row of res.data?.result ?? []) {
+                if (!rowsByTable.has(row.name)) {
+                    rowsByTable.set(row.name, []);
+                }
+                rowsByTable.get(row.name).push(row);
             }
-            options.push({
-                const: `${RELATED_RECORD_NEW_PREFIX}${source.table}`,
-                title: `+ Create new ${source.label.toLowerCase()}`,
-                description: 'A new record will be raised for this caller and linked to the call'
+            const owningTable = source.choiceTables.find(t => (rowsByTable.get(t) ?? []).length > 0);
+
+            // sys_choice holds one row per language, so an instance with a language pack returns the
+            // same value several times over. Keep the first and drop the rest — offering "Software"
+            // three times is worse than offering it in only one language.
+            const seenValues = new Set();
+            choices[element] = (rowsByTable.get(owningTable) ?? []).filter((row) => {
+                const value = (row?.value ?? '').toString();
+                if (!value || !row?.sys_id || seenValues.has(value)) {
+                    return false;
+                }
+                seenValues.add(value);
+                return true;
             });
+        } catch (e) {
+            anyFailed = true;
+            choices[element] = [];
+            console.log(`[ServiceNow][createFields] ${operation}: sys_choice lookup for ${source.table}.${element} failed (status ${e?.response?.status ?? 'n/a'}) — that field will offer no options. Detail: ${stringifyForLog(e?.response?.data ?? e.message, 300)}`);
         }
     }
 
-    console.log(`[ServiceNow][relatedRecord] ${operation}: contact ${contactId} -> ${options.length} option(s) offered (create enabled: ${allowCreate})`, stringifyForLog(options.map(o => `${o.title} (${o.const})`)));
+    recordChoiceCache.set(cacheKey, {
+        choices,
+        expiresAt: Date.now() + (anyFailed ? RECORD_CHOICE_FAILURE_TTL_MS : RECORD_CHOICE_CACHE_TTL_MS)
+    });
+    console.log(`[ServiceNow][createFields] ${operation}: ${source.table} choices loaded for ${hostname} — ${elements.map(el => `${el}:${choices[el].length}`).join(', ')}${anyFailed ? ' (partial — will retry shortly)' : ''}`);
+    return choices;
+}
+
+// Turn the raw choice rows into the option lists the log form renders, keyed by this source's
+// manifest consts. Incident and case get separate fields precisely because these lists differ.
+function buildRecordFieldOptions(source, choices) {
+    const categoryLabelByValue = new Map((choices.category ?? []).map(c => [c.value, c.label]));
+    const options = {
+        [source.categoryField]: (choices.category ?? []).map(row => ({ const: row.sys_id, title: row.label }))
+    };
+
+    // Only where the source declares one — a case classifies by product instead.
+    if (source.subcategoryField) {
+        options[source.subcategoryField] = (choices.subcategory ?? []).map((row) => {
+            const parentLabel = categoryLabelByValue.get(row.dependent_value);
+            return {
+                const: row.sys_id,
+                title: row.label,
+                // In ServiceNow subcategory is a dependent field — its valid choices are filtered by
+                // the chosen category. The log form has no way to filter one selection by another, so
+                // the whole list is offered and the parent is named here to make the right one
+                // pickable. A pair that still does not match is reconciled at submit time.
+                ...(parentLabel ? { description: `Category: ${parentLabel}` } : {})
+            };
+        });
+    }
+
     return options;
+}
+
+function collapseChoiceLabel(value) {
+    return (value ?? '').toString().trim().toLowerCase().replace(/\s+/g, '');
+}
+
+// Resolve one submitted field to the raw value the target table stores. The submitted value is a
+// sys_choice sys_id when the agent picked from the dropdown, but a plain label ("Software") when it
+// arrived from an admin setting — those settings are free-text input fields and cannot carry a
+// sys_id. Both forms have to resolve, hence the three passes.
+//
+// Anything unrecognised resolves to null and the field is then omitted entirely. That is the whole
+// safety story for this feature: a typo in a setting costs the default ServiceNow would have applied
+// anyway, and can never turn a working insert into a 400.
+function resolveRecordChoice(choices, element, submitted, context = '') {
+    const raw = (submitted ?? '').toString().trim();
+    if (!raw) {
+        return null;
+    }
+    const rows = choices?.[element] ?? [];
+    const collapsed = collapseChoiceLabel(raw);
+
+    const match = rows.find(r => r.sys_id === raw)
+        ?? rows.find(r => collapseChoiceLabel(r.label) === collapsed)
+        // Last resort: an admin who knows the schema may type the stored value ("software") rather
+        // than the label ("Software"). Cheap to accept, and it fails closed like the others.
+        ?? rows.find(r => collapseChoiceLabel(r.value) === collapsed);
+
+    if (!match) {
+        console.warn(`[ServiceNow][createFields] no ${context}${element} choice matches "${raw}" — the field will be left to its ServiceNow default.`);
+        return null;
+    }
+    return match;
+}
+
+function readSettingValue(user, settingId) {
+    return user?.userSettings?.[settingId]?.value ?? '';
+}
+
+// A case belongs to an account, and unlike an incident's caller that account is not implied by the
+// call — it hangs off the contact record. Read it rather than asking the agent, who has no way to
+// know it. Returns null on any failure: a contact stored in sys_user rather than customer_contact
+// has no account column at all, and that has to degrade to "insert without it" (which the instance
+// may still reject, reported as a failed create) rather than to a thrown error that costs the log.
+async function fetchContactAccount({ hostname, authHeader, contactId, operation }) {
+    if (!contactId) {
+        return null;
+    }
+    try {
+        const res = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/customer_contact/${contactId}?sysparm_fields=account&sysparm_display_value=false`,
+            { headers: { 'Authorization': authHeader }, _operation: operation }
+        );
+        // A reference field comes back as { value, link }; an empty one as ''.
+        const account = res.data?.result?.account;
+        const accountId = (typeof account === 'object' ? account?.value : account) || null;
+        console.log(`[ServiceNow][createFields] ${operation}: contact ${contactId} -> account ${accountId ?? '(none on record)'}`);
+        return accountId;
+    } catch (e) {
+        console.log(`[ServiceNow][createFields] ${operation}: could not read account for contact ${contactId} (status ${e?.response?.status ?? 'n/a'}) — the case will be created without one.`);
+        return null;
+    }
+}
+
+// Build the extra columns for a new incident or case: the agent's category choices, the admin's
+// impact/urgency policy, the assignee, and (for a case) the account. Everything here is optional by
+// design — an empty object produces exactly the record the connector created before these existed.
+async function buildCreateFields({ user, hostname, authHeader, source, additionalSubmission, contactId, agentSysId, operation }) {
+    const fields = {};
+
+    // The agent who logged the call owns the ticket. This sys_id is already in hand from the user
+    // details call createCallLog makes for the interaction, so it costs no extra round trip. Note
+    // interaction.assigned_to is set separately — same person, different record.
+    if (agentSysId) {
+        fields.assigned_to = agentSysId;
+    }
+
+    if (source.accountField) {
+        const accountId = await fetchContactAccount({ hostname, authHeader, contactId, operation });
+        if (accountId) {
+            fields[source.accountField] = accountId;
+        }
+    }
+
+    const choices = await fetchRecordChoices({ hostname, authHeader, source, operation });
+    const context = `${source.table}.`;
+
+    const category = resolveRecordChoice(choices, 'category', additionalSubmission?.[source.categoryField], context);
+    const subcategory = source.subcategoryField
+        ? resolveRecordChoice(choices, 'subcategory', additionalSubmission?.[source.subcategoryField], context)
+        : null;
+    // Settings only — deliberately not on the form. See the block comment above.
+    const impact = resolveRecordChoice(choices, 'impact', readSettingValue(user, source.impactSettingId), context);
+    const urgency = resolveRecordChoice(choices, 'urgency', readSettingValue(user, source.urgencySettingId), context);
+
+    if (category) {
+        fields.category = category.value;
+    }
+
+    if (subcategory) {
+        if (!category && subcategory.dependent_value) {
+            // A subcategory names its own parent, so a lone subcategory pick is not ambiguous — infer
+            // the category rather than letting the dictionary default supply one the subcategory does
+            // not belong to.
+            fields.category = subcategory.dependent_value;
+            fields.subcategory = subcategory.value;
+            console.log(`[ServiceNow][createFields] ${operation}: no category chosen — inferred "${subcategory.dependent_value}" from subcategory "${subcategory.label}".`);
+        } else if (category && subcategory.dependent_value && subcategory.dependent_value !== category.value) {
+            // Keep the category and drop the subcategory: a record whose subcategory its category
+            // never offers breaks reporting and any assignment rule keyed on the pair, and the
+            // category is the coarser, likelier-correct half of the two.
+            console.warn(`[ServiceNow][createFields] ${operation}: dropping subcategory "${subcategory.label}" — it belongs to category "${subcategory.dependent_value}", not the chosen "${category.value}".`);
+        } else {
+            fields.subcategory = subcategory.value;
+        }
+    }
+
+    if (impact) {
+        fields.impact = impact.value;
+    }
+    if (urgency) {
+        fields.urgency = urgency.value;
+    }
+
+    console.log(`[ServiceNow][createFields] ${operation}: resolved ${source.table} fields`, stringifyForLog(fields));
+    return fields;
 }
 
 // Attach the related-record options to every matched contact. Run as a pass over the finished list
 // rather than inside the matching loops so the phone/name matching logic stays untouched, and so the
 // "Create new contact..." sentinel is skipped instead of triggering four pointless queries.
-async function attachRelatedRecords({ hostname, authHeader, contacts, operation, allowCreate = false }) {
+async function attachRelatedRecords({ hostname, authHeader, contacts, operation, creatableTables = new Set() }) {
     const candidates = (contacts ?? []).filter(c => c && !c.isNewContact);
     console.log(`[ServiceNow][relatedRecord] ${operation}: attaching options to ${candidates.length} matched contact(s)`);
 
+    // The category/subcategory options are identical for every contact and are only ever used by the
+    // matching "+ Create new ..." path, so they are fetched once per lookup and only for the record
+    // types creation is actually switched on for. An admin who enables incidents but not cases gets
+    // populated incident fields and empty case ones, rather than four populated lists on every call
+    // log, half of which could never be used.
+    const createFieldOptions = {};
+    if (candidates.length > 0) {
+        for (const source of RELATED_RECORD_SOURCES) {
+            if (!source.creatable || !creatableTables.has(source.table)) {
+                continue;
+            }
+            Object.assign(createFieldOptions, buildRecordFieldOptions(source, await fetchRecordChoices({ hostname, authHeader, source, operation })));
+        }
+    }
+
     for (const contact of candidates) {
-        const relatedRecord = await fetchRelatedRecords({ hostname, authHeader, contactId: contact.id, operation, allowCreate });
+        const relatedRecord = await fetchRelatedRecords({ hostname, authHeader, contactId: contact.id, operation, creatableTables });
         if (relatedRecord.length > 0) {
             contact.additionalInfo = { ...(contact.additionalInfo ?? {}), relatedRecord };
             console.log(`[ServiceNow][relatedRecord] ${operation}: attached ${relatedRecord.length} option(s) to contact "${contact.name}" (${contact.id}); additionalInfo keys now: ${Object.keys(contact.additionalInfo).join(', ')}`);
@@ -597,13 +899,19 @@ async function attachRelatedRecords({ hostname, authHeader, contacts, operation,
             // blank field on the form can be told apart from the lookup never having run at all.
             console.log(`[ServiceNow][relatedRecord] ${operation}: no open records for contact "${contact.name}" (${contact.id}) — dropdown will be empty`);
         }
+        contact.additionalInfo = { ...(contact.additionalInfo ?? {}), ...createFieldOptions };
     }
 }
 
-// Whether this user may raise new records from the log form. Off unless the admin turns it on:
-// every save would otherwise be one mis-click away from a real ticket in someone's queue.
-function canCreateRelatedRecord(user) {
-    return (user?.userSettings?.serviceNowAllowCreateRelatedRecord?.value ?? false) === true;
+// Which tables this user may raise new records in. Each record type has its own switch and each is
+// off unless an admin turns it on: every save would otherwise be one mis-click away from a real
+// ticket in someone's queue, and an ITSM shop that wants incidents has no business raising CSM cases.
+function creatableTablesFor(user) {
+    return new Set(
+        RELATED_RECORD_SOURCES
+            .filter(s => s.creatable && (user?.userSettings?.[s.createSettingId]?.value ?? false) === true)
+            .map(s => s.table)
+    );
 }
 
 // Raise a new record for this caller. Deliberately minimal: `short_description` is the call's
@@ -615,7 +923,7 @@ function canCreateRelatedRecord(user) {
 // call log knows nothing about (a mandatory `category`/`cmdb_ci`, a Data Policy, a missing ACL), and
 // none of those may cost the user their call log. The caller surfaces the failure in returnMessage
 // so the agent is never left believing a ticket exists when it does not.
-async function createRelatedRecord({ hostname, authHeader, table, contactId, subject, note, operation }) {
+async function createRelatedRecord({ hostname, authHeader, table, contactId, subject, note, extraFields, operation }) {
     const source = RELATED_RECORD_SOURCES.find(s => s.table === table);
     if (!source?.creatable) {
         console.warn(`[ServiceNow][relatedRecord] ${operation}: refusing to create in "${table}" — not a creatable source.`);
@@ -623,6 +931,9 @@ async function createRelatedRecord({ hostname, authHeader, table, contactId, sub
     }
 
     const postBody = {
+        // Table-specific extras first so the identity of the record — who it is for and what it is
+        // about — cannot be overwritten by a resolved choice field.
+        ...(extraFields ?? {}),
         [source.field]: contactId,
         short_description: subject,
         // ServiceNow's own field for how the record came in — a phone call is exactly what this is.
@@ -828,8 +1139,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     }
 
     // Offer each matched contact's open work records on the log form, so the call can be tied to
-    // the incident/case/work order it was about.
-    await attachRelatedRecords({ hostname, authHeader, contacts: matchedContactInfo, operation: 'findContact', allowCreate: canCreateRelatedRecord(user) });
+    // the incident/case it was about.
+    await attachRelatedRecords({ hostname, authHeader, contacts: matchedContactInfo, operation: 'findContact', creatableTables: creatableTablesFor(user) });
 
     const accounts = await getAllAccounts(hostname, authHeader);
     const accountOptions = accounts
@@ -948,7 +1259,7 @@ async function findContactWithName({ user, authHeader, name }) {
 
     // Same contactDependent contract as findContact — a manually searched contact must carry the
     // related-record options too, or its dropdown renders empty.
-    await attachRelatedRecords({ hostname, authHeader, contacts: matchedContactInfo, operation: 'findContactWithName', allowCreate: canCreateRelatedRecord(user) });
+    await attachRelatedRecords({ hostname, authHeader, contacts: matchedContactInfo, operation: 'findContactWithName', creatableTables: creatableTablesFor(user) });
 
     console.log('[ServiceNow][relatedRecord] findContactWithName: returning contacts ->', stringifyForLog(
         matchedContactInfo.map(c => ({ id: c.id, name: c.name, additionalInfoKeys: Object.keys(c.additionalInfo ?? {}), relatedRecordCount: (c.additionalInfo?.relatedRecord ?? []).length }))
@@ -1162,12 +1473,14 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 
         if (String(relatedRecordValue).startsWith(RELATED_RECORD_NEW_PREFIX)) {
             const table = String(relatedRecordValue).slice(RELATED_RECORD_NEW_PREFIX.length);
-            if (!canCreateRelatedRecord(user)) {
-                // The option is only rendered when the setting is on, so reaching here means a stale
-                // cached contact still carried it. Refuse rather than create against a disabled setting.
-                console.warn(`[ServiceNow][relatedRecord] createCallLog: ignoring "+ create ${table}" — record creation is disabled for this user.`);
+            const source = RELATED_RECORD_SOURCES.find(s => s.table === table);
+            // Checked per record type, not once for all of them: an admin who allows incidents but
+            // not cases must not be able to raise a case through a stale cached contact that still
+            // carries the option.
+            if (!creatableTablesFor(user).has(table)) {
+                console.warn(`[ServiceNow][relatedRecord] createCallLog: ignoring "+ create ${table}" — creating that record type is disabled for this user.`);
                 relatedRecordValue = null;
-                relatedRecordNote = ' Creating records is turned off, so no record was raised.';
+                relatedRecordNote = ` Creating ${(source?.label ?? 'record').toLowerCase()}s is turned off, so none was raised.`;
                 relatedRecordFailed = true;
             } else {
                 const created = await createRelatedRecord({
@@ -1177,6 +1490,16 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
                     contactId: contactInfo.id,
                     subject: subject || `${callLog.direction} call from ${contactInfo.name || 'caller'}`,
                     note,
+                    extraFields: await buildCreateFields({
+                        user,
+                        hostname,
+                        authHeader,
+                        source,
+                        additionalSubmission,
+                        contactId: contactInfo.id,
+                        agentSysId: caller_id.data?.result?.id,
+                        operation: 'createCallLog'
+                    }),
                     operation: 'createCallLog'
                 });
                 if (created) {
@@ -1184,7 +1507,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
                     relatedRecordNote = ` ${created.number} created.`;
                 } else {
                     relatedRecordValue = null;
-                    relatedRecordNote = ` Could not create the ${table.replace(/_/g, ' ')} — the call log was still saved.`;
+                    // source.label, not the table name: "sn_customerservice_case" is not a word.
+                    relatedRecordNote = ` Could not create the ${(source?.label ?? 'record').toLowerCase()} — the call log was still saved.`;
                     relatedRecordFailed = true;
                 }
             }
