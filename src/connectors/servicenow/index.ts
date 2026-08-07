@@ -516,6 +516,10 @@ const RELATED_RECORD_SOURCES = [
         choiceTables: ['incident', 'task'],
         categoryField: 'incidentCategory',
         subcategoryField: 'incidentSubcategory',
+        // The settings behind those two form fields. They pre-fill the form, and they are also the
+        // rule findOrCreateDefaultIncident matches on when nobody picked a record at all.
+        categorySettingId: 'serviceNowIncidentCategory',
+        subcategorySettingId: 'serviceNowIncidentSubcategory',
         impactSettingId: 'serviceNowIncidentImpact',
         urgencySettingId: 'serviceNowIncidentUrgency',
         // Which customer the incident is for. Only meaningful once external callers raise incidents:
@@ -867,6 +871,107 @@ async function buildCreateFields({ user, hostname, authHeader, source, additiona
     return fields;
 }
 
+// ---------------------------------------------------------------------------
+// Auto-attach: what to do when nobody picked a related record
+// ---------------------------------------------------------------------------
+// Auto call logging writes a call with no one at the form, so `relatedRecord` arrives empty and the
+// call would land as a bare interaction, attached to nothing. This fills that gap — but only from
+// values a person configured, never by guessing.
+//
+// The rule is the admin's default category AND subcategory. Both must be set; either one blank and
+// this does nothing at all, which is the safe default and stays the behaviour for anyone who has not
+// opted in. Given the pair, an open incident for this caller carrying exactly that category and
+// subcategory is reused; if there is none, one is raised with it.
+//
+// The known limitation, accepted deliberately: a caller does not always ring about the same thing. A
+// customer with an open Software / Operating System incident who calls about a keyboard still gets
+// filed under Software / Operating System, because nothing here can tell what the call was about.
+// That is a CSR's decision to make, not the connector's — configuring both settings IS the decision,
+// and it is why this stays off until they are filled in. Matching on the pair rather than on "the
+// most recent open incident" is what keeps it a stated policy instead of a guess.
+//
+// Deliberately reuses buildCreateFields by synthesising the submission it would have received, so a
+// call attached this way gets the same assignee, company, impact and urgency as one raised by hand —
+// there is no second, drifting definition of what a new incident looks like.
+async function findOrCreateDefaultIncident({ user, hostname, authHeader, contactId, subject, note, additionalSubmission, agentSysId, operation }) {
+    const source = RELATED_RECORD_SOURCES.find(s => s.table === 'incident');
+    // Same switch that governs raising incidents by hand: this can create one, so it needs it.
+    if (!source || !creatableTablesFor(user).has(source.table)) {
+        return null;
+    }
+
+    const choices = await fetchRecordChoices({ hostname, authHeader, source, operation });
+    // Sourced exactly like `state` and `type`: what the form submitted wins, and the setting is the
+    // fallback. The client pre-fills these fields FROM the setting via defaultSettingValues, so on an
+    // auto-logged call the two agree and it makes no difference — but on a manual log where the agent
+    // changed the category and left Related record blank, only the submitted value is right. Reading
+    // the setting alone would quietly file the call under a category the agent had just overridden.
+    const pick = (formField, settingId) => additionalSubmission?.[formField] || readSettingValue(user, settingId);
+    const category = resolveRecordChoice(choices, 'category', pick(source.categoryField, source.categorySettingId), 'incident.');
+    const subcategory = resolveRecordChoice(choices, 'subcategory', pick(source.subcategoryField, source.subcategorySettingId), 'incident.');
+    if (!category || !subcategory) {
+        console.log(`[ServiceNow][autoAttach] ${operation}: no default category+subcategory configured — logging the interaction only.`);
+        return null;
+    }
+    // A pair the instance does not recognise would search for, and then create, a combination the
+    // incident form itself rejects. Refuse rather than manufacture it.
+    if (subcategory.dependent_value && subcategory.dependent_value !== category.value) {
+        console.warn(`[ServiceNow][autoAttach] ${operation}: default subcategory "${subcategory.label}" belongs to category "${subcategory.dependent_value}", not "${category.value}" — logging the interaction only.`);
+        return null;
+    }
+
+    // Reuse before raising. Most recently updated first, so a caller with two matching tickets
+    // attaches to the live one rather than something stale.
+    const query = `caller_id=${contactId}^active=true^category=${category.value}^subcategory=${subcategory.value}^ORDERBYDESCsys_updated_on`;
+    try {
+        const res = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/incident?sysparm_query=${encodeURIComponent(query)}&sysparm_fields=sys_id,number&sysparm_limit=1`,
+            { headers: { 'Authorization': authHeader }, _operation: operation }
+        );
+        const existing = res.data?.result?.[0];
+        if (existing?.sys_id) {
+            console.log(`[ServiceNow][autoAttach] ${operation}: reusing open incident ${existing.number} (${category.value}/${subcategory.value}) for contact ${contactId}`);
+            return { relatedRecordValue: `incident:${existing.sys_id}`, note: ` Linked to ${existing.number}.`, failed: false };
+        }
+        console.log(`[ServiceNow][autoAttach] ${operation}: no open incident matching ${category.value}/${subcategory.value} for contact ${contactId} — raising one.`);
+    } catch (e) {
+        // A failed search must not silently become a create: that turns one bad round trip into a
+        // duplicate ticket on every call. Log the interaction alone and leave it to the agent.
+        console.warn(`[ServiceNow][autoAttach] ${operation}: could not search for a matching incident (status ${e?.response?.status ?? 'n/a'}) — logging the interaction only, rather than risking a duplicate. Detail: ${stringifyForLog(e?.response?.data ?? e.message, 300)}`);
+        return null;
+    }
+
+    const created = await createRelatedRecord({
+        hostname,
+        authHeader,
+        table: source.table,
+        contactId,
+        subject,
+        note,
+        extraFields: await buildCreateFields({
+            user,
+            hostname,
+            authHeader,
+            source,
+            // The settings values, in the shape the form would have submitted. resolveRecordChoice
+            // matches a raw stored value on its third pass, so these resolve exactly as a pick does.
+            additionalSubmission: {
+                [source.categoryField]: category.value,
+                [source.subcategoryField]: subcategory.value
+            },
+            contactId,
+            agentSysId,
+            operation
+        }),
+        operation
+    });
+
+    if (!created) {
+        return { relatedRecordValue: null, note: ' Could not raise an incident for this call — the call log was still saved.', failed: true };
+    }
+    return { relatedRecordValue: `${created.table}:${created.sysId}`, note: ` ${created.number} created.`, failed: false };
+}
+
 // Attach the related-record options to every matched contact. Run as a pass over the finished list
 // rather than inside the matching loops so the phone/name matching logic stays untouched, and so the
 // "Create new contact..." sentinel is skipped instead of triggering four pointless queries.
@@ -1009,6 +1114,102 @@ async function linkInteractionToRecord({ hostname, authHeader, interactionSysId,
         // not a lost log. Dump the response body: a 400 here usually means the column names on this
         // instance differ from interaction/document_table/document_id.
         console.warn(`[ServiceNow][relatedRecord] ${operation}: FAILED to link interaction ${interactionSysId} -> ${documentTable}/${documentId} (status ${e?.response?.status ?? 'n/a'}) — the log was saved, but it will not appear under that record's Related Records. Response: ${stringifyForLog(e?.response?.data ?? e.message, 600)}`);
+    }
+}
+
+// Read back what this interaction is currently tied to, as the same `table:sys_id` strings the
+// dropdown speaks. getCallLog needs the first one so the edit form opens showing the record already
+// linked — without it the field renders blank and an agent with a hundred open incidents has to hunt
+// down the one they already picked, every time they fix a typo. updateCallLog needs the join row
+// sys_ids so a changed selection can replace the old link rather than pile a second one on top.
+//
+// Returns [] on failure rather than throwing: not knowing the current link must degrade to an empty
+// dropdown, never to an edit form that will not open.
+async function fetchInteractionLinks({ hostname, authHeader, interactionSysId, operation }) {
+    if (!interactionSysId) {
+        return [];
+    }
+    try {
+        const res = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/interaction_related_record?sysparm_query=${encodeURIComponent(`interaction=${interactionSysId}^ORDERBYDESCsys_created_on`)}&sysparm_fields=sys_id,document_table,document_id&sysparm_display_value=false&sysparm_limit=20`,
+            { headers: { 'Authorization': authHeader }, _operation: operation }
+        );
+        // document_id is a Document ID field, so it comes back as { value, link } rather than a bare
+        // string; document_table is plain. Unwrap both the same way for safety.
+        const unwrap = (v) => (typeof v === 'object' ? v?.value : v) || '';
+        return (res.data?.result ?? [])
+            .map(row => ({
+                joinSysId: row.sys_id,
+                value: `${unwrap(row.document_table)}:${unwrap(row.document_id)}`
+            }))
+            .filter(l => l.joinSysId && !l.value.startsWith(':') && !l.value.endsWith(':'));
+    } catch (e) {
+        console.warn(`[ServiceNow][relatedRecord] ${operation}: could not read the current related record for interaction ${interactionSysId} (status ${e?.response?.status ?? 'n/a'}) — the edit form will show it as unset.`);
+        return [];
+    }
+}
+
+// How the edit form shows what a call is already tied to: "Current incident: INC0010001". The form
+// renders an option's title when the value matches one in its list and the raw value otherwise, and
+// for this field it is usually otherwise — a record raised while logging the call was created after
+// findContact cached that contact's options, so the very record being displayed is missing from
+// them. Rather than fight that, the value IS the label.
+//
+// It deliberately does not look like a pick. `isRelatedRecordPick` accepts only `<known table>:` and
+// `__new__:` prefixes, so this string reads back as "nothing was changed" instead of being parsed as
+// a table named "Current incident".
+function formatCurrentRelatedRecord(source, number) {
+    return `Current ${(source?.label ?? 'record').toLowerCase()}: ${number}`;
+}
+
+// Whether a submitted value is a real selection rather than the pre-filled label above, a bare
+// record number, or anything else the form might hand back. Matching on the known table names is
+// what makes that distinction safe: only the connector's own option consts qualify.
+function isRelatedRecordPick(value) {
+    const raw = String(value ?? '').trim();
+    return raw.startsWith(RELATED_RECORD_NEW_PREFIX)
+        || RELATED_RECORD_SOURCES.some(s => raw.startsWith(`${s.table}:`));
+}
+
+// The human-readable number for a record the interaction is linked to (INC0010001), for showing in
+// the edit form instead of a sys_id. Returns '' on any failure — a missing number costs a friendly
+// label, and must never stop the form from opening.
+async function fetchRecordNumber({ hostname, authHeader, table, sysId, operation }) {
+    if (!table || !sysId) {
+        return '';
+    }
+    try {
+        const res = await serviceNowApiClient.get(
+            `https://${hostname}/api/now/table/${table}/${sysId}?sysparm_fields=number&sysparm_display_value=true`,
+            { headers: { 'Authorization': authHeader }, _operation: operation }
+        );
+        return (res.data?.result?.number ?? '').toString().trim();
+    } catch (e) {
+        console.log(`[ServiceNow][relatedRecord] ${operation}: could not read the number for ${table}/${sysId} (status ${e?.response?.status ?? 'n/a'}) — the edit form will show the raw id.`);
+        return '';
+    }
+}
+
+// Point the interaction at a different record. ServiceNow's join table is many-to-one, so the old
+// rows have to be removed explicitly or the interaction ends up listed under both tickets — and on a
+// single-select form, "I picked the wrong one" would become permanent.
+//
+// Deletes are best-effort and reported: losing the delete but landing the insert leaves a duplicate
+// cross-reference, which is untidy but not wrong, and must not cost the user their edit.
+async function replaceInteractionLink({ hostname, authHeader, interactionSysId, existingLinks, relatedRecord, operation }) {
+    for (const link of existingLinks) {
+        try {
+            await serviceNowApiClient.delete(
+                `https://${hostname}/api/now/table/interaction_related_record/${link.joinSysId}`,
+                { headers: { 'Authorization': authHeader }, _operation: operation }
+            );
+            console.log(`[ServiceNow][relatedRecord] ${operation}: removed old link ${link.value} (join row ${link.joinSysId})`);
+        } catch (e) {
+            console.warn(`[ServiceNow][relatedRecord] ${operation}: could not remove the old link to ${link.value} (status ${e?.response?.status ?? 'n/a'}) — the interaction may now appear under both records. Grant delete on interaction_related_record to keep this tidy.`);
+        }
+    }
+    if (relatedRecord) {
+        await linkInteractionToRecord({ hostname, authHeader, interactionSysId, relatedRecord, operation });
     }
 }
 
@@ -1523,6 +1724,39 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
                 operation: 'createCallLog'
             });
         }
+    } else if (additionalSubmission?.relatedRecord !== undefined) {
+        // The field WAS submitted and is empty: the agent looked at the list and chose none. That is
+        // an answer, not a gap, so the configured default must not override it — distinguished the
+        // same way the agent note distinguishes "cleared" from "not submitted".
+        console.log('[ServiceNow][relatedRecord] createCallLog: no related record selected — respecting that over the configured default.');
+    } else {
+        // The field was not submitted at all, which is what an auto-logged call looks like: nobody
+        // was there to pick. Fall back to the admin's configured category+subcategory rule, which
+        // does nothing unless both are set.
+        const auto = await findOrCreateDefaultIncident({
+            user,
+            hostname,
+            authHeader,
+            contactId: contactInfo.id,
+            subject: subject || `${callLog.direction} call from ${contactInfo.name || 'caller'}`,
+            note,
+            additionalSubmission,
+            agentSysId: caller_id.data?.result?.id,
+            operation: 'createCallLog'
+        });
+        if (auto) {
+            relatedRecordNote = auto.note;
+            relatedRecordFailed = auto.failed;
+            if (auto.relatedRecordValue) {
+                await linkInteractionToRecord({
+                    hostname,
+                    authHeader,
+                    interactionSysId: addLogRes?.data?.result?.sys_id,
+                    relatedRecord: auto.relatedRecordValue,
+                    operation: 'createCallLog'
+                });
+            }
+        }
     }
 
     if (callLog?.recording?.downloadUrl) {
@@ -1566,26 +1800,142 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
 // state change too. Type is therefore set once at create time only.
 async function upsertCallDisposition({ user, existingCallLog, authHeader, dispositions }) {
     const existingLogId = existingCallLog.thirdPartyLogId;
-    if (!existingLogId || !dispositions?.state) {
+    // Was `!existingLogId || !dispositions?.state`, which returned before doing anything whenever
+    // State happened to be blank — and the Related record travels on this same request, so changing
+    // only that was silently discarded.
+    if (!existingLogId || !dispositions) {
         return { logId: existingLogId };
     }
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const hostname = userInfo.hostname;
 
-    const returnedState = await findStateValueById(hostname, authHeader, dispositions.state);
-    const patchBody = { state: returnedState ?? await findStateValueByName(hostname, authHeader, dispositions.state) };
-    applyClosedDatesIfNeeded(patchBody, patchBody.state, null);
+    console.log('[ServiceNow][relatedRecord] upsertCallDisposition: dispositions =', stringifyForLog(dispositions));
 
-    await serviceNowApiClient.patch(
-        `https://${hostname}/api/now/table/interaction/${existingLogId}`,
-        patchBody,
-        { headers: { Authorization: authHeader }, _operation: 'upsertCallDisposition' }
-    );
+    if (dispositions.state) {
+        const returnedState = await findStateValueById(hostname, authHeader, dispositions.state);
+        const patchBody = { state: returnedState ?? await findStateValueByName(hostname, authHeader, dispositions.state) };
+        applyClosedDatesIfNeeded(patchBody, patchBody.state, null);
+
+        await serviceNowApiClient.patch(
+            `https://${hostname}/api/now/table/interaction/${existingLogId}`,
+            patchBody,
+            { headers: { Authorization: authHeader }, _operation: 'upsertCallDisposition' }
+        );
+    }
+
+    // The Related record edit lives here, not in updateCallLog: the edit form posts its additional
+    // fields to /callDisposition, so updateCallLog never sees them.
+    //
+    //   undefined -> the field was not submitted. Leave the existing link alone.
+    //   ''        -> the agent cleared it. Remove the link.
+    //   a pick    -> point the interaction at that record instead.
+    // Anything else is the "Current incident: INC0010001" label getCallLog put there, which means
+    // the agent did not touch the field — see isRelatedRecordPick.
+    let relatedRecordNote = '';
+    let relatedRecordFailed = false;
+    if (dispositions.relatedRecord !== undefined) {
+        const submitted = String(dispositions.relatedRecord ?? '').trim();
+        const existingLinks = await fetchInteractionLinks({ hostname, authHeader, interactionSysId: existingLogId, operation: 'upsertCallDisposition' });
+        const currentValue = existingLinks[0]?.value ?? '';
+
+        // Rebuild the exact label getCallLog pre-filled the field with. "Unchanged" has to mean
+        // precisely that string and nothing else — the looser test this replaces ("anything that is
+        // not a pick means untouched") also swallowed the value the form submits for "none", so
+        // clearing the field silently did nothing.
+        const currentSep = currentValue.indexOf(':');
+        const currentTable = currentSep > 0 ? currentValue.slice(0, currentSep) : '';
+        const currentNumber = currentTable
+            ? await fetchRecordNumber({ hostname, authHeader, table: currentTable, sysId: currentValue.slice(currentSep + 1), operation: 'upsertCallDisposition' })
+            : '';
+        const currentDisplay = currentNumber
+            ? formatCurrentRelatedRecord(RELATED_RECORD_SOURCES.find(s => s.table === currentTable), currentNumber)
+            : '';
+
+        if (submitted === currentValue || (currentDisplay && submitted === currentDisplay)) {
+            console.log(`[ServiceNow][relatedRecord] upsertCallDisposition: related record unchanged (${currentDisplay || currentValue || 'none'}) — nothing to do.`);
+        } else if (!isRelatedRecordPick(submitted) && currentValue && !currentDisplay) {
+            // The record's number could not be read, so the pre-filled label cannot be reproduced and
+            // a non-record value here is ambiguous: it may be that label coming back untouched, or a
+            // genuine "none". Keep the link — a wrongly kept association is recoverable, a wrongly
+            // deleted one is not.
+            console.warn(`[ServiceNow][relatedRecord] upsertCallDisposition: cannot tell whether "${submitted}" means "unchanged" or "cleared" (the linked record gave no number) — leaving the link to ${currentValue} in place.`);
+        } else if (submitted.startsWith(RELATED_RECORD_NEW_PREFIX)) {
+            const table = submitted.slice(RELATED_RECORD_NEW_PREFIX.length);
+            const source = RELATED_RECORD_SOURCES.find(s => s.table === table);
+            if (!creatableTablesFor(user).has(table)) {
+                console.warn(`[ServiceNow][relatedRecord] upsertCallDisposition: ignoring "+ create ${table}" — creating that record type is disabled for this user.`);
+                relatedRecordNote = ' Creating records is turned off, so none was raised.';
+                relatedRecordFailed = true;
+            } else {
+                // Resolve the agent and the call's subject only on this branch — a plain state or
+                // link change must not pay for the extra round trips.
+                let agentSysId = null;
+                let subject = 'Call';
+                try {
+                    const dispositionCompany = await findCompany({ rcAccountId: user.rcAccountId, hostname });
+                    if (dispositionCompany?.userDetailsPath) {
+                        const agentRes = await serviceNowApiClient.get(
+                            `https://${hostname}/api/${dispositionCompany.userDetailsPath}`,
+                            { headers: { 'Authorization': authHeader }, _operation: 'upsertCallDisposition' }
+                        );
+                        agentSysId = agentRes.data?.result?.id ?? null;
+                    }
+                    const interactionRes = await serviceNowApiClient.get(
+                        `https://${hostname}/api/now/table/interaction/${existingLogId}?sysparm_fields=short_description`,
+                        { headers: { 'Authorization': authHeader }, _operation: 'upsertCallDisposition' }
+                    );
+                    subject = (interactionRes.data?.result?.short_description || '').toString().trim() || subject;
+                } catch (e) {
+                    console.warn(`[ServiceNow][relatedRecord] upsertCallDisposition: could not resolve the agent or call subject (status ${e?.response?.status ?? 'n/a'}) — the new record will be created unassigned.`);
+                }
+
+                const created = await createRelatedRecord({
+                    hostname,
+                    authHeader,
+                    table,
+                    contactId: existingCallLog?.contactId,
+                    subject,
+                    note: null,
+                    extraFields: await buildCreateFields({
+                        user,
+                        hostname,
+                        authHeader,
+                        source,
+                        additionalSubmission: dispositions,
+                        contactId: existingCallLog?.contactId,
+                        agentSysId,
+                        operation: 'upsertCallDisposition'
+                    }),
+                    operation: 'upsertCallDisposition'
+                });
+                if (created) {
+                    await replaceInteractionLink({ hostname, authHeader, interactionSysId: existingLogId, existingLinks, relatedRecord: `${created.table}:${created.sysId}`, operation: 'upsertCallDisposition' });
+                    relatedRecordNote = ` ${created.number} created.`;
+                } else {
+                    relatedRecordNote = ` Could not create the ${(source?.label ?? 'record').toLowerCase()}.`;
+                    relatedRecordFailed = true;
+                }
+            }
+        } else {
+            // Either a real pick (replace) or anything that is not a record at all — '', a "none"
+            // placeholder, whatever the form uses for the empty selection — which means clear.
+            const nextValue = isRelatedRecordPick(submitted) ? submitted : null;
+            if (!nextValue) {
+                console.log(`[ServiceNow][relatedRecord] upsertCallDisposition: "${submitted || '(empty)'}" is not a record — clearing the link.`);
+            }
+            await replaceInteractionLink({ hostname, authHeader, interactionSysId: existingLogId, existingLinks, relatedRecord: nextValue, operation: 'upsertCallDisposition' });
+            relatedRecordNote = nextValue ? ' Related record updated.' : ' Related record cleared.';
+        }
+    }
 
     return {
         logId: existingLogId,
-        returnMessage: { message: 'Disposition updated.', messageType: 'success', ttl: 2000 }
+        returnMessage: {
+            message: `Disposition updated.${relatedRecordNote}`,
+            messageType: relatedRecordFailed ? 'warning' : 'success',
+            ttl: relatedRecordFailed ? 6000 : 2000
+        }
     };
 }
 
@@ -1845,11 +2195,41 @@ async function getCallLog({ user, callLogId, authHeader }) {
     //-------------------------------------------------------------------------------------
     //---CHECK.5: In extension, for a logged call, click edit to see if info is fetched ---
     //-------------------------------------------------------------------------------------
+    // What the call is currently tied to, so the Related record dropdown opens on that record
+    // instead of blank. `dispositions` is keyed by the manifest field const — the same mechanism
+    // pipedrive uses for deals/leads and clio for matters.
+    //
+    // Sent as "Current incident: INC0010001" rather than the `table:sys_id` an option carries — see
+    // formatCurrentRelatedRecord for why the value has to double as its own label.
+    const currentLinks = await fetchInteractionLinks({ hostname, authHeader, interactionSysId: callLogId, operation: 'getCallLog' });
+    const currentLink = currentLinks[0] ?? null;
+    const currentSeparator = currentLink ? currentLink.value.indexOf(':') : -1;
+    const currentTable = currentLink ? currentLink.value.slice(0, currentSeparator) : '';
+    const currentNumber = currentLink
+        ? await fetchRecordNumber({
+            hostname,
+            authHeader,
+            table: currentTable,
+            sysId: currentLink.value.slice(currentSeparator + 1),
+            operation: 'getCallLog'
+        })
+        : '';
+    const currentDisplay = currentNumber
+        ? formatCurrentRelatedRecord(RELATED_RECORD_SOURCES.find(s => s.table === currentTable), currentNumber)
+        : '';
+    console.log(`[ServiceNow][relatedRecord] getCallLog: interaction ${callLogId} is currently linked to ${currentLink ? `${currentLink.value}${currentDisplay ? ` -> shown as "${currentDisplay}"` : ' (no number; showing the raw id)'}` : '(nothing)'}`);
+
     apiLog.logSuccess('ServiceNow', 'getCallLog', { logId: callLogId, apiEndpoint: `https://${hostname}/api/now/table/interaction/${callLogId}` });
     return {
         callLogInfo: {
             subject: getLogRes.data.result.short_description,
             note: agentNote,
+            dispositions: {
+                // Only when there is one: an absent key leaves the field alone, whereas an empty
+                // string would read as "the agent cleared it" on the way back in. Falls back to the
+                // raw value if the record would not give up a number.
+                ...(currentLink ? { relatedRecord: currentDisplay || currentLink.value } : {})
+            }
         },
         returnMessage: {
             message: 'Call log fetched.',
@@ -1930,6 +2310,11 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     );
 
     await writeWorkNote({ hostname, authHeader, recordId: existingLogId, journalSysId, body: logBody, operation: 'updateCallLog' });
+
+    // NOTE: the Related record is NOT handled here. The edit form sends its additional fields on a
+    // separate /callDisposition request, so they arrive at upsertCallDisposition as `dispositions`
+    // and never reach this function — `additionalSubmission` is undefined on an edit. That is also
+    // why getCallLog returns the current value under `dispositions`. See upsertCallDisposition.
 
     if (recordingDownloadLink) {
         console.log("Downloading Recorded File...");
