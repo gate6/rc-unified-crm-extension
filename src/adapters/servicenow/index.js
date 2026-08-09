@@ -27,21 +27,34 @@ const s3Helper = require('../servicenow-core/s3');
 const AWS = require('aws-sdk');
 const serviceNowApiClient = axios.create();
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function stringifyForLog(value, maxLength = 1200) {
     try {
         const str = typeof value === 'string' ? value : JSON.stringify(value);
         return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
-    } catch (error) {
+    } catch (e) {
         return String(value);
     }
 }
 
+// ─── Axios Interceptors ───────────────────────────────────────────────────────
+
+// Request interceptor — pass-through only (no log; function-level logs handle tracing)
+serviceNowApiClient.interceptors.request.use(
+    (config) => config,
+    (error) => Promise.reject(error)
+);
+
+// Response interceptor — only log on error
 serviceNowApiClient.interceptors.response.use(
     (response) => response,
     (error) => {
-        console.error('[ServiceNow][interaction][apiError]', {
-            method: error?.config?.method || '',
-            url: error?.config?.url || '',
+        const config = error?.config || {};
+        console.error('[ServiceNow][apiError]', {
+            operation: config._snOperation || 'unknown',
+            method: (config.method || 'GET').toUpperCase(),
+            url: config.url,
             status: error?.response?.status || null,
             statusText: error?.response?.statusText || '',
             responseBody: stringifyForLog(error?.response?.data),
@@ -170,6 +183,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
     // ---TODO.1: Implement API call to retrieve user info---
     // ------------------------------------------------------
     try {
+        console.log('[ServiceNow][getUserInfo] Fetching user info from ServiceNow', { hostname, timestamp: new Date().toISOString() });
 
         await ensureSchemaOnce(sequelize, models);
         const getCompanyDetails = await models.companies.findOne({
@@ -179,10 +193,12 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
             raw:true
         })
 
-        const userInfoResponse = await serviceNowApiClient.get(`${getCompanyDetails.instanceUrl}/api/${getCompanyDetails.userDetailsPath}`, {
+        const userInfoApiUrl = `${getCompanyDetails.instanceUrl}/api/${getCompanyDetails.userDetailsPath}`;
+        const userInfoResponse = await serviceNowApiClient.get(userInfoApiUrl, {
             headers: {
                 'Authorization': authHeader
-            }
+            },
+            _snOperation: 'getUserInfo'
         });
 
         let id = userInfoResponse.data.result.id;
@@ -227,6 +243,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                 //if the max numbers of users is greater than the active customers we allow to insert new customer
 
                 if (userData.name == 'admin' && checkActiveUsers.customers.some(customer => customer.email === email)) {
+                    console.log('[ServiceNow][getUserInfo] Admin user authenticated successfully', { userId: id, name, apiEndpoint: userInfoApiUrl, hostname, timestamp: new Date().toISOString() });
                     return {
                         successful: true,
                         platformUserInfo: {
@@ -247,6 +264,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                 if ((checkActiveUsers.customers.length < checkActiveUsers.maxAllowedUsers) && checkActiveUsers.status == 1) {
 
                     if (checkActiveUsers.customers.some(customer => customer.sysId === id)) {
+                        console.log('[ServiceNow][getUserInfo] Existing user authenticated successfully', { userId: id, name, apiEndpoint: userInfoApiUrl, hostname, timestamp: new Date().toISOString() });
                         return {
                             successful: true,
                             platformUserInfo: {
@@ -267,6 +285,7 @@ async function getUserInfo({ authHeader, additionalInfo, hostname}) {
                         const accessToken = authHeader.split(' ')[1];
                         //Save the auth token and new user information in the MYSQL customers table
                         await saveUserInfo(userData, accessToken, checkActiveUsers.dataValues.hostname, checkActiveUsers.dataValues.id);
+                        console.log('[ServiceNow][getUserInfo] New user registered and authenticated successfully', { userId: id, name, apiEndpoint: userInfoApiUrl, hostname, timestamp: new Date().toISOString() });
                         return {
                             successful: true,
                             platformUserInfo: {
@@ -434,7 +453,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     // ---TODO.3: Implement contact matching---
     // ----------------------------------------
 
-    console.log("authHeader", authHeader)
+    console.log('[ServiceNow][findContact] Contact lookup started', { phoneNumber, isExtension, timestamp: new Date().toISOString() });
     let numberToQueryArray = [];
 
     const isRealExtension = isExtension === true || isExtension === 'true';
@@ -494,7 +513,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     try {
         const stateSelection = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=state&sysparm_fields=sys_id,label,value`,
-            { headers: { 'Authorization': authHeader } }
+            { headers: { 'Authorization': authHeader }, _snOperation: 'findContact' }
         );
         states = stateSelection.data.result.length > 0 ? stateSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : [];
     } catch (err) {
@@ -503,7 +522,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     try {
         const typeSelection = await serviceNowApiClient.get(
             `https://${hostname}/api/now/table/sys_choice?sysparm_query=name=interaction^element=type&sysparm_fields=sys_id,label,value`,
-            { headers: { 'Authorization': authHeader } }
+            { headers: { 'Authorization': authHeader }, _snOperation: 'findContact' }
         );
         interactionType = typeSelection.data.result.length > 0 ? typeSelection.data.result.map(m => { return { const: m.sys_id, title: m.label } }) : [];
     } catch (err) {
@@ -542,7 +561,8 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         const personInfo = await serviceNowApiClient.get(
             `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${numberToQuery}^ORmobile_phoneLIKE${numberToQuery}`,
             {
-                headers: { 'Authorization':  authHeader }
+                headers: { 'Authorization':  authHeader },
+                _snOperation: 'findContact'
             });
 
         if (personInfo.data.result.length > 0) {
@@ -561,7 +581,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         if (fallbackQuery) {
             const fallbackRes = await serviceNowApiClient.get(
                 `https://${hostname}/api/now/${contactTable}?sysparm_query=${encodeURIComponent(fallbackQuery)}&sysparm_limit=200`,
-                { headers: { 'Authorization': authHeader } }
+                { headers: { 'Authorization': authHeader }, _snOperation: 'findContact' }
             );
 
             for (const result of (fallbackRes.data?.result || [])) {
@@ -576,7 +596,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
         if (matchedContactInfo.length === 0) {
             const broadRes = await serviceNowApiClient.get(
                 `https://${hostname}/api/now/${contactTable}?sysparm_query=${encodeURIComponent('phoneISNOTEMPTY^ORmobile_phoneISNOTEMPTY')}&sysparm_fields=sys_id,user_name,name,phone,mobile_phone&sysparm_limit=1000`,
-                { headers: { 'Authorization': authHeader } }
+                { headers: { 'Authorization': authHeader }, _snOperation: 'findContact' }
             );
 
             for (const result of (broadRes.data?.result || [])) {
@@ -607,6 +627,7 @@ async function findContact({ user, authHeader, phoneNumber, overridingFormat, is
     //-----------------------------------------------------
     //---CHECK.3: In console, if contact info is printed---
     //-----------------------------------------------------
+    console.log('[ServiceNow][findContact] Contact lookup completed', { phoneNumber, apiEndpoint: `https://${hostname}/api/now/${contactTable}?sysparm_query=phoneLIKE${phoneNumber}^ORmobile_phoneLIKE${phoneNumber}`, matchedCount: matchedContactInfo.length - 1, timestamp: new Date().toISOString() });
     return {
         successful: true,
         matchedContactInfo
@@ -617,6 +638,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     // ------------------------------------
     // ---TODO.4: Implement call logging---
     // ------------------------------------
+    console.log('[ServiceNow][createCallLog] Call log creation started', { contactName: contactInfo?.name, contactId: contactInfo?.id, direction: callLog?.direction, duration: callLog?.duration, timestamp: new Date().toISOString() });
 
     let body = '';
     if (user.userSettings?.addCallLogNote?.value ?? true) { body = upsertCallAgentNote({ body, note }); }
@@ -688,7 +710,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     const caller_id = await serviceNowApiClient.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
-        }
+        },
+        _snOperation: 'createCallLog'
     });
 
     // const workNotes = `\nContact Number: ${contactInfo.phoneNumber}\nCall Result: ${callLog.result}\nNote: ${note}${callLog.recording ? `\n[Call recording link] ${callLog.recording.link}` : ''}\n\n--- Created via RingCentral CRM Extension`;
@@ -725,7 +748,8 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
         `https://${hostname}/api/now/table/interaction`,
         postBody,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader },
+            _snOperation: 'createCallLog'
         }
     );
     
@@ -740,6 +764,7 @@ async function createCallLog({ user, contactInfo, authHeader, callLog, note, add
     //----------------------------------------------------------------------------
     //---CHECK.4: Open db.sqlite and CRM website to check if call log is saved ---
     //----------------------------------------------------------------------------
+    console.log('[ServiceNow][createCallLog] Call log created successfully in ServiceNow', { logId: addLogRes.data.result.sys_id, apiEndpoint: `https://${hostname}/api/now/table/interaction`, contactName: contactInfo?.name, direction: callLog?.direction, timestamp: new Date().toISOString() });
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
@@ -840,6 +865,7 @@ async function getCallLog({ user, callLogId, authHeader }) {
     // -----------------------------------------
     // ---TODO.5: Implement call log fetching---
     // -----------------------------------------
+    console.log('[ServiceNow][getCallLog] Fetching call log from ServiceNow', { callLogId, timestamp: new Date().toISOString() });
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -848,12 +874,14 @@ async function getCallLog({ user, callLogId, authHeader }) {
     const getLogRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/interaction/${callLogId}`,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader },
+            _snOperation: 'getCallLog'
         });
 
     //-------------------------------------------------------------------------------------
     //---CHECK.5: In extension, for a logged call, click edit to see if info is fetched ---
     //-------------------------------------------------------------------------------------
+    console.log('[ServiceNow][getCallLog] Call log fetched successfully', { callLogId, apiEndpoint: `https://${hostname}/api/now/table/interaction/${callLogId}`, subject: getLogRes.data.result.short_description, timestamp: new Date().toISOString() });
     return {
         callLogInfo: {
             subject: getLogRes.data.result.short_description,
@@ -871,6 +899,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     // ---------------------------------------
     // ---TODO.6: Implement call log update---
     // ---------------------------------------
+    console.log('[ServiceNow][updateCallLog] Call log update started', { logId: existingCallLog?.thirdPartyLogId, subject, timestamp: new Date().toISOString() });
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -880,7 +909,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     const getLogRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader },
+            _snOperation: 'updateCallLog'
         });
     const originalNote = getLogRes?.data?.result?.work_notes ?? '';
     let patchBody = {};
@@ -905,7 +935,8 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader },
+            _snOperation: 'updateCallLog'
         }
     );
 
@@ -927,6 +958,7 @@ async function updateCallLog({ user, existingCallLog, authHeader, recordingLink,
     //-----------------------------------------------------------------------------------------
     //---CHECK.6: In extension, for a logged call, click edit to see if info can be updated ---
     //-----------------------------------------------------------------------------------------
+    console.log('[ServiceNow][updateCallLog] Call log updated successfully in ServiceNow', { logId: existingCallLog?.thirdPartyLogId, apiEndpoint: `https://${hostname}/api/now/table/interaction/${existingLogId}`, updatedSysId: patchLog.data.result.sys_id, timestamp: new Date().toISOString() });
     return {
         updatedNote: note,
         returnMessage: {
@@ -941,6 +973,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     // ---------------------------------------
     // ---TODO.7: Implement message logging---
     // ---------------------------------------
+    console.log('[ServiceNow][createMessageLog] Message log creation started', { contactName: contactInfo?.name, direction: message?.direction, hasRecording: !!recordingLink, hasFax: !!faxDocLink, timestamp: new Date().toISOString() });
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -976,7 +1009,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     const caller_id = await serviceNowApiClient.get(`https://${hostname}/api/${userDetailsPath}`, {
         headers: {
             'Authorization': authHeader
-        }
+        },
+        _snOperation: 'createMessageLog'
     });
 
     // detect message type (SMS / Voicemail / Fax)
@@ -1012,7 +1046,8 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
         `https://${hostname}/api/now/table/interaction`,
         postBody,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader },
+            _snOperation: 'createMessageLog'
         });
 
     if (recordingLink || faxDocLink) {
@@ -1044,6 +1079,7 @@ async function createMessageLog({ user, contactInfo, authHeader, message, additi
     //-------------------------------------------------------------------------------------------------------------
     //---CHECK.7: For single message logging, open db.sqlite and CRM website to check if message logs are saved ---
     //-------------------------------------------------------------------------------------------------------------
+    console.log('[ServiceNow][createMessageLog] Message log created successfully in ServiceNow', { logId: addLogRes.data.result.sys_id, apiEndpoint: `https://${hostname}/api/now/table/interaction`, contactName: contactInfo?.name, direction: message?.direction, timestamp: new Date().toISOString() });
     return {
         logId: addLogRes.data.result.sys_id,
         returnMessage: {
@@ -1059,6 +1095,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     // ---------------------------------------
     // ---TODO.8: Implement message logging---
     // ---------------------------------------
+    console.log('[ServiceNow][updateMessageLog] Message log update started', { logId: existingMessageLog?.thirdPartyLogId, direction: message?.direction, timestamp: new Date().toISOString() });
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId; 
@@ -1079,7 +1116,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
     const getLogRes = await serviceNowApiClient.get(
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
-        { headers: { 'Authorization': authHeader } }
+        { headers: { 'Authorization': authHeader }, _snOperation: 'updateMessageLog' }
     );
 
     let originalNote = getLogRes?.data?.result?.work_notes ?? '';
@@ -1116,7 +1153,8 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
         `https://${hostname}/api/now/table/interaction/${existingLogId}`,
         patchBody,
         {
-            headers: { 'Authorization': authHeader }
+            headers: { 'Authorization': authHeader },
+            _snOperation: 'updateMessageLog'
         });
 
     if (recordingLink || faxDocLink) {
@@ -1148,6 +1186,7 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     //---------------------------------------------------------------------------------------------------------------------------------------------
     //---CHECK.8: For multiple messages or additional message during the day, open db.sqlite and CRM website to check if message logs are saved ---
     //---------------------------------------------------------------------------------------------------------------------------------------------
+    console.log('[ServiceNow][updateMessageLog] Message log updated successfully in ServiceNow', { logId: existingLogId, apiEndpoint: `https://${hostname}/api/now/table/interaction/${existingLogId}`, direction: message?.direction, timestamp: new Date().toISOString() });
     return {
         logId: existingLogId,
         returnMessage: {
@@ -1162,6 +1201,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     // ----------------------------------------
     // ---TODO.9: Implement contact creation---
     // ----------------------------------------
+    console.log('[ServiceNow][createContact] New contact creation started', { phoneNumber, newContactName, newContactType, timestamp: new Date().toISOString() });
 
     const userInfo = await getHostname(user.dataValues.hostname);
     const instanceId = userInfo.instanceId;
@@ -1191,7 +1231,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
         } else {
             const account = await serviceNowApiClient.get(
             `https://${hostname}/api/now/account?sysparm_limit=1`,
-            { headers: { Authorization: authHeader } }
+            { headers: { Authorization: authHeader }, _snOperation: 'createContact' }
             );
             const fallbackAccountId = account?.data?.result?.[0]?.sys_id;
             if (fallbackAccountId) {
@@ -1203,7 +1243,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             `https://${hostname}/api/now/contact`,
             postBody,
             {
-                headers: { 'Authorization': authHeader }
+                headers: { 'Authorization': authHeader },
+                _snOperation: 'createContact'
             }
         );
     } else {
@@ -1212,7 +1253,8 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
             `https://${hostname}/api/now/table/sys_user`,
             postBody,
             {
-                headers: { 'Authorization': authHeader }
+                headers: { 'Authorization': authHeader },
+                _snOperation: 'createContact'
             }
         );
     }
@@ -1220,6 +1262,7 @@ async function createContact({ user, authHeader, phoneNumber, newContactName, ne
     //--------------------------------------------------------------------------------
     //---CHECK.9: In extension, try create a new contact against an unknown number ---
     //--------------------------------------------------------------------------------
+    console.log('[ServiceNow][createContact] New contact created successfully in ServiceNow', { phoneNumber, apiEndpoint: companyData?.contactTable === 'contact' ? `https://${hostname}/api/now/contact` : `https://${hostname}/api/now/table/sys_user`, newContactName, timestamp: new Date().toISOString() });
     return {
         contactInfo: {
             id: contactInfoRes.id,
@@ -1292,6 +1335,7 @@ async function uploadToServiceNow(s3Url, hostname, accessToken, sys_id, fileName
                 "Authorization": accessToken,
                 ...formData.getHeaders(),
             },
+            _snOperation: 'uploadAttachment'
         });
 
         console.log("File uploaded to ServiceNow:", response.data);
