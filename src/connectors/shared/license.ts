@@ -131,8 +131,96 @@ function clearLicenseCache(userId) {
   if (userId != null) licenseCache.delete(userId);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Plan tier (premium / basic) — opt-in. Nothing above reads it, so getLicenseStatus and
+// validateLicenseOrFail behave exactly as before for every connector. A connector that has
+// premium-only features calls isPremium() for them (today: Monday project boards only).
+// ---------------------------------------------------------------------------------------------
+const TIER_BASIC = 'basic';
+const TIER_PREMIUM = 'premium';
+const tierCache = new Map(); // userId -> { tier, expiry }
+// Kept short so an admin's basic <-> premium change reaches the server within seconds; a read is
+// one small query, and the cache still spares the several checks a single log operation makes.
+const TIER_CACHE_TTL_MS = 10 * 1000;
+// A tier that could not be read on a passing DB hiccup is kept only briefly, so a premium company
+// is not pinned to basic for a whole cache period.
+const TIER_ERROR_CACHE_TTL_MS = 5 * 1000;
+// A database without the column is re-checked this often, so running
+// the crmconnect-admin migration (npm run migrate there) takes effect without a server restart.
+const MISSING_COLUMN_RECHECK_MS = 5 * 60 * 1000;
+let licenseTierColumnMissingUntil = 0;
+
+// Same company resolution as computeLicenseStatus: rcAccountId + hostname, then rcAccountId,
+// then hostname.
+async function findCompanyForUser({ models, userId }) {
+  const user = await UserModel.findByPk(userId);
+  if (!user) return null;
+  let company = null;
+  if (user.rcAccountId && user.hostname) {
+    company = await models.companies.findOne({ where: { rcAccountId: user.rcAccountId, hostname: user.hostname }, raw: true });
+  }
+  if (!company && user.rcAccountId) {
+    company = await models.companies.findOne({ where: { rcAccountId: user.rcAccountId }, raw: true });
+  }
+  if (!company && user.hostname) {
+    company = await models.companies.findOne({ where: { hostname: user.hostname }, raw: true });
+  }
+  return company;
+}
+
+// `companies.licenseTier` is read with its own query rather than through the model, so a database
+// that has not had the column added yet reads every company as basic instead of failing.
+async function readLicenseTier({ models, companyId }) {
+  if (!models?.companies?.sequelize || Date.now() < licenseTierColumnMissingUntil) {
+    return { tier: TIER_BASIC, transientError: false };
+  }
+  try {
+    const [rows] = await models.companies.sequelize.query(
+      'SELECT "licenseTier" FROM companies WHERE id = :companyId',
+      { replacements: { companyId } }
+    );
+    const tier = String(rows?.[0]?.licenseTier ?? '').trim().toLowerCase() === TIER_PREMIUM ? TIER_PREMIUM : TIER_BASIC;
+    return { tier, transientError: false };
+  } catch (error) {
+    // 42703 = undefined_column (Postgres): the migration has not run on this database.
+    if (error?.parent?.code === '42703' || error?.original?.code === '42703') {
+      licenseTierColumnMissingUntil = Date.now() + MISSING_COLUMN_RECHECK_MS;
+      console.warn('[license] companies.licenseTier column not found — treating every company as basic until it is added (run npm run migrate in crmconnect-admin).');
+      return { tier: TIER_BASIC, transientError: false };
+    }
+    console.error('[license] could not read licenseTier — treating as basic for now:', error.message);
+    return { tier: TIER_BASIC, transientError: true };
+  }
+}
+
+// Whether the user's company is on the premium plan. Requires a valid license first (an inactive
+// or over-seat company is never premium), then reads the company's tier; cached per user.
+async function isPremium({ models, user }) {
+  const userId = user?.dataValues?.id ?? user?.id;
+  if (userId == null || !models) return false;
+  const licenseStatus = await getLicenseStatus({ models, userId });
+  if (!licenseStatus.isLicenseValid) return false;
+
+  const now = Date.now();
+  const cached = tierCache.get(userId);
+  if (cached && cached.expiry > now) return cached.tier === TIER_PREMIUM;
+
+  try {
+    const company = await findCompanyForUser({ models, userId });
+    const { tier, transientError } = company
+      ? await readLicenseTier({ models, companyId: company.id })
+      : { tier: TIER_BASIC, transientError: false };
+    tierCache.set(userId, { tier, expiry: now + (transientError ? TIER_ERROR_CACHE_TTL_MS : TIER_CACHE_TTL_MS) });
+    return tier === TIER_PREMIUM;
+  } catch (error) {
+    console.error('[license] isPremium error — treating as basic:', error.message);
+    return false;
+  }
+}
+
 exports.getLicenseStatus = getLicenseStatus;
 exports.validateLicenseOrFail = validateLicenseOrFail;
 exports.clearLicenseCache = clearLicenseCache;
+exports.isPremium = isPremium;
 
 export {};
