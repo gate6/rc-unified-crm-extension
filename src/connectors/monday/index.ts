@@ -1,5 +1,4 @@
 ﻿// @ts-nocheck
-const axios = require('axios')
 const moment = require('moment');
 const { parsePhoneNumber } = require('awesome-phonenumber')
 const { initModels } = require('../servicenow-models/init-models');
@@ -14,30 +13,28 @@ const AWS = require('aws-sdk');
 
 const licenseHelper = require('../shared/license');
 const apiLog = require('../shared/apiLogger');
+// GraphQL transport, error contract and column cache live in monday-core/client so the
+// work-management module can share them without requiring this connector back.
+const {
+  mondayApiClient,
+  getMondayApiUrl,
+  stringifyForLog,
+  isNumericMondayId,
+  mondayRequest,
+  assertNoGraphqlErrors,
+  columnIdCache,
+  getColumnIdByName
+} = require('../monday-core/client');
+const projects = require('../monday-core/projects');
 
-const MONDAY_API_URL = process.env.MONDAY_API_URL;
-const columnIdCache = new Map();
-// Cache of discovered CRM boards (those with a Phone column) per connected user.
-const boardCache = new Map(); // userId -> { boards: [{ id, name, phoneColumnId }], expiry }
+// Cache of every active board a connected user can see, across all workspaces. Contact matching
+// filters it to the boards with a Phone column; the Project dropdown filters it by workspace.
+const boardCache = new Map(); // userId -> { boards: [{ id, name, type, workspaceId, workspaceName, phoneColumnId }], expiry }
 const BOARD_CACHE_TTL_MS = 5 * 60 * 1000;
-
-// A per-request timeout so a slow/hanging Monday call fails fast instead of blocking
-// findContact (the contact-existence check) until the extension itself times out and
-// aborts the whole "create new contact + log" flow. On timeout the request rejects, the
-// caller's try/catch treats it as "no match", and the create prompt still appears.
-const MONDAY_REQUEST_TIMEOUT_MS = 12000;
-const mondayApiClient = axios.create({ timeout: MONDAY_REQUEST_TIMEOUT_MS });
-
-function stringifyForLog(value, maxLength = 1200) {
-  try {
-    const str = typeof value === 'string' ? value : JSON.stringify(value);
-    return str.length > maxLength ? `${str.slice(0, maxLength)}...` : str;
-  } catch (error) {
-    return String(value);
-  }
-}
-
-apiLog.installErrorInterceptor(mondayApiClient, 'Monday');
+// Monday counts every board AND its columns against the query complexity budget, so boards are
+// paged in modest batches; the cap keeps a very large account from stalling contact matching.
+const BOARD_PAGE_SIZE = 50;
+const BOARD_MAX_PAGES = 10;
 
 // AI notes arrive with markdown bold markers (**Recap**, **Tasks**) which Monday updates
 // don't render — they show as literal asterisks. Strip them for clean plain text.
@@ -106,105 +103,6 @@ async function validateLicenseOrFail(user, operation = 'unknown') { // eslint-di
   return licenseHelper.validateLicenseOrFail({ models, user });
 }
 
-let mondayApiCallCounter = 0;
-
-// Extract the GraphQL operation kind + first root field for concise logging.
-function describeGraphqlOperation(query) {
-  const text = String(query || '');
-  const kind = /\bmutation\b/.test(text) ? 'mutation' : 'query';
-  const fieldMatch = text.match(/\{\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
-  return `${kind} ${fieldMatch ? fieldMatch[1] : 'unknown'}`;
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// Monday's "monolith" backend intermittently returns INTERNAL_SERVER_ERROR (status_code
-// 500) as a GraphQL error on otherwise-valid queries (commonly items_page_by_column_values).
-// These are transient, so a short retry usually succeeds instead of degrading to "no match".
-function hasTransientMondayError(errors) {
-  return Array.isArray(errors) && errors.some((e) => {
-    const code = e?.extensions?.code;
-    const status = e?.extensions?.status_code;
-    return code === 'INTERNAL_SERVER_ERROR' || (typeof status === 'number' && status >= 500);
-  });
-}
-
-// `operation` names the connector function making the call (e.g. 'createCallLog') so every
-// API log line is attributable — same idea as ServiceTitan's `_operation` axios tag.
-//
-// Error contract: transient failures (HTTP 5xx / timeout / network, or Monday's
-// INTERNAL_SERVER_ERROR GraphQL errors) are retried up to `maxAttempts`. Once retries are
-// exhausted, HTTP/transport errors are re-thrown to the caller; GraphQL errors are returned
-// in the body (Monday sends them with HTTP 200) — callers that require data must check
-// `res.errors` or use assertNoGraphqlErrors.
-async function mondayRequest(accessToken, query, variables = {}, { maxAttempts = 2, operation = 'unknown' } = {}) {
-  if (!MONDAY_API_URL) {
-    throw new Error('MONDAY_API_URL is not configured on the server');
-  }
-  const reqId = ++mondayApiCallCounter;
-  const op = describeGraphqlOperation(query);
-  let lastBody = null;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const startedAt = Date.now();
-    console.log(attempt === 1 ? '[Monday][api] →' : '[Monday][api] ↻ retry', { reqId, operation, op, attempt, ...(attempt === 1 ? { variables: stringifyForLog(variables, 600) } : {}) });
-    try {
-      const res = await mondayApiClient.post(
-        MONDAY_API_URL,
-        { query, variables },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          _operation: operation
-        }
-      );
-      const ms = Date.now() - startedAt;
-      const body = res.data;
-      lastBody = body;
-      // Monday returns GraphQL errors with HTTP 200, so they bypass the axios
-      // interceptor — surface them explicitly here.
-      if (body?.errors?.length) {
-        console.error('[Monday][api] ✗ GraphQL error', { reqId, operation, op, ms, attempt, variables: stringifyForLog(variables, 600), errors: stringifyForLog(body.errors, 1000) });
-        if (hasTransientMondayError(body.errors) && attempt < maxAttempts) {
-          await sleep(400 * attempt);
-          continue;
-        }
-      } else {
-        console.log('[Monday][api] ←', { reqId, operation, op, ms, dataKeys: body?.data ? Object.keys(body.data) : [] });
-      }
-      return body;
-    } catch (err) {
-      const ms = Date.now() - startedAt;
-      const status = err?.response?.status || null;
-      console.error('[Monday][api] ✗ HTTP error', { reqId, operation, op, ms, attempt, status, message: err?.message || '', variables: stringifyForLog(variables, 600), responseBody: stringifyForLog(err?.response?.data, 1000) });
-      // Retry transient transport failures (5xx, timeout, network) too.
-      const transient = !status || status >= 500 || err?.code === 'ECONNABORTED';
-      if (transient && attempt < maxAttempts) {
-        await sleep(400 * attempt);
-        continue;
-      }
-      throw err;
-    }
-  }
-  return lastBody;
-}
-
-// Throw a descriptive error when a GraphQL response carried errors but the caller
-// expects data — keeps failures from surfacing as "Cannot read property of undefined".
-function assertNoGraphqlErrors(res, context) {
-  if (res?.errors?.length) {
-    const message = res.errors.map(e => e?.message).filter(Boolean).join('; ') || 'Unknown Monday GraphQL error';
-    throw new Error(`Monday ${context} failed: ${message}`);
-  }
-}
-
-// Monday update/item IDs are numeric. A non-numeric stored thirdPartyLogId (e.g. a
-// hash from a stale record) is invalid and must not be sent to the API.
-function isNumericMondayId(id) {
-  return id != null && /^\d+$/.test(String(id));
-}
-
 async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'Files', operation = 'getOrCreateFilesColumn' }) {
   let columnId = await getColumnIdByName({
     accessToken,
@@ -248,64 +146,6 @@ async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'File
   columnIdCache.set(`${boardId}:${columnName}`, newColumnId)
 
   return newColumnId
-}
-
-async function getColumnIdByName({ accessToken, boardId, columnName, operation = 'getColumnIdByName' }) {
-  if (!columnName) {
-    return null
-  }
-  if (typeof columnName === 'string' && columnName.trim()) {
-    const trimmedName = columnName.trim()
-    if (trimmedName !== columnName) {
-      columnName = trimmedName
-    }
-  }
-  const cacheKey = `${boardId}:${columnName}`
-  if (columnIdCache.has(cacheKey)) {
-    return columnIdCache.get(cacheKey)
-  }
-
-  const res = await mondayRequest(
-    accessToken,
-    `
-    query ($boardId: [ID!]) {
-      boards(ids: $boardId) {
-        columns {
-          id
-          title
-        }
-      }
-    }
-    `,
-    { boardId: Number(boardId) },
-    { operation }
-  )
-  const boardData = res?.data?.boards?.[0]
-  const columns = boardData?.columns || []
-  if (!columns.length) {
-    console.log('Monday board lookup returned no columns', {
-      boardId,
-      errors: res?.errors,
-      boardData
-    })
-  }
-
-  const normalizedName = columnName?.toLowerCase()
-  const matched = columns.find(col => {
-    const title = col.title?.trim()?.toLowerCase()
-    return title === normalizedName || col.id === columnName
-  })
-
-  if (matched?.id) {
-    columnIdCache.set(cacheKey, matched.id)
-    return matched.id
-  }
-  console.log('Monday column not found', {
-    boardId,
-    columnName,
-    availableColumns: columns.map(col => ({ id: col.id, title: col.title }))
-  })
-  return null
 }
 
 function normalizePhone(phone) {
@@ -379,7 +219,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
     // breaks — we just lose the slug and fall back to the extension-provided hostname.
     const meQuery = async (query) => {
       const response = await mondayApiClient.post(
-        MONDAY_API_URL,
+        getMondayApiUrl(),
         { query },
         {
           headers: {
@@ -505,7 +345,7 @@ async function getUserInfo({ authHeader, hostname, query }) {
       }
     }
 
-    // Discover the connector's single board once, at connect time, and store it so the
+    // Discover the connector's contact board once, at connect time, and store it so the
     // rest of the system reuses it without re-discovering.
     let boardId = null;
     let boardName = null;
@@ -528,7 +368,12 @@ async function getUserInfo({ authHeader, hostname, query }) {
         email: userData.email,
         overridingApiKey: accessToken,
         ...(cleanHostname ? { overridingHostname: cleanHostname } : {}),
-        platformAdditionalInfo: { ...(boardId ? { boardId, boardName } : {}) }
+        // The connected Monday user is the person doing the logging, so their Monday id is what
+        // fills the project item's "Last logged by" people column — no email matching needed.
+        platformAdditionalInfo: {
+          ...(boardId ? { boardId, boardName } : {}),
+          ...(result.data.me.id ? { mondayUserId: String(result.data.me.id) } : {})
+        }
       },
       returnMessage: { messageType: 'success', message: 'Successfully connected to Monday.', ttl: 3000 }
     };
@@ -587,41 +432,62 @@ async function unAuthorize({ user }) {
   }
 }
 
-// Discover the CRM boards a connected user can access — any active board that has a
-// Phone column. Results are cached briefly per user to avoid repeated board lookups.
-async function getCrmBoards({ accessToken, userId, operation = 'getCrmBoards' }) {
+// Discover every active board a connected user can see, across all of their workspaces. Monday
+// pages the `boards` query, and an account big enough to matter has more boards than one page
+// holds — so page until a short page comes back (or the cap is hit) rather than taking whatever the
+// first page happened to contain. Results are cached briefly per user: contact matching, the
+// Project dropdown and the settings workspace list all read the same list.
+async function getAllBoards({ accessToken, userId, operation = 'getAllBoards' }) {
   const now = Date.now();
   const cached = userId ? boardCache.get(userId) : null;
   if (cached && cached.expiry > now) {
     return cached.boards;
   }
 
-  const res = await mondayRequest(
-    accessToken,
-    `
-    query {
-      boards(limit: 200, state: active) {
-        id
-        name
-        columns { id title type }
+  const boards = [];
+  const seenBoardIds = new Set();
+  for (let page = 1; page <= BOARD_MAX_PAGES; page++) {
+    const res = await mondayRequest(
+      accessToken,
+      `
+      query ($limit: Int!, $page: Int!) {
+        boards(limit: $limit, page: $page, state: active, order_by: created_at) {
+          id
+          name
+          type
+          workspace { id name }
+          columns { id title type }
+        }
       }
-    }
-    `,
-    {},
-    { operation }
-  );
-
-  const rawBoards = res?.data?.boards || [];
-  const boards = rawBoards
-    .map(board => {
+      `,
+      { limit: BOARD_PAGE_SIZE, page },
+      { operation }
+    );
+    const rawBoards = res?.data?.boards || [];
+    for (const board of rawBoards) {
+      // A board created while the scan is in flight shifts the pages under it, which can hand back
+      // one we already have.
+      if (seenBoardIds.has(String(board.id))) continue;
+      seenBoardIds.add(String(board.id));
       const columns = board.columns || [];
+      // A "phone" typed column is the real thing; a text column titled Phone is the common
+      // hand-rolled substitute, so both count as a contact directory.
       const phoneColumn = columns.find(col => col.type === 'phone')
         || columns.find(col => /phone/i.test(col.title || ''));
-      return phoneColumn
-        ? { id: String(board.id), name: board.name, phoneColumnId: phoneColumn.id }
-        : null;
-    })
-    .filter(Boolean);
+      boards.push({
+        id: String(board.id),
+        name: board.name,
+        type: board.type || 'board',
+        workspaceId: board.workspace?.id != null ? String(board.workspace.id) : null,
+        workspaceName: board.workspace?.name || null,
+        phoneColumnId: phoneColumn?.id || null
+      });
+    }
+    if (rawBoards.length < BOARD_PAGE_SIZE) break;
+    if (page === BOARD_MAX_PAGES) {
+      console.warn('[Monday][board] board discovery hit the page cap — some boards were not listed', { pageCap: BOARD_MAX_PAGES, pageSize: BOARD_PAGE_SIZE });
+    }
+  }
 
   if (userId) {
     boardCache.set(userId, { boards, expiry: now + BOARD_CACHE_TTL_MS });
@@ -629,17 +495,121 @@ async function getCrmBoards({ accessToken, userId, operation = 'getCrmBoards' })
   return boards;
 }
 
-// Pick a sensible default board for creating new contacts: prefer a board named like
-// "Contact"/"Lead", otherwise the first discovered CRM board.
+// The CRM boards are the ones that can hold a contact: an active board with a Phone column.
+async function getCrmBoards({ accessToken, userId, operation = 'getCrmBoards' }) {
+  const boards = await getAllBoards({ accessToken, userId, operation });
+  return boards
+    .filter(board => board.phoneColumnId && (!board.type || board.type === 'board'))
+    .map(board => ({
+      id: board.id,
+      name: board.name,
+      type: board.type,
+      workspaceId: board.workspaceId,
+      workspaceName: board.workspaceName,
+      phoneColumnId: board.phoneColumnId
+    }));
+}
+
+// Pick the board contacts live on. A board actually called "Contacts" is the intended one, so an
+// exact name match wins outright; "Leads" is the next best answer for an account that keeps only
+// prospects. Anything looser (a board merely mentioning contacts or leads) is tried after both
+// exact names, and only then does the first board with a Phone column stand in.
 function pickDefaultBoard(boards = []) {
-  return boards.find(board => /contact/i.test(board.name))
-    || boards.find(board => /lead/i.test(board.name))
+  const named = (pattern) => boards.find(board => pattern.test(String(board.name ?? '').trim()));
+  return named(/^contacts?$/i)
+    || named(/^leads?$/i)
+    || named(/contact/i)
+    || named(/lead/i)
     || boards[0]
     || null;
 }
 
 function getUserId(user) {
   return user?.dataValues?.id || user?.id || null;
+}
+
+// The board list without paying for discovery. Log writes only need it to sanity-check the picked
+// project board, which is not worth a board query of its own — contact matching has almost always
+// warmed the cache moments earlier, and when it hasn't the check is simply skipped.
+function getCachedBoards(user) {
+  const userId = getUserId(user);
+  const cached = userId ? boardCache.get(userId) : null;
+  return cached && cached.expiry > Date.now() ? cached.boards : [];
+}
+
+// The board list the project resolver works from. Normally the cached one: a log write only needs it
+// to sanity-check the picked board, which isn't worth a query. Raising a NEW project board is the
+// exception — the workspace it belongs in is resolved through a board already sitting in that
+// workspace, so there the list has to be real, and one query is nothing against creating a board.
+async function boardsForProjectResolution({ user, accessToken, additionalSubmission, operation }) {
+  if (additionalSubmission?.project === projects.PROJECT_OPTION_CREATE_NEW) {
+    return getBoardsForOptions({ user, accessToken, operation });
+  }
+  return getCachedBoards(user);
+}
+
+// A project board raised from the log form is not in the cached list, and until it is the Project
+// dropdown won't offer it — so the cache is dropped rather than left to expire on its own.
+function forgetCachedBoards(user, createdBoard) {
+  if (!createdBoard) return;
+  const userId = getUserId(user);
+  if (userId) boardCache.delete(userId);
+  console.log('[Monday][board] dropped the cached board list after creating a project', { boardId: createdBoard.id, name: createdBoard.name });
+}
+
+// The board list for building the Project dropdown, discovering it when the cache is cold. The
+// paths that need this (contact search by name, creating a contact mid-call) don't otherwise list
+// boards, and an empty dropdown there would mean the very first call for a new contact is the one
+// that cannot reach a project. Discovery is cached per user, so this costs at most one query per
+// cache period — and a failure costs only the dropdown, never the contact.
+async function getBoardsForOptions({ user, accessToken, operation }) {
+  const cached = getCachedBoards(user);
+  if (cached.length) return cached;
+  try {
+    return await getAllBoards({ accessToken, userId: getUserId(user), operation });
+  } catch (e) {
+    console.warn(`[Monday][${operation}] board discovery for the project options failed:`, e.message);
+    return [];
+  }
+}
+
+// The contact board as the project helpers want it — the id they must exclude from the project
+// list — read from what connect persisted, so no API call is needed on the logging path.
+function contactBoardOf(user) {
+  const pai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {};
+  if (!pai.boardId) return null;
+  return { id: String(pai.boardId), name: pai.boardName || null };
+}
+
+// Move a project item's "Last activity" and "Last logged by" on for an interaction that continues an
+// existing conversation — the paths that already know the item from the stored log id and so never
+// go through resolveTargetProjectItem. Never throws.
+async function stampProjectItem({ user, accessToken, projectBoardId, projectItemId, activityTime }) {
+  if (!projectItemId || !projects.isProjectLoggingEnabled(user)) return;
+  try {
+    await projects.stampProjectActivity({
+      accessToken,
+      projectBoardId,
+      projectItemId,
+      contactBoardId: contactBoardOf(user)?.id,
+      mondayUserId: mondayUserIdOf(user),
+      activityTime,
+      operation: 'stampProjectItem'
+    });
+  } catch (e) {
+    console.warn('[Monday][projects] could not refresh the project item activity', { projectItemId, message: e.message });
+  }
+}
+
+// The Monday user id behind this connection — the person whose token writes the log, and so the
+// person the project item credits. Stored at connect; for connections made before it was stored,
+// recovered from the tenant-scoped user id (`monday-{rcAccountId}-{mondayUserId}`) so those users
+// don't have to reconnect to get the column filled.
+function mondayUserIdOf(user) {
+  const pai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {};
+  if (pai.mondayUserId) return String(pai.mondayUserId);
+  const trailing = String(getUserId(user) ?? '').split('-').pop();
+  return /^\d+$/.test(trailing || '') ? trailing : null;
 }
 
 // The connector uses a single board for everything. It is discovered once (the default
@@ -848,9 +818,10 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
   // const perBoardMatches = await Promise.all(boards.map(async board => { ... type: String(board.id) ... }))
   // --------------------------------------------------------------------------
   let board: any = null
+  let allBoards: any[] = []
   try {
-    const boards = await getCrmBoards({ accessToken: resolvedAccessToken, userId: getUserId(user), operation: 'findContact' })
-    board = pickDefaultBoard(boards)
+    allBoards = await getAllBoards({ accessToken: resolvedAccessToken, userId: getUserId(user), operation: 'findContact' })
+    board = pickDefaultBoard(allBoards.filter(b => b.phoneColumnId && (!b.type || b.type === 'board')))
   } catch (e: any) {
     // A board-discovery failure (e.g. a slow query hitting the request timeout) should not
     // surface as a hard error — tell the user to retry.
@@ -866,6 +837,8 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
   const boardName = board.name || String(board.id)
   const phone = normalizePhone(phoneNumber)
   const matchedContactInfo: any[] = []
+  // The Project options are the same for every match, so build them once rather than per contact.
+  const projectAdditionalInfo = projects.buildProjectAdditionalInfo({ user, boards: allBoards, contactBoard: board })
 
   if (phone) {
     const phoneColumnId = board.phoneColumnId || await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId: board.id })
@@ -874,7 +847,16 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
       const boardLabel = boardDisplayLabel({ boardName, boardId: board.id })
       for (const item of items) {
         // Display the board name (self-labeled "Board: …") in the contact list; keep boardId for logging.
-        matchedContactInfo.push({ id: item.id, name: item.name, phone, type: boardLabel, contactType: boardLabel, boardId: board.id, boardName })
+        matchedContactInfo.push({
+          id: item.id,
+          name: item.name,
+          phone,
+          type: boardLabel,
+          contactType: boardLabel,
+          boardId: board.id,
+          boardName,
+          ...(projectAdditionalInfo ? { additionalInfo: projectAdditionalInfo } : {})
+        })
       }
     }
 
@@ -962,13 +944,29 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
   // Match findContact's display: board name (self-labeled), not the raw boardId.
   const wnPai = user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {}
   const wnBoardLabel = boardDisplayLabel({ boardName: wnPai.boardName, boardId })
+  // A contact picked by name logs through the same form as a phone match, so it needs the same
+  // Project options.
+  const wnProjectAdditionalInfo = projects.buildProjectAdditionalInfo({
+    user,
+    boards: await getBoardsForOptions({ user, accessToken: resolvedAccessToken, operation: 'findContactWithName' }),
+    contactBoard: contactBoardOf(user)
+  })
   const matchedContactInfo = items.map(item => {
     // Monday stores the phone column as display text (e.g. "+1 623 201 1816" or
     // "16232011816"); normalize to E.164 where possible so it matches what findContact
     // returns, falling back to the raw text rather than dropping the number.
     const rawPhone = item.column_values?.[0]?.text?.trim() || ''
     const phone = rawPhone ? (normalizePhone(rawPhone) || normalizePhone(`+${rawPhone.replace(/\D/g, '')}`) || rawPhone) : ''
-    return { id: item.id, name: item.name, phone, type: wnBoardLabel, contactType: wnBoardLabel, boardId, boardName: wnPai.boardName }
+    return {
+      id: item.id,
+      name: item.name,
+      phone,
+      type: wnBoardLabel,
+      contactType: wnBoardLabel,
+      boardId,
+      boardName: wnPai.boardName,
+      ...(wnProjectAdditionalInfo ? { additionalInfo: wnProjectAdditionalInfo } : {})
+    }
   })
   console.log('[Monday] findContactWithName', { term, matches: matchedContactInfo.length, withPhone: matchedContactInfo.filter(c => c.phone).length })
 
@@ -1175,6 +1173,13 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
   const createdBoardName =
     (user?.platformAdditionalInfo || user?.dataValues?.platformAdditionalInfo || {})?.boardName
   const createdBoardLabel = boardDisplayLabel({ boardName: createdBoardName, boardId })
+  // A contact created mid-call is logged immediately afterwards, so carry the Project options back
+  // with it — otherwise the very first call for a new contact is the one that cannot reach a project.
+  const createdProjectAdditionalInfo = projects.buildProjectAdditionalInfo({
+    user,
+    boards: await getBoardsForOptions({ user, accessToken: resolvedAccessToken, operation: 'createContact' }),
+    contactBoard: contactBoardOf(user)
+  })
   return {
     contactInfo: {
       id: created.id,
@@ -1184,7 +1189,8 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
       // {contactBoardId} setting.
       type: createdBoardLabel,
       contactType: createdBoardLabel,
-      boardId
+      boardId,
+      ...(createdProjectAdditionalInfo ? { additionalInfo: createdProjectAdditionalInfo } : {})
     },
     returnMessage: {
       messageType: 'success',
@@ -1210,7 +1216,7 @@ async function getMondayUserName(user) {
   return '';
 }
 
-async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, accessToken, authHeader, user }) {
+async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, additionalSubmission, accessToken, authHeader, user }) {
   apiLog.logStart('Monday', 'createCallLog', { contactId: contactInfo?.id, direction: callLog?.direction, duration: callLog?.duration, sessionId: callLog?.sessionId, hasRecording: !!callLog?.recording?.downloadUrl });
   const licenseError = await validateLicenseOrFail(user, 'createCallLog');
   if (licenseError) return licenseError;
@@ -1329,6 +1335,31 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   }
   apiLog.logSuccess('Monday', 'createCallLog', { logId: updateId, contactId: Number(target.id), boardId })
 
+  // ---- Project copy ----
+  // The contact item above is the log's system of record; the project item is where the team
+  // working the job will actually read it. Resolving and writing it never throws — a project
+  // problem downgrades to "logged to the contact only" rather than losing the call.
+  const projectTarget = await projects.resolveTargetProjectItem({
+    user,
+    accessToken: resolvedAccessToken,
+    additionalSubmission,
+    contactInfo: target,
+    contactBoard: contactBoardOf(user) || (boardId ? { id: boardId } : null),
+    boards: await boardsForProjectResolution({ user, accessToken: resolvedAccessToken, additionalSubmission, operation: 'createCallLog' }),
+    mondayUserId: mondayUserIdOf(user),
+    activityTime: callLog?.startTime,
+    logPrefix: '[Monday] createCallLog:',
+    operation: 'createCallLog'
+  })
+  forgetCachedBoards(user, projectTarget.createdBoard)
+  const projectUpdateId = projectTarget.itemId
+    ? await projects.postUpdate({ accessToken: resolvedAccessToken, itemId: projectTarget.itemId, body, operation: 'createCallLog' })
+    : null
+  if (projectUpdateId) {
+    apiLog.logSuccess('Monday', 'createCallLog', { logId: projectUpdateId, itemId: projectTarget.itemId, boardId: projectTarget.boardId, target: 'project' })
+    await trackAnalytics({ user, crm: 'Monday', event: 'projectLogCreated' });
+  }
+
   // ---- Recording Upload ----
   // Only here is the board id actually needed. Use the one carried on the contact; resolve
   // it lazily (one query) only if it wasn't provided, so the call log itself never blocks on
@@ -1357,12 +1388,22 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   await trackAnalytics({ user, crm: 'Monday', event: 'callLogCreated' });
 
   return {
-    logId: updateId,
+    // The id is the monday.com page "view log details" opens — the project item when one was
+    // picked, the contact item otherwise — and carries both updates so a later edit or recording
+    // sync can find them (see projects.buildLogId).
+    logId: projects.buildLogId({
+      contactBoardId: boardId,
+      contactItemId: target.id,
+      contactUpdateId: updateId,
+      projectBoardId: projectTarget.boardId,
+      projectItemId: projectTarget.itemId,
+      projectUpdateId
+    }),
     contactId: Number(target.id),
     returnMessage: {
-      message: "Call log created",
-      messageType: "success",
-      ttl: 2000
+      message: projectTarget.warning || "Call log created",
+      messageType: projectTarget.warning ? "warning" : "success",
+      ttl: projectTarget.warning ? 4000 : 2000
     }
   }
 }
@@ -1389,18 +1430,26 @@ async function uploadCallRecording({ accessToken, user, itemId, recordingLink, o
   }
 }
 
-async function updateCallLog({ existingCallLog, recordingLink, recordingDownloadLink, note, aiNote, transcript, accessToken, authHeader, user, subject, duration, startTime, result }) {
+async function updateCallLog({ existingCallLog, recordingLink, recordingDownloadLink, note, aiNote, transcript, additionalSubmission, accessToken, authHeader, user, subject, duration, startTime, result }) {
   const licenseError = await validateLicenseOrFail(user, 'updateCallLog');
   if (licenseError) return licenseError;
 
   const resolvedAccessToken =
     authHeader?.replace('Bearer ', '') || accessToken || user?.accessToken
-  const logId = existingCallLog?.thirdPartyLogId
+  // The stored id may carry a project copy written when the call was first logged; the contact
+  // item's update is always its first segment.
+  const storedLogId = existingCallLog?.thirdPartyLogId
+  const parsedLogId = projects.parseLogId(storedLogId)
+  const logId = parsedLogId.updateId
+  let projectBoardId = parsedLogId.projectBoardId
+  let projectItemId = parsedLogId.projectItemId
+  let projectUpdateId = parsedLogId.projectUpdateId
   const itemId = Number(existingCallLog?.contactId)
   apiLog.logStart('Monday', 'updateCallLog', {
     logId,
     contactId: existingCallLog?.contactId,
     isNumericId: isNumericMondayId(logId),
+    projectItemId,
     hasRecordingLink: !!recordingLink,
     hasRecordingDownloadLink: !!recordingDownloadLink
   })
@@ -1537,6 +1586,61 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
 
   const body = lines.join("<br>").replace(/^(<br>)+|(<br>)+$/g, '');
 
+  // ---- Project copy ----
+  // A project can be picked when the log is edited, not only when it is created, so resolve one
+  // here too when the stored id carries none yet. Automatic updates (recording sync) submit no
+  // form and simply keep whatever the original log chose.
+  if (!projectItemId && additionalSubmission?.project) {
+    const projectTarget = await projects.resolveTargetProjectItem({
+      user,
+      accessToken: resolvedAccessToken,
+      additionalSubmission,
+      // Only the contact's item id survives into an update; resolveTargetProjectItem reads the
+      // name off it when needed.
+      contactInfo: { id: existingCallLog?.contactId },
+      contactBoard: contactBoardOf(user),
+      boards: await boardsForProjectResolution({ user, accessToken: resolvedAccessToken, additionalSubmission, operation: 'updateCallLog' }),
+      mondayUserId: mondayUserIdOf(user),
+      activityTime: startTime,
+      logPrefix: '[Monday] updateCallLog:',
+      operation: 'updateCallLog'
+    })
+    forgetCachedBoards(user, projectTarget.createdBoard)
+    projectBoardId = projectTarget.boardId
+    projectItemId = projectTarget.itemId
+  }
+
+  // Mirrors the freshly built body onto the project item, then composes the id the caller stores
+  // and repoints the log record when it changed. Used by both the edit and the recreate path.
+  async function writeProjectCopy(contactUpdateId) {
+    if (projectItemId) {
+      const mirrored = await projects.mirrorUpdate({
+        accessToken: resolvedAccessToken,
+        projectItemId,
+        projectUpdateId,
+        body,
+        operation: 'updateCallLog'
+      })
+      projectUpdateId = mirrored || projectUpdateId
+    }
+    const composed = projects.buildLogId({
+      contactBoardId: contactBoardOf(user)?.id,
+      contactItemId: existingCallLog?.contactId,
+      contactUpdateId,
+      projectBoardId,
+      projectItemId,
+      projectUpdateId
+    })
+    if (composed !== String(storedLogId ?? '') && typeof existingCallLog?.update === 'function') {
+      try {
+        await existingCallLog.update({ thirdPartyLogId: composed })
+      } catch (e: any) {
+        console.warn('[Monday][updateCallLog] failed to repoint thirdPartyLogId', { composed, message: e.message })
+      }
+    }
+    return composed
+  }
+
   // ---- Recording Upload (recording-sync) ----
   // RingCentral recordings are usually NOT ready when the call is first logged, so
   // createCallLog's upload is skipped and the recording only arrives here, on the later
@@ -1580,7 +1684,7 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
         apiLog.logSuccess('Monday', 'updateCallLog', { logId: updateRes.data.edit_update.id, contactId: existingCallLog?.contactId, mode: 'edited' });
         await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated' });
         return {
-          logId: updateRes.data.edit_update.id,
+          logId: await writeProjectCopy(updateRes.data.edit_update.id),
           returnMessage: { message: "Call log updated", messageType: "success", ttl: 2000 }
         }
       }
@@ -1617,18 +1721,12 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
     await uploadCallRecording({ accessToken: resolvedAccessToken, user, itemId, recordingLink: recordingDownloadLink || recordingLink })
   }
   // Repoint the stored id so the next update edits this new update instead of recreating.
-  try {
-    if (typeof existingCallLog?.update === 'function') {
-      await existingCallLog.update({ thirdPartyLogId: newLogId })
-    }
-  } catch (e) {
-    console.warn('[Monday][updateCallLog] failed to repoint thirdPartyLogId', { newLogId, message: e.message })
-  }
+  const recreatedLogId = await writeProjectCopy(newLogId)
 
   await trackAnalytics({ user, crm: 'Monday', event: 'callLogUpdated' });
 
   return {
-    logId: newLogId,
+    logId: recreatedLogId,
     returnMessage: { message: "Call log updated", messageType: "success", ttl: 2000 }
   }
 }
@@ -1638,10 +1736,14 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
   const licenseError = await validateLicenseOrFail(user, 'getCallLog');
   if (licenseError) return licenseError;
 
+  // The log's own copy on the contact item is the one that is read back; a project copy appended
+  // to the id (see projects.buildLogId) is a mirror and holds nothing extra.
+  const contactUpdateId = projects.parseLogId(callLogId).updateId
+
   // A non-numeric stored id (e.g. a stale hash) is not a valid Monday update id and
   // makes the API 500 — skip the doomed query and report "not found" cleanly so the
   // caller (updateCallLog) recreates the update instead.
-  if (!isNumericMondayId(callLogId)) {
+  if (!isNumericMondayId(contactUpdateId)) {
     console.warn('[Monday][getCallLog] skipping fetch — callLogId is not a numeric Monday update id', { callLogId })
     return {
       callLogInfo: {},
@@ -1661,7 +1763,7 @@ async function getCallLog({ callLogId, accessToken, authHeader, user }) {
       }
     }
     `,
-    { updateId: [callLogId] },
+    { updateId: [contactUpdateId] },
     { operation: 'getCallLog' }
   )
 
@@ -1704,7 +1806,7 @@ async function upsertCallDisposition({ existingCallLog }) {
   return { logId: existingCallLog.thirdPartyLogId }
 }
 
-async function createMessageLog({ user, contactInfo, message, recordingLink, recordingDownloadLink, faxDocLink, faxDownloadLink, accessToken }) {
+async function createMessageLog({ user, contactInfo, message, recordingLink, recordingDownloadLink, faxDocLink, faxDownloadLink, additionalSubmission, accessToken }) {
   apiLog.logStart('Monday', 'createMessageLog', { contactId: contactInfo?.id, direction: message?.direction, hasRecording: !!recordingLink, hasRecordingDownloadLink: !!recordingDownloadLink, hasFax: !!faxDocLink });
   const licenseError = await validateLicenseOrFail(user, 'createMessageLog');
   if (licenseError) return licenseError;
@@ -1762,6 +1864,26 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, rec
 
   const updateId = res.data.create_update.id
 
+  // ---- Project copy ----
+  // Same contract as calls: the contact item's thread is the system of record, the project item
+  // gets a mirror of it, and a project problem never fails the message log.
+  const projectTarget = await projects.resolveTargetProjectItem({
+    user,
+    accessToken: resolvedAccessToken,
+    additionalSubmission,
+    contactInfo: target,
+    contactBoard: contactBoardOf(user) || (boardId ? { id: boardId } : null),
+    boards: await boardsForProjectResolution({ user, accessToken: resolvedAccessToken, additionalSubmission, operation: 'createMessageLog' }),
+    mondayUserId: mondayUserIdOf(user),
+    activityTime: message?.creationTime,
+    logPrefix: '[Monday] createMessageLog:',
+    operation: 'createMessageLog'
+  })
+  forgetCachedBoards(user, projectTarget.createdBoard)
+  const projectUpdateId = projectTarget.itemId
+    ? await projects.postUpdate({ accessToken: resolvedAccessToken, itemId: projectTarget.itemId, body, operation: 'createMessageLog' })
+    : null
+
   if (recordingLink || faxDocLink) {
     // Prefer the tokenized download links — the display links (media-reader pages)
     // have no access token and 401 when downloaded server-side.
@@ -1790,14 +1912,21 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, rec
 
   await trackAnalytics({ user, crm: 'Monday', event: 'messageLogCreated' });
 
-  apiLog.logSuccess('Monday', 'createMessageLog', { logId: updateId, contactId: itemId, messageType, boardId })
+  apiLog.logSuccess('Monday', 'createMessageLog', { logId: updateId, contactId: itemId, messageType, boardId, projectItemId: projectTarget.itemId })
   return {
-    logId: updateId,
+    logId: projects.buildLogId({
+      contactBoardId: boardId,
+      contactItemId: target.id,
+      contactUpdateId: updateId,
+      projectBoardId: projectTarget.boardId,
+      projectItemId: projectTarget.itemId,
+      projectUpdateId
+    }),
     contactId: itemId,
     returnMessage: {
-      message: 'Message thread created',
-      messageType: 'success',
-      ttl: 1000
+      message: projectTarget.warning || 'Message thread created',
+      messageType: projectTarget.warning ? 'warning' : 'success',
+      ttl: projectTarget.warning ? 4000 : 1000
     }
   }
 }
@@ -1811,7 +1940,14 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
   const resolvedAccessToken = accessToken || user?.accessToken
   const boardId = await resolveBoardId({ accessToken: resolvedAccessToken, user, operation: 'updateMessageLog' });
   const itemId = Number(contactInfo.id)
-  const updateId = existingMessageLog.thirdPartyLogId
+  // The stored id carries the project copy the thread was created with, so appends reach the same
+  // project item without the agent picking it again (an append submits no form at all).
+  const storedMessageLogId = existingMessageLog.thirdPartyLogId
+  const parsedMessageLogId = projects.parseLogId(storedMessageLogId)
+  const updateId = parsedMessageLogId.updateId
+  const projectBoardId = parsedMessageLogId.projectBoardId
+  const projectItemId = parsedMessageLogId.projectItemId
+  const projectUpdateId = parsedMessageLogId.projectUpdateId
   const messageType =
     recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS')
 
@@ -1847,11 +1983,27 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
     const newUpdateId = res.data.create_update.id
 
+    // A voicemail or fax is its own update rather than an append, so the project item gets its own
+    // new update too — no old one to supersede.
+    const newProjectUpdateId = projectItemId
+      ? await projects.postUpdate({ accessToken: resolvedAccessToken, itemId: projectItemId, body, operation: 'updateMessageLog' })
+      : null
+    if (projectItemId) {
+      await stampProjectItem({ user, accessToken: resolvedAccessToken, projectBoardId, projectItemId, activityTime: message?.creationTime })
+    }
+
     await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated' });
 
-    apiLog.logSuccess('Monday', 'updateMessageLog', { logId: newUpdateId, contactId: itemId, messageType })
+    apiLog.logSuccess('Monday', 'updateMessageLog', { logId: newUpdateId, contactId: itemId, messageType, projectItemId })
     return {
-      logId: newUpdateId,
+      logId: projects.buildLogId({
+        contactBoardId: boardId,
+        contactItemId: itemId,
+        contactUpdateId: newUpdateId,
+        projectBoardId,
+        projectItemId,
+        projectUpdateId: newProjectUpdateId
+      }),
       returnMessage: {
         message: 'Message logged',
         messageType: 'success',
@@ -1960,13 +2112,38 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
     }
   }
 
+  // The project item's copy of the thread is recreated the same way and for the same reason: an
+  // edited update stays where it was in the feed, so an ongoing conversation would sink out of
+  // sight. It carries the history built from the contact thread above, so both read identically.
+  const newProjectThreadId = projectItemId
+    ? await projects.mirrorThread({
+      accessToken: resolvedAccessToken,
+      projectItemId,
+      projectUpdateId: shouldDeleteOld ? projectUpdateId : null,
+      body: updatedBody,
+      operation: 'updateMessageLog'
+    })
+    : null
+  // Each new message in the thread is a fresh interaction, so the item's activity stamp moves with it.
+  if (projectItemId) {
+    await stampProjectItem({ user, accessToken: resolvedAccessToken, projectBoardId, projectItemId, activityTime: message?.creationTime })
+  }
+
   // Repoint the stored id so the next message appends to the recreated thread instead
   // of a deleted update (which would restart the conversation and lose history).
-  if (String(newThreadId) !== String(updateId) && typeof existingMessageLog?.update === 'function') {
+  const composedThreadId = projects.buildLogId({
+    contactBoardId: boardId,
+    contactItemId: itemId,
+    contactUpdateId: newThreadId,
+    projectBoardId,
+    projectItemId,
+    projectUpdateId: newProjectThreadId
+  })
+  if (composedThreadId !== String(storedMessageLogId ?? '') && typeof existingMessageLog?.update === 'function') {
     try {
-      await existingMessageLog.update({ thirdPartyLogId: String(newThreadId) })
+      await existingMessageLog.update({ thirdPartyLogId: composedThreadId })
     } catch (e) {
-      console.warn('[Monday][updateMessageLog] failed to repoint thirdPartyLogId', { newThreadId, message: e.message })
+      console.warn('[Monday][updateMessageLog] failed to repoint thirdPartyLogId', { composedThreadId, message: e.message })
     }
   }
 
@@ -1998,9 +2175,9 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
   await trackAnalytics({ user, crm: 'Monday', event: 'messageLogUpdated' });
 
-  apiLog.logSuccess('Monday', 'updateMessageLog', { logId: newThreadId, contactId: itemId, messageType: 'SMS', appended: newThreadId === updateId })
+  apiLog.logSuccess('Monday', 'updateMessageLog', { logId: newThreadId, contactId: itemId, messageType: 'SMS', appended: newThreadId === updateId, projectItemId })
   return {
-    logId: newThreadId,
+    logId: composedThreadId,
     returnMessage: {
       message: 'Message appended',
       messageType: 'success',
@@ -2097,7 +2274,7 @@ async function uploadToMonday({ s3Url, accessToken, itemId, fileName, boardId })
     })
 
     const response = await mondayApiClient.post(
-      `${MONDAY_API_URL}/file`,
+      `${getMondayApiUrl()}/file`,
       formData,
       {
         headers: {
