@@ -94,13 +94,26 @@ function normalizeHostname(raw) {
 }
 
 async function getLicenseStatus({ userId }) {
-  return licenseHelper.getLicenseStatus({ models, userId });
+  const status = await licenseHelper.getLicenseStatus({ models, userId });
+  // Monday is the connector with a premium plan, so its license line says which plan is active.
+  // A copy, never the shared cached object, so other connectors keep their own description.
+  if (status?.isLicenseValid && await licenseHelper.isPremium({ models, user: { id: userId } })) {
+    return { ...status, licenseStatusDescription: 'Premium' };
+  }
+  return status;
 }
 
 // `operation` is accepted for call-site compatibility (logged context); the shared
 // helper performs the actual license + seat check.
 async function validateLicenseOrFail(user, operation = 'unknown') { // eslint-disable-line no-unused-vars
   return licenseHelper.validateLicenseOrFail({ models, user });
+}
+
+// Project boards are a premium feature: basic companies get no Project options on a match, no
+// project link on a log, and nothing written to a project board — the connector as it behaved
+// before projects existed.
+async function hasProjectAccess(user) {
+  return licenseHelper.isPremium({ models, user });
 }
 
 async function getOrCreateFilesColumn({ accessToken, boardId, columnName = 'Files', operation = 'getOrCreateFilesColumn' }) {
@@ -838,7 +851,9 @@ async function findContact({ phoneNumber, accessToken, authHeader, user, isExten
   const phone = normalizePhone(phoneNumber)
   const matchedContactInfo: any[] = []
   // The Project options are the same for every match, so build them once rather than per contact.
-  const projectAdditionalInfo = projects.buildProjectAdditionalInfo({ user, boards: allBoards, contactBoard: board })
+  const projectAdditionalInfo = await hasProjectAccess(user)
+    ? projects.buildProjectAdditionalInfo({ user, boards: allBoards, contactBoard: board })
+    : null
 
   if (phone) {
     const phoneColumnId = board.phoneColumnId || await getPhoneColumnId({ accessToken: resolvedAccessToken, boardId: board.id })
@@ -946,11 +961,13 @@ async function findContactWithName({ name, accessToken, authHeader, user }) {
   const wnBoardLabel = boardDisplayLabel({ boardName: wnPai.boardName, boardId })
   // A contact picked by name logs through the same form as a phone match, so it needs the same
   // Project options.
-  const wnProjectAdditionalInfo = projects.buildProjectAdditionalInfo({
-    user,
-    boards: await getBoardsForOptions({ user, accessToken: resolvedAccessToken, operation: 'findContactWithName' }),
-    contactBoard: contactBoardOf(user)
-  })
+  const wnProjectAdditionalInfo = await hasProjectAccess(user)
+    ? projects.buildProjectAdditionalInfo({
+      user,
+      boards: await getBoardsForOptions({ user, accessToken: resolvedAccessToken, operation: 'findContactWithName' }),
+      contactBoard: contactBoardOf(user)
+    })
+    : null
   const matchedContactInfo = items.map(item => {
     // Monday stores the phone column as display text (e.g. "+1 623 201 1816" or
     // "16232011816"); normalize to E.164 where possible so it matches what findContact
@@ -1175,11 +1192,13 @@ async function createContact({ phoneNumber, newContactName, accessToken, authHea
   const createdBoardLabel = boardDisplayLabel({ boardName: createdBoardName, boardId })
   // A contact created mid-call is logged immediately afterwards, so carry the Project options back
   // with it — otherwise the very first call for a new contact is the one that cannot reach a project.
-  const createdProjectAdditionalInfo = projects.buildProjectAdditionalInfo({
-    user,
-    boards: await getBoardsForOptions({ user, accessToken: resolvedAccessToken, operation: 'createContact' }),
-    contactBoard: contactBoardOf(user)
-  })
+  const createdProjectAdditionalInfo = await hasProjectAccess(user)
+    ? projects.buildProjectAdditionalInfo({
+      user,
+      boards: await getBoardsForOptions({ user, accessToken: resolvedAccessToken, operation: 'createContact' }),
+      contactBoard: contactBoardOf(user)
+    })
+    : null
   return {
     contactInfo: {
       id: created.id,
@@ -1339,7 +1358,9 @@ async function createCallLog({ contactInfo, callLog, note, aiNote, transcript, a
   // The contact item above is the log's system of record; the project item is where the team
   // working the job will actually read it. Resolving and writing it never throws — a project
   // problem downgrades to "logged to the contact only" rather than losing the call.
-  const projectTarget = await projects.resolveTargetProjectItem({
+  const projectTarget = !(await hasProjectAccess(user))
+    ? { boardId: null, itemId: null, createdBoard: null }
+    : await projects.resolveTargetProjectItem({
     user,
     accessToken: resolvedAccessToken,
     additionalSubmission,
@@ -1590,7 +1611,7 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
   // A project can be picked when the log is edited, not only when it is created, so resolve one
   // here too when the stored id carries none yet. Automatic updates (recording sync) submit no
   // form and simply keep whatever the original log chose.
-  if (!projectItemId && additionalSubmission?.project) {
+  if (!projectItemId && additionalSubmission?.project && await hasProjectAccess(user)) {
     const projectTarget = await projects.resolveTargetProjectItem({
       user,
       accessToken: resolvedAccessToken,
@@ -1613,7 +1634,9 @@ async function updateCallLog({ existingCallLog, recordingLink, recordingDownload
   // Mirrors the freshly built body onto the project item, then composes the id the caller stores
   // and repoints the log record when it changed. Used by both the edit and the recreate path.
   async function writeProjectCopy(contactUpdateId) {
-    if (projectItemId) {
+    // A log linked to a project while the company was premium keeps its link if the plan drops to
+    // basic, but nothing more is written to the project board until the company is premium again.
+    if (projectItemId && await hasProjectAccess(user)) {
       const mirrored = await projects.mirrorUpdate({
         accessToken: resolvedAccessToken,
         projectItemId,
@@ -1867,7 +1890,9 @@ async function createMessageLog({ user, contactInfo, message, recordingLink, rec
   // ---- Project copy ----
   // Same contract as calls: the contact item's thread is the system of record, the project item
   // gets a mirror of it, and a project problem never fails the message log.
-  const projectTarget = await projects.resolveTargetProjectItem({
+  const projectTarget = !(await hasProjectAccess(user))
+    ? { boardId: null, itemId: null, createdBoard: null }
+    : await projects.resolveTargetProjectItem({
     user,
     accessToken: resolvedAccessToken,
     additionalSubmission,
@@ -1948,6 +1973,9 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
   const projectBoardId = parsedMessageLogId.projectBoardId
   const projectItemId = parsedMessageLogId.projectItemId
   const projectUpdateId = parsedMessageLogId.projectUpdateId
+  // Appends to a thread linked to a project while the company was premium only reach the project
+  // board while it still is; on basic the stored link is carried forward untouched instead.
+  const projectWritesAllowed = !!projectItemId && await hasProjectAccess(user)
   const messageType =
     recordingLink ? 'Voicemail' : (faxDocLink ? 'Fax' : 'SMS')
 
@@ -1985,10 +2013,10 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
 
     // A voicemail or fax is its own update rather than an append, so the project item gets its own
     // new update too — no old one to supersede.
-    const newProjectUpdateId = projectItemId
+    const newProjectUpdateId = projectWritesAllowed
       ? await projects.postUpdate({ accessToken: resolvedAccessToken, itemId: projectItemId, body, operation: 'updateMessageLog' })
-      : null
-    if (projectItemId) {
+      : (projectItemId ? projectUpdateId : null)
+    if (projectWritesAllowed) {
       await stampProjectItem({ user, accessToken: resolvedAccessToken, projectBoardId, projectItemId, activityTime: message?.creationTime })
     }
 
@@ -2115,17 +2143,17 @@ async function updateMessageLog({ user, contactInfo, existingMessageLog, message
   // The project item's copy of the thread is recreated the same way and for the same reason: an
   // edited update stays where it was in the feed, so an ongoing conversation would sink out of
   // sight. It carries the history built from the contact thread above, so both read identically.
-  const newProjectThreadId = projectItemId
-    ? await projects.mirrorThread({
+  const newProjectThreadId = !projectWritesAllowed
+    ? (projectItemId ? projectUpdateId : null)
+    : await projects.mirrorThread({
       accessToken: resolvedAccessToken,
       projectItemId,
       projectUpdateId: shouldDeleteOld ? projectUpdateId : null,
       body: updatedBody,
       operation: 'updateMessageLog'
     })
-    : null
   // Each new message in the thread is a fresh interaction, so the item's activity stamp moves with it.
-  if (projectItemId) {
+  if (projectWritesAllowed) {
     await stampProjectItem({ user, accessToken: resolvedAccessToken, projectBoardId, projectItemId, activityTime: message?.creationTime })
   }
 
