@@ -49,8 +49,9 @@ async function computeLicenseStatus({ models, userId }) {
   // accounts (no rcAccountId) keep the prior status-only behaviour — no seat caps.
   const maxSeats = Number(company.maxAllowedUsers);
   if (user.rcAccountId && Number.isFinite(maxSeats) && maxSeats > 0) {
+    // Users removed in the admin panel are soft-deleted (isDeleted = true) and no longer hold a seat.
     const activeCustomers = await models.customer.findAll({
-        where: { companyId: company.id },
+        where: { companyId: company.id, isDeleted: false },
         order: [['createdAt', 'ASC']],
         attributes: ['sysId'],
         raw: true

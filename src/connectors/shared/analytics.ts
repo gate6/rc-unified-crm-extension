@@ -93,7 +93,8 @@ async function getRegisteredUsers(companyId) {
   if (!models?.customer || !companyId) return 0;
   return models.customer.count({
     where: {
-      companyId
+      companyId,
+      isDeleted: false
     }
   });
 }
