@@ -24,7 +24,7 @@ const { RingCentral } = require('../../lib/ringcentral');
 const adminCore = require('../../handlers/admin');
 const { AccountDataModel } = require('../../models/accountDataModel');
 const { CacheModel } = require('../../models/cacheModel');
-const { encode } = require('../../lib/encode');
+const { encode, decoded } = require('../../lib/encode');
 const { getHashValue } = require('../../lib/util');
 
 describe('Auth Handler', () => {
@@ -355,7 +355,7 @@ describe('Auth Handler', () => {
       }));
     });
 
-    test('should allow submitted shared fields to satisfy missing required managed auth values', async () => {
+    test('should persist submitted account and user managed values after an admin login succeeds', async () => {
       connectorRegistry.getManifest.mockReturnValue({
         platforms: {
           testCRM: {
@@ -365,7 +365,13 @@ describe('Auth Handler', () => {
                 page: {
                   content: [
                     { const: 'companyId', required: true, managed: true, managedScope: 'account' },
-                    { const: 'userToken', required: true }
+                    {
+                      const: 'userToken',
+                      required: true,
+                      managed: true,
+                      managedScope: 'user',
+                      managedFieldType: 'dynamic'
+                    }
                   ]
                 }
               }
@@ -392,6 +398,8 @@ describe('Auth Handler', () => {
         platform: 'testCRM',
         hostname: 'test.example.com',
         rcAccountId: 'rc-account-2',
+        rcExtensionId: 'rc-extension-2',
+        canPersistManagedAuth: true,
         additionalInfo: {
           companyId: 'company-123',
           userToken: 'user-token-1'
@@ -405,6 +413,22 @@ describe('Auth Handler', () => {
           userToken: 'user-token-1'
         })
       }));
+      const orgRecord = await AccountDataModel.findOne({
+        where: {
+          rcAccountId: 'rc-account-2',
+          platformName: 'testCRM',
+          dataKey: 'managed-auth-org'
+        }
+      });
+      const userRecord = await AccountDataModel.findOne({
+        where: {
+          rcAccountId: 'rc-account-2',
+          platformName: 'testCRM',
+          dataKey: 'managed-auth-user:rc-extension-2'
+        }
+      });
+      expect(JSON.parse(decoded(orgRecord.data.fields.companyId.value))).toBe('company-123');
+      expect(JSON.parse(decoded(userRecord.data.fields.userToken.value))).toBe('user-token-1');
     });
 
     test('should not persist submitted managed auth values from end users', async () => {
@@ -809,6 +833,46 @@ describe('Auth Handler', () => {
       // Assert
       expect(result.userInfo).toBeNull();
       expect(result.returnMessage.message).toBe('User not authorized');
+    });
+
+    test('should return a generic failure when saving OAuth user info fails', async () => {
+      const { UserModel } = require('../../models/userModel');
+      const createSpy = jest.spyOn(UserModel, 'create').mockRejectedValueOnce(
+        new Error('sensitive database details')
+      );
+      const mockConnector = global.testUtils.createMockConnector({
+        getOauthInfo: jest.fn().mockResolvedValue({ clientId: 'id', clientSecret: 'secret' }),
+        getUserInfo: jest.fn().mockResolvedValue({
+          successful: true,
+          platformUserInfo: { id: 'oauth-db-failure', name: 'OAuth User' },
+          returnMessage: { messageType: 'success', message: 'Connected successfully' }
+        })
+      });
+      connectorRegistry.getConnector.mockReturnValue(mockConnector);
+      mockOAuthApp.code.getToken.mockResolvedValue({
+        accessToken: 'token',
+        refreshToken: 'refresh',
+        expires: new Date()
+      });
+
+      const result = await authHandler.onOAuthCallback({
+        platform: 'testCRM',
+        hostname: 'api.example.com',
+        tokenUrl: '',
+        query: { callbackUri: 'https://app.example.com/callback', rcAccountId: 'rc-123' }
+      });
+
+      expect(createSpy).toHaveBeenCalled();
+      expect(result).toEqual({
+        userInfo: null,
+        successful: false,
+        returnMessage: {
+          message: 'Database operation failed',
+          messageType: 'warning',
+          ttl: 5000
+        }
+      });
+      expect(JSON.stringify(result)).not.toContain('sensitive database details');
     });
 
     test('should handle proxyId in OAuth callback', async () => {

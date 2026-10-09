@@ -10,6 +10,7 @@ jest.mock('../../handlers/managedAuth', () => ({
   getManagedAuthAdminSettings: jest.fn(),
   upsertOrgManagedAuthValues: jest.fn(),
   upsertUserManagedAuthValues: jest.fn(),
+  getManagedAuthOptions: jest.fn(),
 }));
 jest.mock('../../handlers/managedOAuth', () => ({
   getManagedOAuthState: jest.fn(),
@@ -68,6 +69,7 @@ describe('Managed Auth Routes', () => {
           rcAccessToken: 'valid-rc-token',
           rcAccountId: 'spoofed-account-id',
           rcExtensionId: 'spoofed-extension-id',
+          devRcAccountId: 'connector-owner-account',
         });
 
       expect(response.status).toBe(200);
@@ -76,6 +78,7 @@ describe('Managed Auth Routes', () => {
         platform: 'testCRM',
         rcAccountId: 'validated-account-id',
         rcExtensionId: 'validated-extension-id',
+        devRcAccountId: 'connector-owner-account',
       }));
     });
 
@@ -247,6 +250,7 @@ describe('Managed Auth Routes', () => {
           jwtToken: 'crm-jwt',
           rcAccessToken: 'valid-rc-token',
           connectorId: 'shared-connector',
+          devRcAccountId: 'connector-owner-account',
           isPrivate: 'true',
         });
 
@@ -257,6 +261,7 @@ describe('Managed Auth Routes', () => {
       expect(managedAuthCore.getManagedAuthAdminSettings).toHaveBeenCalledWith({
         platform: 'salesforce',
         rcAccountId: 'validated-account-id',
+        devRcAccountId: 'connector-owner-account',
         connectorId: 'shared-connector',
         isPrivate: true,
       });
@@ -363,12 +368,77 @@ describe('Managed Auth Routes', () => {
       expect(managedAuthCore.upsertOrgManagedAuthValues).not.toHaveBeenCalled();
     });
   });
+  describe('POST /admin/managedAuth/options', () => {
+    test('uses validated admin identity and transient account values without requiring a CRM jwt', async () => {
+      adminCore.validateAdminRole.mockResolvedValue({
+        isValidated: true,
+        rcAccountId: 'validated-account-id',
+      });
+      managedAuthCore.getManagedAuthOptions.mockResolvedValue([
+        { value: 'crm-101', label: 'Ada Lovelace' },
+      ]);
+
+      const response = await request(app)
+        .post('/admin/managedAuth/options')
+        .set('X-RC-Access-Token', 'valid-rc-token')
+        .query({
+          platform: 'salesforce',
+          connectorId: 'private-connector',
+          devRcAccountId: 'connector-owner-account',
+          isPrivate: 'true',
+        })
+        .send({
+          fieldConst: 'crmUserId',
+          accountValues: { companyId: 'company-123' },
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([{ value: 'crm-101', label: 'Ada Lovelace' }]);
+      expect(managedAuthCore.getManagedAuthOptions).toHaveBeenCalledWith({
+        platform: 'salesforce',
+        rcAccountId: 'validated-account-id',
+        connectorId: 'private-connector',
+        devRcAccountId: 'connector-owner-account',
+        isPrivate: true,
+        fieldConst: 'crmUserId',
+        accountValues: { companyId: 'company-123' },
+      });
+    });
+
+    test('rejects non-admin users and reports connector errors', async () => {
+      adminCore.validateAdminRole.mockResolvedValueOnce({
+        isValidated: false,
+        rcAccountId: 'validated-account-id',
+      });
+      const forbiddenResponse = await request(app)
+        .post('/admin/managedAuth/options')
+        .query({ platform: 'salesforce', rcAccessToken: 'valid-rc-token' })
+        .send({ fieldConst: 'crmUserId' });
+      expect(forbiddenResponse.status).toBe(403);
+
+      adminCore.validateAdminRole.mockResolvedValueOnce({
+        isValidated: true,
+        rcAccountId: 'validated-account-id',
+      });
+      managedAuthCore.getManagedAuthOptions.mockRejectedValueOnce(new Error('CRM user list unavailable'));
+      const errorResponse = await request(app)
+        .post('/admin/managedAuth/options')
+        .query({ platform: 'salesforce', rcAccessToken: 'valid-rc-token' })
+        .send({ fieldConst: 'crmUserId' });
+      expect(errorResponse.status).toBe(400);
+      expect(JSON.stringify(errorResponse.body)).toContain('CRM user list unavailable');
+    });
+  });
   describe('POST /apiKeyLogin', () => {
 
     test('should validate rcAccessToken and ignore spoofed rc ids in body', async () => {
       adminCore.validateRcUserToken.mockResolvedValue({
         rcAccountId: 'validated-account-id',
         rcExtensionId: 'validated-extension-id',
+      });
+      adminCore.validateAdminRole.mockResolvedValue({
+        isValidated: true,
+        rcAccountId: 'validated-account-id',
       });
       authCore.onApiKeyLogin.mockResolvedValue({
         userInfo: {
@@ -390,6 +460,8 @@ describe('Managed Auth Routes', () => {
           rcAccessToken: 'valid-rc-token',
           rcAccountId: 'spoofed-account-id',
           rcExtensionId: 'spoofed-extension-id',
+          devRcAccountId: 'connector-owner-account',
+          additionalInfo: { companyId: 'company-123' },
         });
 
       expect(response.status).toBe(200);
@@ -398,6 +470,8 @@ describe('Managed Auth Routes', () => {
         platform: 'testCRM',
         rcAccountId: 'validated-account-id',
         rcExtensionId: 'validated-extension-id',
+        devRcAccountId: 'connector-owner-account',
+        canPersistManagedAuth: true,
       }));
     });
   });

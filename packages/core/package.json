@@ -1,6 +1,6 @@
 {
   "name": "@app-connect/core",
-  "version": "1.7.37",
+  "version": "1.7.44",
   "description": "RingCentral App Connect Core",
   "main": "dist/index.js",
   "types": "dist/types/index.d.ts",
@@ -11,6 +11,12 @@
       "default": "./dist/index.js"
     },
     "./package.json": "./package.json",
+    "./types": {
+      "types": "./dist/types/index.d.ts"
+    },
+    "./types/*": {
+      "types": "./dist/types/*.d.ts"
+    },
     "./*": {
       "types": "./dist/*.d.ts",
       "require": "./dist/*.js",
@@ -42,9 +48,10 @@
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.751.0",
-    "@aws-sdk/client-s3": "^3.947.0",
-    "@aws-sdk/s3-request-presigner": "^3.947.0",
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@aws-sdk/client-s3": "^3.1086.0",
+    "@aws-sdk/s3-request-presigner": "^3.1086.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/express": "^4.17.25",
     "awesome-phonenumber": "^5.6.0",
     "body-parser": "^1.20.4",
     "body-parser-xml": "^2.0.5",
@@ -57,7 +64,8 @@
     "mixpanel": "^0.18.0",
     "shortid": "^2.2.17",
     "tz-lookup": "^6.1.25",
-    "ua-parser-js": "^1.0.38"
+    "ua-parser-js": "^1.0.38",
+    "zod": "^4.4.3"
   },
   "scripts": {
     "test": "cd ../.. && npm run build:ts && cd packages/core && npm run test:raw",
@@ -69,7 +77,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
-    "@octokit/rest": "^19.0.5",
     "axios": "^1.12.2",
     "eslint": "^9.22.0",
     "express": "^4.22.1",

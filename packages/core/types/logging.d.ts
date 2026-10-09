@@ -131,6 +131,8 @@ export interface CallLogSubmission {
   aiNote?: string;
   transcript?: string;
   recordingLink?: string;
+  voicemailLink?: string;
+  voicemailMessageId?: string;
   subject?: string;
   startTime?: string | Date;
   duration?: number;
@@ -148,6 +150,7 @@ export interface ComposeCallLogParams {
   aiNote?: string;
   transcript?: string;
   recordingLink?: string;
+  voicemailLink?: string;
   subject?: string;
   startTime?: string | Date;
   duration?: number;
@@ -181,19 +184,13 @@ export interface AppointmentSubmission {
   [key: string]: unknown;
 }
 
-export interface CallDispositionItem {
-  id?: string | number;
-  value?: unknown;
-  [key: string]: unknown;
-}
-
 export interface UpsertCallDispositionParams {
   platform: string;
   userId: string | number;
   sessionId: string;
   extensionNumber?: string | number | null;
   hashedExtensionId?: string | number | null;
-  dispositions?: CallDispositionItem[];
+  dispositions?: JsonObject;
 }
 
 export interface UpsertCallDispositionResult {
