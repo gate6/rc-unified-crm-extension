@@ -60,6 +60,7 @@ export interface ConnectorAuthResult {
 }
 
 export interface AuthHandlerResult {
+  successful?: boolean;
   userInfo?: unknown | null;
   returnMessage?: ReturnMessage;
 }
@@ -90,8 +91,10 @@ export interface ApiKeyLoginParams {
   proxyId?: string;
   rcAccountId?: string | number;
   rcExtensionId?: string | number;
+  devRcAccountId?: string | number;
   connectorId?: string;
   isPrivate?: boolean;
+  canPersistManagedAuth?: boolean;
   hashedRcExtensionId?: string;
   additionalInfo?: Record<string, unknown>;
 }

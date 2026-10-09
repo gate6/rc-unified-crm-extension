@@ -1,4 +1,92 @@
 {
+    "1.7.44": {
+        "global": [
+            {
+                "type": "Better",
+                "description": "Added AC_DATABASE_URL to prevent conflicts with generic database environment variables while retaining DATABASE_URL compatibility."
+            },
+            {
+                "type": "Better",
+                "description": "Added safe startup logging for the selected database target."
+            }
+        ]
+    },
+    "1.7.43": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "OAuth failure handleing"
+            }
+        ]
+    },
+    "1.7.42": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Dynamic managed authentication options"
+            },
+            {
+                "type": "Better",
+                "description": "Proxy connector request failure logging"
+            },
+            {
+                "type": "Fix",
+                "description": "Unstable user session"
+            },
+            {
+                "type": "Fix",
+                "description": "Plugin admin setting page cannot be opened"
+            },
+            {
+                "type": "Fix",
+                "description": "Apply admin plugin configuration overrides immediately"
+            }
+        ]
+    },
+    "1.7.41": {
+        "global": [
+            {
+                "type": "New",
+                "description": "Account data share"
+            },
+            {
+                "type": "Better",
+                "description": "Call logs for voicemail now logs voicemail url"
+            },
+            {
+                "type": "Fix",
+                "description": "Meeting time format issue"
+            }
+        ]
+    },
+    "1.7.40": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Get implemented interface in time"
+            },
+            {
+                "type": "Fix",
+                "description": "On log page, single search contact option becomes button"
+            }
+        ]
+    },
+    "1.7.39": {
+        "global": [
+            {
+                "type": "New",
+                "description": "AI notes support different languages"
+            }
+        ]
+    },
+    "1.7.38": {
+        "global": [
+            {
+                "type": "Fix",
+                "description": "Security patches"
+            }
+        ]
+    },
     "1.7.37": {
         "global": [
             {

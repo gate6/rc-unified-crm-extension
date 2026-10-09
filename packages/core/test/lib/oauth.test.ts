@@ -237,6 +237,73 @@ describe('oauth', () => {
       expect(mockOAuthApp.createToken).not.toHaveBeenCalled();
     });
 
+    test('should return null only when the CRM reports invalid_grant', async () => {
+      const user = createMockUser();
+      const invalidGrantError = Object.assign(new Error('Refresh token is invalid'), {
+        code: 'EAUTH',
+        body: {
+          error: 'invalid_grant',
+          error_description: 'Refresh token expired'
+        }
+      });
+      mockOAuthApp.createToken.mockReturnValue({
+        refresh: jest.fn().mockRejectedValue(invalidGrantError)
+      });
+      connectorRegistry.getConnector.mockReturnValue({});
+
+      await expect(checkAndRefreshAccessToken(mockOAuthApp, user)).resolves.toBeNull();
+    });
+
+    test('should use a token concurrently refreshed by another process after invalid_grant', async () => {
+      const user = createMockUser();
+      const concurrentlyRefreshedUser = createMockUser({
+        accessToken: 'concurrent-access-token',
+        refreshToken: 'concurrent-refresh-token',
+        tokenExpiry: moment().add(1, 'hour').toDate()
+      });
+      const invalidGrantError = Object.assign(new Error('Refresh token was already used'), {
+        body: { error: 'invalid_grant' }
+      });
+      mockOAuthApp.createToken.mockReturnValue({
+        refresh: jest.fn().mockRejectedValue(invalidGrantError)
+      });
+      UserModel.findByPk.mockResolvedValueOnce(concurrentlyRefreshedUser);
+      connectorRegistry.getConnector.mockReturnValue({});
+
+      await expect(checkAndRefreshAccessToken(mockOAuthApp, user)).resolves.toBe(concurrentlyRefreshedUser);
+    });
+
+    test('should rethrow transient token endpoint failures', async () => {
+      const user = createMockUser();
+      const serviceUnavailableError = Object.assign(new Error('Token endpoint unavailable'), {
+        code: 'ESTATUS',
+        status: 503,
+        body: JSON.stringify({ error: 'temporarily_unavailable' })
+      });
+      mockOAuthApp.createToken.mockReturnValue({
+        refresh: jest.fn().mockRejectedValue(serviceUnavailableError)
+      });
+      connectorRegistry.getConnector.mockReturnValue({});
+
+      await expect(checkAndRefreshAccessToken(mockOAuthApp, user)).rejects.toBe(serviceUnavailableError);
+    });
+
+    test('should rethrow database failures after a successful token refresh', async () => {
+      const user = createMockUser({
+        save: jest.fn().mockRejectedValue(new Error('Database unavailable'))
+      });
+      mockOAuthApp.createToken.mockReturnValue({
+        refresh: jest.fn().mockResolvedValue({
+          accessToken: 'new-token',
+          refreshToken: 'new-refresh',
+          expires: moment().add(1, 'hour').toDate()
+        })
+      });
+      connectorRegistry.getConnector.mockReturnValue({});
+
+      await expect(checkAndRefreshAccessToken(mockOAuthApp, user)).rejects.toThrow('Database unavailable');
+    });
+
     describe('with token refresh lock', () => {
       beforeEach(() => {
         process.env.USE_TOKEN_REFRESH_LOCK_PLATFORMS = 'testPlatform,otherPlatform';
@@ -303,9 +370,40 @@ describe('oauth', () => {
 
         // Verify the lock polling was performed
         expect(Lock.get).toHaveBeenCalled();
+        expect(existingLock.delete).not.toHaveBeenCalled();
+        expect(Lock.create).toHaveBeenCalledTimes(1);
+        expect(mockOAuthApp.createToken).not.toHaveBeenCalled();
         // The result should have the user data (refreshed by another process)
         expect(result).toBeDefined();
         expect(result.id).toBe(user.id);
+      });
+
+      test('should treat a future Unix-seconds TTL as an active lock', async () => {
+        const { Lock } = require('../../models/dynamo/lockSchema');
+        const user = createMockUser();
+        const conditionalError = new Error('Lock exists');
+        conditionalError.name = 'ConditionalCheckFailedException';
+        const activeLock = {
+          ttl: moment().add(30, 'seconds').unix(),
+          delete: jest.fn().mockResolvedValue(true)
+        };
+
+        Lock.create.mockRejectedValue(conditionalError);
+        Lock.get
+          .mockResolvedValueOnce(activeLock)
+          .mockResolvedValueOnce(null);
+        UserModel.findByPk.mockResolvedValue({
+          ...user,
+          accessToken: 'refreshed-by-lock-owner'
+        });
+        connectorRegistry.getConnector.mockReturnValue({});
+
+        const result = await checkAndRefreshAccessToken(mockOAuthApp, user, 5);
+
+        expect(activeLock.delete).not.toHaveBeenCalled();
+        expect(Lock.create).toHaveBeenCalledTimes(1);
+        expect(mockOAuthApp.createToken).not.toHaveBeenCalled();
+        expect(result.accessToken).toBe('refreshed-by-lock-owner');
       });
 
       test('should handle expired lock by deleting and creating new one', async () => {
@@ -348,7 +446,95 @@ describe('oauth', () => {
         expect(newLock.delete).toHaveBeenCalled();
       });
 
-      test('should delete lock if refresh fails', async () => {
+      test('should handle AWS conditional __type when an existing lock disappears', async () => {
+        const { Lock } = require('../../models/dynamo/lockSchema');
+        const user = createMockUser();
+        const newExpiry = moment().add(1, 'hour').toDate();
+
+        Lock.create.mockRejectedValue({
+          __type: 'com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException'
+        });
+        Lock.get.mockResolvedValue(null);
+
+        connectorRegistry.getConnector.mockReturnValue({});
+
+        const mockToken = {
+          refresh: jest.fn().mockResolvedValue({
+            accessToken: 'new-token',
+            refreshToken: 'new-refresh',
+            expires: newExpiry
+          })
+        };
+        mockOAuthApp.createToken.mockReturnValue(mockToken);
+
+        const result = await checkAndRefreshAccessToken(mockOAuthApp, user);
+
+        expect(result).toBe(user);
+        expect(mockToken.refresh).toHaveBeenCalled();
+      });
+
+      test('should continue when expired lock recreation loses a conditional race', async () => {
+        const { Lock } = require('../../models/dynamo/lockSchema');
+        const user = createMockUser();
+        const newExpiry = moment().add(1, 'hour').toDate();
+        const conditionalError = new Error('Lock exists');
+        conditionalError.name = 'ConditionalCheckFailedException';
+        const recreatedByOtherProcess = new Error('Recreated by another process');
+        recreatedByOtherProcess.name = 'ConditionalCheckFailedException';
+        const expiredLock = {
+          ttl: moment().subtract(10, 'seconds').unix(),
+          delete: jest.fn().mockResolvedValue(true)
+        };
+
+        Lock.create
+          .mockRejectedValueOnce(conditionalError)
+          .mockRejectedValueOnce(recreatedByOtherProcess);
+        Lock.get
+          .mockResolvedValueOnce(expiredLock)
+          .mockResolvedValueOnce(null);
+
+        connectorRegistry.getConnector.mockReturnValue({});
+
+        const mockToken = {
+          refresh: jest.fn().mockResolvedValue({
+            accessToken: 'new-token',
+            refreshToken: 'new-refresh',
+            expires: newExpiry
+          })
+        };
+        mockOAuthApp.createToken.mockReturnValue(mockToken);
+
+        const result = await checkAndRefreshAccessToken(mockOAuthApp, user);
+
+        expect(result).toBe(user);
+        expect(expiredLock.delete).toHaveBeenCalled();
+        expect(mockToken.refresh).toHaveBeenCalled();
+      });
+
+      test('should rethrow non-conditional expired lock recreation errors', async () => {
+        const { Lock } = require('../../models/dynamo/lockSchema');
+        const user = createMockUser();
+        const conditionalError = new Error('Lock exists');
+        conditionalError.name = 'ConditionalCheckFailedException';
+        const recreateError = new Error('Lock table unavailable');
+        const expiredLock = {
+          ttl: moment().subtract(10, 'seconds').unix(),
+          delete: jest.fn().mockResolvedValue(true)
+        };
+
+        Lock.create
+          .mockRejectedValueOnce(conditionalError)
+          .mockRejectedValueOnce(recreateError);
+        Lock.get.mockResolvedValue(expiredLock);
+
+        connectorRegistry.getConnector.mockReturnValue({});
+
+        await expect(
+          checkAndRefreshAccessToken(mockOAuthApp, user)
+        ).rejects.toThrow('Lock table unavailable');
+      });
+
+      test('should delete lock and rethrow if refresh fails transiently', async () => {
         jest.resetModules();
         const { Lock } = require('../../models/dynamo/lockSchema');
         const user = createMockUser();
@@ -365,7 +551,7 @@ describe('oauth', () => {
         };
         mockOAuthApp.createToken.mockReturnValue(mockToken);
 
-        await checkAndRefreshAccessToken(mockOAuthApp, user);
+        await expect(checkAndRefreshAccessToken(mockOAuthApp, user)).rejects.toThrow('Refresh failed');
 
         expect(mockLock.delete).toHaveBeenCalled();
       });

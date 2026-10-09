@@ -75,6 +75,15 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, query, hashedRcEx
     const { successful, platformUserInfo, returnMessage } = await platformModule.getUserInfo({ authHeader, tokenUrl: resolvedTokenUrl, apiUrl, hostname: resolvedHostname, platform, username, callbackUri, query, proxyId, proxyConfig, userEmail, data });
 
     if (successful) {
+        if (!accessToken) {
+            return {
+                userInfo: null,
+                returnMessage: {
+                    messageType: 'danger',
+                    message: 'OAuth access token is empty'
+                }
+            }
+        }
         let userInfo = null;
         try {
             userInfo = await saveUserInfo({
@@ -93,7 +102,10 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, query, hashedRcEx
             });
         }
         catch (error) {
-            return handleDatabaseError(error, 'Error saving user info');
+            return {
+                userInfo: null,
+                ...handleDatabaseError(error, 'Error saving user info')
+            };
         }
         if (platformModule.postSaveUserInfo) {
             userInfo = await platformModule.postSaveUserInfo({ userInfo, oauthApp });
@@ -121,7 +133,7 @@ async function onOAuthCallback({ platform, hostname, tokenUrl, query, hashedRcEx
  * @param {ApiKeyLoginParams} params
  * @returns {Promise<AuthHandlerResult>}
  */
-async function onApiKeyLogin({ platform, hostname, apiKey, proxyId, rcAccountId, rcExtensionId, connectorId, isPrivate, hashedRcExtensionId, additionalInfo }) {
+async function onApiKeyLogin({ platform, hostname, apiKey, proxyId, rcAccountId, rcExtensionId, devRcAccountId, connectorId, isPrivate, canPersistManagedAuth = false, hashedRcExtensionId, additionalInfo }) {
     const platformModule = connectorRegistry.getConnector(platform);
     let resolvedAdditionalInfo = {
         ...(additionalInfo ?? {})
@@ -133,13 +145,14 @@ async function onApiKeyLogin({ platform, hostname, apiKey, proxyId, rcAccountId,
     /** @type {Array<Record<string, unknown>>} */
     let managedFieldDefinitions = [];
     if (rcAccountId) {
-        managedFieldDefinitions = await managedAuthCore.getManagedFieldDefinitions({ rcAccountId, platform, connectorId, isPrivate });
+        managedFieldDefinitions = await managedAuthCore.getManagedFieldDefinitions({ rcAccountId, devRcAccountId, platform, connectorId, isPrivate });
         const shouldFallbackToManualAuth = managedFieldDefinitions.length > 0
             && await managedAuthCore.hasManagedAuthLoginFailure({ rcAccountId, platform, rcExtensionId });
         const managedAuthResult = await managedAuthCore.resolveApiKeyLoginFields({
             platform,
             rcAccountId,
             rcExtensionId,
+            devRcAccountId,
             connectorId,
             isPrivate,
             apiKey,
@@ -185,10 +198,36 @@ async function onApiKeyLogin({ platform, hostname, apiKey, proxyId, rcAccountId,
             });
         }
         catch (error) {
-            return handleDatabaseError(error, 'Error saving user info');
+            return {
+                userInfo: null,
+                ...handleDatabaseError(error, 'Error saving user info')
+            };
         }
         if (platformModule.postSaveUserInfo) {
             userInfo = await platformModule.postSaveUserInfo({ userInfo });
+        }
+        if (canPersistManagedAuth && managedFieldDefinitions.length > 0) {
+            /** @type {{ org: Record<string, unknown>, user: Record<string, unknown> }} */
+            const submittedManagedValues = { org: {}, user: {} };
+            managedFieldDefinitions.forEach(field => {
+                const fieldConst = String(field.const ?? '');
+                const submittedValue = additionalInfo?.[fieldConst];
+                if (!fieldConst || submittedValue === undefined || submittedValue === null || submittedValue === '') {
+                    return;
+                }
+                if (field.managedScope === 'account') {
+                    submittedManagedValues.org[fieldConst] = submittedValue;
+                }
+                else if (field.managedScope === 'user') {
+                    submittedManagedValues.user[fieldConst] = submittedValue;
+                }
+            });
+            await managedAuthCore.persistSubmittedManagedValues({
+                platform,
+                rcAccountId,
+                rcExtensionId,
+                submittedManagedValues
+            });
         }
         return {
             userInfo,
@@ -217,49 +256,39 @@ async function saveUserInfo({ platformUserInfo, platform, hostname, accessToken,
     const platformAdditionalInfo = platformUserInfo.platformAdditionalInfo || {};
     platformAdditionalInfo.proxyId = proxyId;
     if (existingUser) {
-        try {
-            await existingUser.update(
-                {
-                    platform,
-                    hostname,
-                    timezoneName,
-                    timezoneOffset,
-                    accessToken,
-                    refreshToken,
-                    tokenExpiry,
-                    rcAccountId,
-                    hashedRcExtensionId,
-                    platformAdditionalInfo: {
-                        ...existingUser.platformAdditionalInfo, // keep existing platformAdditionalInfo
-                        ...platformAdditionalInfo,
-                    }
-                }
-            );
-        }
-        catch (error) {
-            return handleDatabaseError(error, 'Error saving user info');
-        }
-    }
-    else {
-        try {
-            await UserModel.create({
-                id,
+        await existingUser.update(
+            {
+                platform,
                 hostname,
                 timezoneName,
                 timezoneOffset,
-                platform,
                 accessToken,
                 refreshToken,
                 tokenExpiry,
                 rcAccountId,
                 hashedRcExtensionId,
-                platformAdditionalInfo,
-                userSettings: {}
-            });
-        }
-        catch (error) {
-            return handleDatabaseError(error, 'Error saving user info');
-        }
+                platformAdditionalInfo: {
+                    ...existingUser.platformAdditionalInfo, // keep existing platformAdditionalInfo
+                    ...platformAdditionalInfo,
+                }
+            }
+        );
+    }
+    else {
+        await UserModel.create({
+            id,
+            hostname,
+            timezoneName,
+            timezoneOffset,
+            platform,
+            accessToken,
+            refreshToken,
+            tokenExpiry,
+            rcAccountId,
+            hashedRcExtensionId,
+            platformAdditionalInfo,
+            userSettings: {}
+        });
     }
     return {
         id,

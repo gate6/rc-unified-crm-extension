@@ -16,6 +16,10 @@ jest.mock('../../lib/jwt', () => ({
 const disposition = require('../../handlers/disposition');
 const analytics = require('../../lib/analytics');
 const jwt = require('../../lib/jwt');
+const {
+  BasicMutationResponseSchema,
+  CallDispositionRequestSchema,
+} = require('../../contracts');
 const { createCoreRouter } = require('../../index');
 
 describe('Disposition Routes', () => {
@@ -45,16 +49,19 @@ describe('Disposition Routes', () => {
       },
     });
 
+    const requestBody = {
+      sessionId: 'session-1',
+      extensionNumber: '101',
+      hashedExtensionId: 'hashed-extension-1',
+      dispositions: { outcome: 'Qualified lead' },
+      additionalSubmission: { note: 'extra' },
+    };
+    expect(CallDispositionRequestSchema.parse(requestBody)).toEqual(requestBody);
+
     const response = await request(app)
       .put('/callDisposition')
       .query({ jwtToken: 'crm-jwt' })
-      .send({
-        sessionId: 'session-1',
-        extensionNumber: '101',
-        hashedExtensionId: 'hashed-extension-1',
-        dispositions: [{ id: 'disp-1' }],
-        additionalSubmission: { note: 'extra' },
-      });
+      .send(requestBody);
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
@@ -65,13 +72,14 @@ describe('Disposition Routes', () => {
         ttl: 2000,
       },
     });
+    expect(BasicMutationResponseSchema.parse(response.body)).toEqual(response.body);
     expect(disposition.upsertCallDisposition).toHaveBeenCalledWith({
       platform: 'testCRM',
       userId: 'crm-user-id',
       sessionId: 'session-1',
       extensionNumber: '101',
       hashedExtensionId: 'hashed-extension-1',
-      dispositions: [{ id: 'disp-1' }],
+      dispositions: { outcome: 'Qualified lead' },
       additionalSubmission: { note: 'extra' },
     });
     expect(analytics.track).toHaveBeenCalledWith(expect.objectContaining({
@@ -154,6 +162,7 @@ describe('Disposition Routes', () => {
     expect(response.status).toBe(401);
     expect(response.body).toEqual({
       successful: false,
+      errorCode: 'CRM_SESSION_REVOKED',
       returnMessage: {
         message: 'User session expired. Please connect again.',
         messageType: 'warning',

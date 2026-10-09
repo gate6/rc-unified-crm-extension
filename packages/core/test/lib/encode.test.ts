@@ -1,5 +1,10 @@
 const { decoded, encode } = require('../../lib/encode');
 const tsEncode = require('../../lib/encode.ts');
+const {
+  roundTripPayloadCases,
+  secretNormalizationCases,
+  invalidCiphertextCases,
+} = require('../data/encodeCases');
 
 describe('encode', () => {
   const originalSecret = process.env.APP_SERVER_SECRET_KEY;
@@ -20,6 +25,27 @@ describe('encode', () => {
     expect(encrypted).toMatch(/^[0-9a-f]+$/);
     expect(encrypted).not.toBe('sensitive token value');
     expect(decoded(encrypted)).toBe('sensitive token value');
+  });
+
+  test.each<[any]>(roundTripPayloadCases as [any][])('round-trips $label without normalizing payload data', ({ payload }) => {
+    process.env.APP_SERVER_SECRET_KEY = '12345678901234567890123456789012';
+
+    const encrypted = encode(payload);
+
+    expect(encrypted).toMatch(/^[0-9a-f]+$/);
+    expect(encrypted.length % 32).toBe(0);
+    expect(decoded(encrypted)).toBe(payload);
+  });
+
+  test.each<[any]>(secretNormalizationCases as [any][])('normalizes a $label secret to the AES-256 key boundary', ({ secret, normalized }) => {
+    process.env.APP_SERVER_SECRET_KEY = secret;
+    const encryptedWithInput = encode('boundary payload');
+
+    process.env.APP_SERVER_SECRET_KEY = normalized;
+    const encryptedWithNormalizedSecret = encode('boundary payload');
+
+    expect(encryptedWithInput).toBe(encryptedWithNormalizedSecret);
+    expect(decoded(encryptedWithInput)).toBe('boundary payload');
   });
 
   test('keeps TypeScript implementation aligned with compatibility JS entrypoint', () => {
@@ -62,10 +88,29 @@ describe('encode', () => {
     expect(decoded(encryptedWithLongSecret)).toBe('payload');
   });
 
-  test('throws when encrypted input is not valid hex ciphertext', () => {
+  test('TypeScript implementation handles secret normalization branches', () => {
+    process.env.APP_SERVER_SECRET_KEY = 'short-secret';
+    const shortSecretEncrypted = tsEncode.encode('payload');
+
+    process.env.APP_SERVER_SECRET_KEY = 'short-secret'.padEnd(32, ' ');
+    expect(tsEncode.encode('payload')).toBe(shortSecretEncrypted);
+    expect(tsEncode.decoded(shortSecretEncrypted)).toBe('payload');
+
+    process.env.APP_SERVER_SECRET_KEY = '12345678901234567890123456789012-first-suffix';
+    const longSecretEncrypted = tsEncode.encode('payload');
+
+    process.env.APP_SERVER_SECRET_KEY = '12345678901234567890123456789012-second-suffix';
+    expect(tsEncode.encode('payload')).toBe(longSecretEncrypted);
+    expect(tsEncode.decoded(longSecretEncrypted)).toBe('payload');
+
+    delete process.env.APP_SERVER_SECRET_KEY;
+    expect(() => tsEncode.encode('payload')).toThrow('APP_SERVER_SECRET_KEY is not defined');
+  });
+
+  test.each<[any]>(invalidCiphertextCases as [any][])('throws for $label', ({ encrypted }) => {
     process.env.APP_SERVER_SECRET_KEY = '12345678901234567890123456789012';
 
-    expect(() => decoded('not-valid-ciphertext')).toThrow();
+    expect(() => decoded(encrypted)).toThrow();
   });
 });
 
