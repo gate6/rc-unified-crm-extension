@@ -11,10 +11,11 @@ async function saveUserInfo(userObj, accessToken, hostname, companyId) {
     try {
 
         let id = userObj.id;
-        //Check Current user exist or not
+        //Check Current user exist or not (a user removed in the admin panel is re-added as a new seat)
         const existingUser = await models.customer.findOne({
             where: {
-                sysId: id
+                sysId: id,
+                isDeleted: false
             }
         });
         //if current user exists just do nothing 

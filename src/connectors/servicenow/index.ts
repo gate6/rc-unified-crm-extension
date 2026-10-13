@@ -310,13 +310,13 @@ async function getUserInfo({ authHeader, hostname, query, platform }) {
                 }
 
                 const existingCustomer = await models.customer.findOne({
-                    where: { companyId: company.id, sysId: String(id) },
+                    where: { companyId: company.id, sysId: String(id), isDeleted: false },
                     raw: true
                 });
 
                 if (!existingCustomer) {
                     const currentSeatCount = await models.customer.count({
-                        where: { companyId: company.id }
+                        where: { companyId: company.id, isDeleted: false }
                     });
 
                     const maxSeats = Number(company.maxAllowedUsers);
