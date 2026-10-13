@@ -281,14 +281,14 @@ async function getUserInfo({ hostname, additionalInfo }) {
       }
 
       const existingCustomer = await models.customer.findOne({
-        where: { companyId: company.id, sysId: String(userId) },
+        where: { companyId: company.id, sysId: String(userId), isDeleted: false },
         raw: true
       });
 
       // Only a genuinely new user needs a seat; existing users already hold one.
       if (!existingCustomer) {
         const currentSeatCount = await models.customer.count({
-          where: { companyId: company.id }
+          where: { companyId: company.id, isDeleted: false }
         });
 
         const maxSeats = Number(company.maxAllowedUsers);

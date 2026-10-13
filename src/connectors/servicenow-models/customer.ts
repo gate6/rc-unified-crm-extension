@@ -58,6 +58,13 @@ module.exports = function(sequelize, DataTypes) {
         key: 'id'
       }
     },
+    // Set by the admin panel when a user is removed. The row is kept for auditing; a removed
+    // user no longer holds a licence seat. Column is added by crmconnect-admin's migrations.
+    isDeleted: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
     id: {
       autoIncrement: true,
       type: DataTypes.INTEGER,
