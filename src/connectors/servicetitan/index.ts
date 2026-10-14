@@ -104,11 +104,23 @@ function newJobSummaryFor(interactionKind, direction) {
 }
 
 async function getLicenseStatus({ userId }) {
-    return licenseHelper.getLicenseStatus({ models, userId });
+    const status = await licenseHelper.getLicenseStatus({ models, userId });
+    // ServiceTitan has a premium plan (job management), so its license line says which plan is active.
+    // A copy, never the shared cached object, so other connectors keep their own description.
+    if (status?.isLicenseValid && await licenseHelper.isPremium({ models, user: { id: userId } })) {
+        return { ...status, licenseStatusDescription: 'Premium' };
+    }
+    return status;
 }
 
 async function validateLicenseOrFail(user) {
     return licenseHelper.validateLicenseOrFail({ models, user });
+}
+
+// Job management is a premium feature: basic companies get no Job options on a match, no job picked
+// or created on a log, and nothing written to a job — the connector as it behaved before jobs existed.
+async function hasJobAccess(user) {
+    return licenseHelper.isPremium({ models, user });
 }
 
 function getAuthType() {
@@ -379,7 +391,7 @@ async function findContact({ user, phoneNumber, isExtension }) {
 
             rawPersonInfo['phoneNumber'] = phoneNumber;
             const contact = formatContact(rawPersonInfo);
-            contact.additionalInfo = await jobs.buildJobAdditionalInfo({
+            contact.additionalInfo = !(await hasJobAccess(user)) ? null : await jobs.buildJobAdditionalInfo({
                 user,
                 crmBaseUrl: getCrmBaseUrl(tenantId),
                 tenantId,
@@ -443,7 +455,7 @@ async function findContactWithName({ user, name }) {
                 const phone = rawPersonInfo.phones?.find(p => p.type === 'Primary')?.phone ?? '';
                 rawPersonInfo['phoneNumber'] = phone;
                 const contact = formatContact(rawPersonInfo);
-                contact.additionalInfo = await jobs.buildJobAdditionalInfo({
+                contact.additionalInfo = !(await hasJobAccess(user)) ? null : await jobs.buildJobAdditionalInfo({
                     user,
                     crmBaseUrl: getCrmBaseUrl(tenantId),
                     tenantId,
@@ -757,7 +769,7 @@ async function createCallLog({ user, contactInfo, callLog, note, aiNote, transcr
     if (optionalSections) noteText += `\n\n${optionalSections}`;
     if (footerLines.length > 0) noteText += `\n\n${footerLines.join("\n")}`;
 
-    const targetJob = await jobs.resolveTargetJob({
+    const targetJob = !(await hasJobAccess(user)) ? { jobId: null } : await jobs.resolveTargetJob({
         user,
         crmBaseUrl: getCrmBaseUrl(tenantId),
         tenantId, auth, stAppKey,
@@ -1034,9 +1046,13 @@ async function updateCallLog({ user, existingCallLog, recordingLink, note, aiNot
         }
     }
 
-    const { jobId, warning: jobNoteWarning } = await writeJobNote({
-        targetJob, tenantId, auth, stAppKey, customerNoteId: newCustomerNoteId, noteText, operation: 'updateCallLog'
-    });
+    // A log linked to a job while the company was premium keeps its link if the plan drops to basic,
+    // but nothing more is written to the job until the company is premium again.
+    const { jobId, warning: jobNoteWarning } = targetJob.jobId && !(await hasJobAccess(user))
+        ? { jobId: targetJob.jobId, warning: undefined }
+        : await writeJobNote({
+            targetJob, tenantId, auth, stAppKey, customerNoteId: newCustomerNoteId, noteText, operation: 'updateCallLog'
+        });
     // The id is a page path, so it does not change as the note behind it is replaced.
     newLogId = jobId ? jobs.buildJobLogId(jobId) : jobs.buildCustomerLogId(contactId);
 
@@ -1212,7 +1228,7 @@ ${faxDocLink}
 `.trim();
     }
 
-    const targetJob = await jobs.resolveTargetJob({
+    const targetJob = !(await hasJobAccess(user)) ? { jobId: null } : await jobs.resolveTargetJob({
         user,
         crmBaseUrl: getCrmBaseUrl(tenantId),
         tenantId, auth, stAppKey,
@@ -1425,9 +1441,12 @@ ${faxDocLink}
     }
 
     let newLogId = jobs.buildCustomerLogId(contactId);
-    const { jobId, warning } = await writeJobNote({
-        targetJob, tenantId, auth, stAppKey, customerNoteId: newCustomerNoteId, noteText, operation: 'updateMessageLog'
-    });
+    // Same as calls: on basic a job-linked thread keeps its link but nothing is written to the job.
+    const { jobId, warning } = targetJob.jobId && !(await hasJobAccess(user))
+        ? { jobId: targetJob.jobId, warning: undefined }
+        : await writeJobNote({
+            targetJob, tenantId, auth, stAppKey, customerNoteId: newCustomerNoteId, noteText, operation: 'updateMessageLog'
+        });
     if (jobId) {
         newLogId = jobs.buildJobLogId(jobId);
     }
